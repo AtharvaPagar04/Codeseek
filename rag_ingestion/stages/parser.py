@@ -102,6 +102,7 @@ def _extract_symbols(root, source: bytes, language: str) -> list[ParsedSymbol]:
                         symbol_name=class_name,
                         symbol_type="class",
                         parent_symbol="",
+                        signature=_signature(node, source),
                         start_line=node.start_point[0] + 1,
                         end_line=node.end_point[0] + 1,
                         methods=methods,
@@ -121,6 +122,7 @@ def _extract_symbols(root, source: bytes, language: str) -> list[ParsedSymbol]:
                         symbol_name=name,
                         symbol_type="method" if parent_symbol else "function",
                         parent_symbol=parent_symbol,
+                        signature=_signature(node, source),
                         start_line=node.start_point[0] + 1,
                         end_line=node.end_point[0] + 1,
                         parameters=_parameters(node, source),
@@ -224,6 +226,14 @@ def _calls(node, source: bytes) -> list[str]:
 
     visit(node)
     return calls
+
+
+def _signature(node, source: bytes) -> str:
+    text = _node_text(node, source).strip()
+    if not text:
+        return ""
+    first_line = text.splitlines()[0].strip()
+    return first_line.rstrip("{").strip()
 
 
 def _node_text(node, source: bytes) -> str:

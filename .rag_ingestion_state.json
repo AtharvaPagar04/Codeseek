@@ -16,24 +16,24 @@
     "size_bytes": 44
   },
   "rag_ingestion/models/chunk.py": {
-    "mtime_ns": 1780305631010520467,
-    "size_bytes": 902
+    "mtime_ns": 1780319365502476600,
+    "size_bytes": 957
   },
   "rag_ingestion/models/file.py": {
     "mtime_ns": 1780305630809534098,
     "size_bytes": 313
   },
   "rag_ingestion/models/parsed.py": {
-    "mtime_ns": 1780305630909532262,
-    "size_bytes": 699
+    "mtime_ns": 1780319360080939008,
+    "size_bytes": 723
   },
   "rag_ingestion/stages/__init__.py": {
     "mtime_ns": 1780305402745183726,
     "size_bytes": 30
   },
   "rag_ingestion/stages/chunker.py": {
-    "mtime_ns": 1780306259025012697,
-    "size_bytes": 2186
+    "mtime_ns": 1780319376135564345,
+    "size_bytes": 2230
   },
   "rag_ingestion/stages/discovery.py": {
     "mtime_ns": 1780306155905341193,
@@ -56,20 +56,20 @@
     "size_bytes": 1975
   },
   "rag_ingestion/stages/metadata.py": {
-    "mtime_ns": 1780306259215009383,
-    "size_bytes": 750
+    "mtime_ns": 1780319381772101379,
+    "size_bytes": 1136
   },
   "rag_ingestion/stages/overflow.py": {
     "mtime_ns": 1780306259127095333,
     "size_bytes": 1741
   },
   "rag_ingestion/stages/parser.py": {
-    "mtime_ns": 1780306258928347716,
-    "size_bytes": 7269
+    "mtime_ns": 1780319372820951384,
+    "size_bytes": 7602
   },
   "rag_ingestion/stages/storage.py": {
-    "mtime_ns": 1780310704699705378,
-    "size_bytes": 3197
+    "mtime_ns": 1780319385462016720,
+    "size_bytes": 3287
   },
   "rag_ingestion/stages/summary.py": {
     "mtime_ns": 1780311828399910423,

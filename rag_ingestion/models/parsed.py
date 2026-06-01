@@ -14,6 +14,7 @@ class ParsedSymbol:
     end_line: int
     parameters: list[str] = field(default_factory=list)
     methods: list[str] = field(default_factory=list)
+    signature: str = ""
     docstring: str = ""
     calls: list[str] = field(default_factory=list)
 

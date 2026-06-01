@@ -54,6 +54,7 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
                 chunk_type=symbol.symbol_type,
                 symbol_name=symbol.symbol_name,
                 parent_symbol=symbol.parent_symbol,
+                signature=symbol.signature,
                 start_line=symbol.start_line,
                 end_line=symbol.end_line,
                 imports=parsed.imports,

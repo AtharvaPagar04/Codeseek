@@ -127,7 +127,7 @@ Each stage is a single file with one public function. No stage imports from anot
     - Increment counters.embeddings_generated
 
 20. `stages/storage.py` — `store_chunks(chunks, counters) -> None`
-    - Connect to Qdrant, recreate_collection on every run
+    - Connect to Qdrant; recreate collection only when `RECREATE_COLLECTION_EACH_RUN = True`
     - Build PointStruct per chunk: sequential int id, embedding as vector, all metadata as payload
     - Do NOT store content or embedding in payload
     - Must include relative_path in payload
@@ -153,7 +153,9 @@ Each stage is a single file with one public function. No stage imports from anot
     from qdrant_client import QdrantClient
     client = QdrantClient("localhost", port=6333)
     info = client.get_collection("repository_chunks")
-    print(info.points_count)  # should match embeddings_stored
+    # If RECREATE_COLLECTION_EACH_RUN=True, should match embeddings_stored.
+    # If incremental mode keeps collection, points_count is cumulative.
+    print(info.points_count)
     ```
 
 23. Run a dummy search to confirm the collection is queryable:

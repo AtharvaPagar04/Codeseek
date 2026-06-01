@@ -16,6 +16,7 @@ def build_metadata(chunk: Chunk) -> Chunk:
         )
 
     chunk.chunk_id = hashlib.sha256(raw.encode()).hexdigest()[:32]
+    chunk.qualified_symbol = _qualified_symbol(chunk)
     chunk.token_count = _count_tokens(chunk.content)
     return chunk
 
@@ -25,3 +26,11 @@ def _count_tokens(content: str) -> int:
 
     encoding = tiktoken.get_encoding("cl100k_base")
     return len(encoding.encode(content))
+
+
+def _qualified_symbol(chunk: Chunk) -> str:
+    if chunk.chunk_type == "file":
+        return f"{chunk.relative_path}::__file__"
+    if chunk.chunk_type == "method" and chunk.parent_symbol:
+        return f"{chunk.relative_path}::{chunk.parent_symbol}.{chunk.symbol_name}"
+    return f"{chunk.relative_path}::{chunk.symbol_name}"

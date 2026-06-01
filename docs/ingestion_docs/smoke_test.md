@@ -53,5 +53,11 @@ Verify the Qdrant collection:
 python scripts/smoke_test_qdrant.py
 ```
 
-The printed point count should match `Embeddings stored` from the ingestion
-report. The dummy search should print up to three stored payload entries.
+If `RECREATE_COLLECTION_EACH_RUN = True`, the printed point count should match
+`Embeddings stored` from the ingestion report for that run.
+
+If `RECREATE_COLLECTION_EACH_RUN = False` (incremental mode), points are
+retained across runs, so point count is cumulative and will not necessarily
+match the latest run's `Embeddings stored`.
+
+The dummy search should print up to three stored payload entries.

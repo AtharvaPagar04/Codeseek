@@ -13,7 +13,9 @@ class Chunk:
     language: str = ""
     chunk_type: str = ""
     symbol_name: str = ""
+    qualified_symbol: str = ""
     parent_symbol: str = ""
+    signature: str = ""
     start_line: int = 0
     end_line: int = 0
     chunk_part: int = 0

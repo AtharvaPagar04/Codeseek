@@ -751,7 +751,9 @@ After a successful run:
 
     client = QdrantClient("localhost", port=6333)
     info = client.get_collection("repository_chunks")
-    print(info.points_count)   # should match embeddings_stored from report
+    # If RECREATE_COLLECTION_EACH_RUN=True, should match embeddings_stored.
+    # If incremental mode keeps collection, points_count is cumulative.
+    print(info.points_count)
 
     results = client.search(
         collection_name="repository_chunks",
@@ -761,4 +763,4 @@ After a successful run:
     for r in results:
         print(r.payload["symbol_name"], r.payload["relative_path"])
 
-If points_count matches and search returns results without error, ingestion worked.
+If search returns results without error, ingestion worked.
