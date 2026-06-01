@@ -23,8 +23,13 @@ tiktoken
 
 Install everything:
 
-    pip install qdrant-client tree-sitter tree-sitter-python tree-sitter-javascript \
-                sentence-transformers tiktoken pathspec gitpython requests
+    uv venv
+    source .venv/bin/activate
+    uv pip install -r requirements.txt
+
+Alternative (direct run without activating venv):
+
+    uv run python -m rag_ingestion.main /absolute/path/to/repo
 
 Run Qdrant locally:
 

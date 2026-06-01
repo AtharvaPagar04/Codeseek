@@ -11,7 +11,16 @@ docker run -p 6333:6333 qdrant/qdrant
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+Alternative (without activating venv):
+
+```bash
+uv run python -m rag_ingestion.main /absolute/path/to/repo
+uv run python scripts/smoke_test_qdrant.py
 ```
 
 Run ingestion:

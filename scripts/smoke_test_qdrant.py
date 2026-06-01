@@ -12,11 +12,19 @@ def main() -> None:
     print(f"Collection: {COLLECTION_NAME}")
     print(f"Points: {info.points_count}")
 
-    results = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=[0.0] * EMBEDDING_DIM,
-        limit=3,
-    )
+    if hasattr(client, "search"):
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=[0.0] * EMBEDDING_DIM,
+            limit=3,
+        )
+    else:
+        query = client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=[0.0] * EMBEDDING_DIM,
+            limit=3,
+        )
+        results = query.points
 
     for result in results:
         payload = result.payload or {}
