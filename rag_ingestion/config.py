@@ -3,6 +3,7 @@
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 COLLECTION_NAME = "repository_chunks"
+RECREATE_COLLECTION_EACH_RUN = True
 
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 EMBEDDING_DIM = 384

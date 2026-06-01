@@ -1,34 +1,63 @@
 """Qdrant storage stage."""
 
-from rag_ingestion.config import COLLECTION_NAME, EMBEDDING_DIM, QDRANT_HOST, QDRANT_PORT
+from rag_ingestion.config import (
+    COLLECTION_NAME,
+    EMBEDDING_DIM,
+    QDRANT_HOST,
+    QDRANT_PORT,
+    RECREATE_COLLECTION_EACH_RUN,
+)
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
 
 
 def store_chunks(chunks: list[Chunk], counters: PipelineCounters) -> None:
-    """Recreate the local Qdrant collection and upsert chunks."""
+    """Ensure the collection exists and upsert chunks by deterministic IDs."""
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
     client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
-    client.recreate_collection(
-        collection_name=COLLECTION_NAME,
+    _ensure_collection(
+        client=client,
         vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
     )
 
     points = [
         PointStruct(
-            id=index,
+            id=_point_id(chunk),
             vector=chunk.embedding,
             payload=_payload(chunk),
         )
-        for index, chunk in enumerate(chunks)
+        for chunk in chunks
     ]
 
     for start in range(0, len(points), 128):
         batch = points[start : start + 128]
         client.upsert(collection_name=COLLECTION_NAME, points=batch)
         counters.embeddings_stored += len(batch)
+
+
+def _ensure_collection(client, vectors_config) -> None:
+    if RECREATE_COLLECTION_EACH_RUN:
+        client.recreate_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=vectors_config,
+        )
+        return
+
+    try:
+        client.get_collection(COLLECTION_NAME)
+    except Exception:
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=vectors_config,
+        )
+
+
+def _point_id(chunk: Chunk) -> str:
+    if not chunk.chunk_id:
+        raise ValueError("chunk_id is required before storage upsert")
+    return chunk.chunk_id
 
 
 def _payload(chunk: Chunk) -> dict:

@@ -20,6 +20,12 @@ Run ingestion:
 python -m rag_ingestion.main /absolute/path/to/repo
 ```
 
+Optional incremental mode:
+
+Set `RECREATE_COLLECTION_EACH_RUN = False` in `rag_ingestion/config.py` to keep
+the collection and upsert by deterministic `chunk_id` instead of recreating it
+on every run.
+
 Verify the Qdrant collection:
 
 ```bash
