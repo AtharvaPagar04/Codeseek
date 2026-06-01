@@ -20,6 +20,14 @@ Run ingestion:
 python -m rag_ingestion.main /absolute/path/to/repo
 ```
 
+For private GitHub repos, set one of these before running ingestion:
+
+```bash
+export GITHUB_TOKEN=your_token
+# or
+export GH_TOKEN=your_token
+```
+
 Optional incremental mode:
 
 Set `RECREATE_COLLECTION_EACH_RUN = False` in `rag_ingestion/config.py` to keep

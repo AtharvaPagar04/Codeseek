@@ -61,6 +61,7 @@ Each stage is a single file with one public function. No stage imports from anot
 
 10. `stages/loader.py` — `load_repository(source: str) -> dict`
     - Handle local path (verify exists) and GitHub URL (clone with gitpython)
+    - For private GitHub repos, allow token auth via `GITHUB_TOKEN` or `GH_TOKEN`
     - Return dict with repository_name, repository_root, source_type
 
 11. `stages/discovery.py` — `discover_files(repository_root, counters) -> list[FileRecord]`
@@ -161,8 +162,7 @@ Each stage is a single file with one public function. No stage imports from anot
 
 ## Known Gaps to Fix Before Production
 
-- No incremental reindexing (every run recreates collection from scratch)
-- No private GitHub support
+- No true incremental reindexing policy (mtime/hash change detection is still missing)
 - Content is not stored in Qdrant (must re-read from disk at retrieval time)
 - calls field is extracted but not yet used in retrieval
 - No auth or rate limiting

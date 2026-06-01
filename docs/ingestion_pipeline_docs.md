@@ -4,7 +4,7 @@
 
 ## What This Is
 
-A local ingestion pipeline that takes a code repository (local folder or public GitHub URL),
+A local ingestion pipeline that takes a code repository (local folder or GitHub URL),
 parses the code into meaningful chunks, generates embeddings, and stores them in Qdrant.
 
 This is ingestion only. No retrieval, no chat, no agents. Just getting data into the vector store
@@ -113,7 +113,8 @@ For local path:
 
 For GitHub URL:
     - Clone using git clone into a temp directory under /tmp/rag_ingestion/
-    - Only public repos supported in V1
+    - Public repos work directly
+    - Private repos are supported when GITHUB_TOKEN or GH_TOKEN is set
     - If clone fails, exit with error
 
 ### Output
@@ -694,7 +695,9 @@ Print to stdout at end of run:
 1. No incremental reindexing. Every run recreates the collection from scratch.
    Fix: check file mtime, skip unchanged files, upsert by chunk_id.
 
-2. No private GitHub support. Only local paths and public repos.
+2. Private GitHub repos require credentials in environment variables:
+   - GITHUB_TOKEN or GH_TOKEN for HTTPS cloning
+   - Missing credentials will fail clone for private repositories
 
 3. JSX/TSX grammar: if you see parse failures on .jsx or .tsx files, you likely have
    the wrong Tree-Sitter grammar loaded. Use tree-sitter-tsx for .tsx explicitly.
