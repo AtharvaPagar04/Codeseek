@@ -1,0 +1,10 @@
+qdrant-client
+tree-sitter
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-typescript
+sentence-transformers
+tiktoken
+pathspec
+gitpython
+requests
