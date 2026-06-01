@@ -2,6 +2,15 @@
 
 ---
 
+## Status Snapshot (2026-06-01)
+
+- Phases 1-6 are implemented in repository code.
+- Incremental unchanged-file skip is implemented using `.rag_ingestion_state.json`.
+- Private GitHub clone support with `GITHUB_TOKEN` / `GH_TOKEN` is implemented.
+- Incremental mode now deletes stale Qdrant points for files removed from source repo.
+
+---
+
 ## Phase 1: Project Setup
 
 1. Create the folder structure as defined in the architecture doc:
@@ -163,7 +172,6 @@ Each stage is a single file with one public function. No stage imports from anot
 ## Known Gaps to Fix Before Production
 
 - Incremental mode uses `mtime_ns + size_bytes`; there is no content hash check
-- Incremental mode does not yet delete stale Qdrant points for deleted files
 - Content is not stored in Qdrant (must re-read from disk at retrieval time)
 - calls field is extracted but not yet used in retrieval
 - No auth or rate limiting

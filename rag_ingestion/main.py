@@ -2,7 +2,11 @@
 
 import argparse
 
-from rag_ingestion.config import COLLECTION_NAME, ENABLE_INCREMENTAL_FILE_SKIP
+from rag_ingestion.config import (
+    COLLECTION_NAME,
+    ENABLE_INCREMENTAL_FILE_SKIP,
+    RECREATE_COLLECTION_EACH_RUN,
+)
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
 from rag_ingestion.stages.embedder import embed_chunks
@@ -12,7 +16,7 @@ from rag_ingestion.stages.loader import load_repository
 from rag_ingestion.stages.metadata import build_metadata
 from rag_ingestion.stages.overflow import handle_overflow
 from rag_ingestion.stages.parser import parse_file
-from rag_ingestion.stages.storage import store_chunks
+from rag_ingestion.stages.storage import delete_chunks_for_paths, store_chunks
 from rag_ingestion.stages.summary import generate_summary
 from rag_ingestion.utils.counters import PipelineCounters
 from rag_ingestion.utils.logger import log_skip, skipped_files
@@ -77,6 +81,10 @@ def run_pipeline(source: str) -> PipelineCounters:
         store_chunks(embedded_chunks, counters)
 
     if ENABLE_INCREMENTAL_FILE_SKIP:
+        if not RECREATE_COLLECTION_EACH_RUN:
+            removed_paths = sorted(set(previous_state) - set(next_state))
+            if removed_paths:
+                delete_chunks_for_paths(removed_paths)
         save_ingestion_state(repository["repository_root"], next_state)
 
     _print_report(repository, counters)

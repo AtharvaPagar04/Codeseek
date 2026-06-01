@@ -80,9 +80,9 @@ Track these across the entire run. Increment as pipeline progresses. Print at th
 
     {
       "files_discovered": 0,
-      "files_ignored_by_filter": 0,
-      "files_skipped_unsupported_language": 0,
-      "files_parsed": 0,
+      "files_ignored": 0,
+      "files_skipped_unsupported": 0,
+      "files_parsed_ok": 0,
       "files_parse_failed": 0,
       "chunks_generated": 0,
       "embeddings_generated": 0,
@@ -237,7 +237,7 @@ Ignore environment and OS files:
 ### Output
 
 Filtered list of files approved for processing.
-Increment files_ignored_by_filter counter for every file removed here.
+Increment `files_ignored` counter for every file removed here.
 
 ---
 

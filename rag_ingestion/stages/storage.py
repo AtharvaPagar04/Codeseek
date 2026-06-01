@@ -37,6 +37,28 @@ def store_chunks(chunks: list[Chunk], counters: PipelineCounters) -> None:
         counters.embeddings_stored += len(batch)
 
 
+def delete_chunks_for_paths(relative_paths: list[str]) -> None:
+    """Delete points whose payload.relative_path belongs to removed files."""
+    if not relative_paths:
+        return
+
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import FieldCondition, Filter, MatchAny
+
+    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+    client.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=Filter(
+            must=[
+                FieldCondition(
+                    key="relative_path",
+                    match=MatchAny(any=relative_paths),
+                )
+            ]
+        ),
+    )
+
+
 def _ensure_collection(client, vectors_config) -> None:
     if RECREATE_COLLECTION_EACH_RUN:
         client.recreate_collection(
