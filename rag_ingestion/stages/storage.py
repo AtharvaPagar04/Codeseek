@@ -11,14 +11,18 @@ from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
 
 
-def store_chunks(chunks: list[Chunk], counters: PipelineCounters) -> None:
+def store_chunks(
+    chunks: list[Chunk], counters: PipelineCounters, collection_name: str | None = None
+) -> None:
     """Ensure the collection exists and upsert chunks by deterministic IDs."""
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+    collection = collection_name or COLLECTION_NAME
+    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
     _ensure_collection(
         client=client,
+        collection_name=collection,
         vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
     )
 
@@ -33,21 +37,24 @@ def store_chunks(chunks: list[Chunk], counters: PipelineCounters) -> None:
 
     for start in range(0, len(points), 128):
         batch = points[start : start + 128]
-        client.upsert(collection_name=COLLECTION_NAME, points=batch)
+        client.upsert(collection_name=collection, points=batch)
         counters.embeddings_stored += len(batch)
 
 
-def delete_chunks_for_paths(relative_paths: list[str]) -> None:
+def delete_chunks_for_paths(
+    relative_paths: list[str], collection_name: str | None = None
+) -> None:
     """Delete points whose payload.relative_path belongs to removed files."""
     if not relative_paths:
         return
 
+    collection = collection_name or COLLECTION_NAME
     from qdrant_client import QdrantClient
     from qdrant_client.models import FieldCondition, Filter, MatchAny
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
     client.delete(
-        collection_name=COLLECTION_NAME,
+        collection_name=collection,
         points_selector=Filter(
             must=[
                 FieldCondition(
@@ -59,19 +66,19 @@ def delete_chunks_for_paths(relative_paths: list[str]) -> None:
     )
 
 
-def _ensure_collection(client, vectors_config) -> None:
+def _ensure_collection(client, vectors_config, collection_name: str) -> None:
     if RECREATE_COLLECTION_EACH_RUN:
         client.recreate_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection_name,
             vectors_config=vectors_config,
         )
         return
 
     try:
-        client.get_collection(COLLECTION_NAME)
+        client.get_collection(collection_name)
     except Exception:
         client.create_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection_name,
             vectors_config=vectors_config,
         )
 

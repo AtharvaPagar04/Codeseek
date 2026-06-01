@@ -7,6 +7,7 @@ from rag_ingestion.config import (
     ENABLE_INCREMENTAL_FILE_SKIP,
     RECREATE_COLLECTION_EACH_RUN,
 )
+from retrieval.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
 from rag_ingestion.stages.embedder import embed_chunks
@@ -31,14 +32,18 @@ from rag_ingestion.utils.state import (
 def main() -> None:
     """Parse CLI arguments and run the ingestion pipeline."""
     args = _parse_args()
-    run_pipeline(args.source)
+    run_pipeline(args.source, collection_name=args.collection)
 
 
-def run_pipeline(source: str) -> PipelineCounters:
+def run_pipeline(source: str, collection_name: str | None = None) -> PipelineCounters:
     """Run all ingestion stages in order."""
     counters = PipelineCounters()
 
     repository = load_repository(source)
+    selected_collection = collection_name or expected_collection_name(
+        repository["repository_root"]
+    )
+    validate_collection_binding(selected_collection, repository["repository_root"])
     discovered_files = discover_files(repository["repository_root"], counters)
     filtered_files = filter_files(
         discovered_files,
@@ -78,16 +83,16 @@ def run_pipeline(source: str) -> PipelineCounters:
 
     if all_chunks:
         embedded_chunks = embed_chunks(all_chunks, counters)
-        store_chunks(embedded_chunks, counters)
+        store_chunks(embedded_chunks, counters, collection_name=selected_collection)
 
     if ENABLE_INCREMENTAL_FILE_SKIP:
         if not RECREATE_COLLECTION_EACH_RUN:
             removed_paths = sorted(set(previous_state) - set(next_state))
             if removed_paths:
-                delete_chunks_for_paths(removed_paths)
+                delete_chunks_for_paths(removed_paths, collection_name=selected_collection)
         save_ingestion_state(repository["repository_root"], next_state)
 
-    _print_report(repository, counters)
+    _print_report(repository, counters, collection_name=selected_collection or COLLECTION_NAME)
     return counters
 
 
@@ -99,10 +104,15 @@ def _parse_args() -> argparse.Namespace:
         "source",
         help="Absolute local repository path or public GitHub URL.",
     )
+    parser.add_argument(
+        "--collection",
+        default="",
+        help="Optional Qdrant collection override for this run.",
+    )
     return parser.parse_args()
 
 
-def _print_report(repository: dict, counters: PipelineCounters) -> None:
+def _print_report(repository: dict, counters: PipelineCounters, collection_name: str) -> None:
     print("========================================")
     print("Ingestion Complete")
     print("========================================")
@@ -124,7 +134,7 @@ def _print_report(repository: dict, counters: PipelineCounters) -> None:
     print(f"Chunks generated:    {counters.chunks_generated}")
     print(f"Embeddings stored:   {counters.embeddings_stored}")
     print()
-    print(f"Collection:          {COLLECTION_NAME}")
+    print(f"Collection:          {collection_name}")
     print("========================================")
 
     if skipped_files:

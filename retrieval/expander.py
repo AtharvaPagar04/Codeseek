@@ -13,12 +13,12 @@ from retrieval.config import (
     QDRANT_PORT,
 )
 
-_client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+_client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
 
 
 def expand(candidates: list[dict], query_info: dict) -> list[dict]:
     """Attach related chunks (split parts, parent class, callees)."""
-    del query_info
+    intent = query_info.get("intent", "SEMANTIC")
     seen: dict[str, dict] = {}
 
     for chunk in candidates:
@@ -36,7 +36,9 @@ def expand(candidates: list[dict], query_info: dict) -> list[dict]:
             if chunk.get("chunk_type") == "method" and chunk.get("parent_symbol"):
                 _merge(seen, _parent_chunk(chunk), "parent_class")
 
-    if EXPAND_CALLS:
+    # Keep callee expansion focused: strongest value is dependency tracing.
+    allow_calls = EXPAND_CALLS and intent == "DEPENDENCY"
+    if allow_calls:
         call_targets = []
         for chunk in candidates:
             for call in chunk.get("calls", []):

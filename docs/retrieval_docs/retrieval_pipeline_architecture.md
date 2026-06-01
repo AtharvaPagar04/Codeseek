@@ -21,8 +21,17 @@ Qdrant must be running locally on port 6333 and already populated by the ingesti
         expander.py
         assembler.py
         llm.py
+        source_filter.py
+        isolation.py
+        observability.py
+        api_service.py
 
-Eight files. No subdirectories in V1. Each file maps to one stage of the pipeline. `config.py` and `memory.py` are shared infrastructure. The five stage files (`query_processor`, `searcher`, `expander`, `assembler`, `llm`) form the sequential processing chain. `main.py` is the entry point that wires all stages together.
+Current retrieval package includes pipeline stages plus service/ops modules.
+`config.py` and `memory.py` are shared infrastructure. Stage files (`query_processor`,
+`searcher`, `expander`, `assembler`, `llm`) form the sequential processing chain.
+`main.py` is the CLI entry point. `api_service.py` exposes versioned HTTP endpoints.
+`source_filter.py` controls citation/source display behavior. `isolation.py` enforces
+tenant/repo collection binding. `observability.py` emits structured logs and Prometheus metrics.
 
 ---
 

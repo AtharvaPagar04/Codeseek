@@ -1,0 +1,25 @@
+{
+  "datasets": [
+    {
+      "id": "trading_bot",
+      "min_hit": 0.98,
+      "min_mrr": 0.85,
+      "min_citation_coverage": 0.88,
+      "baseline_citation_coverage": 0.957,
+      "max_citation_drop": 0.08
+    },
+    {
+      "id": "codeseek",
+      "min_hit": 0.40,
+      "min_mrr": 0.30,
+      "min_citation_coverage": 0.35,
+      "baseline_citation_coverage": 0.45,
+      "max_citation_drop": 0.10
+    }
+  ],
+  "aggregate": {
+    "min_weighted_hit": 0.70,
+    "min_weighted_mrr": 0.60,
+    "min_weighted_citation_coverage": 0.65
+  }
+}

@@ -47,6 +47,187 @@ Install:
 
     uv pip install qdrant-client sentence-transformers tiktoken groq
 
+For authenticated API mode:
+
+    uv pip install fastapi uvicorn
+
+---
+
+## Security Baseline
+
+1. Rotate leaked keys immediately
+
+- If any API key was pasted in terminal/chat/history, rotate it at the provider now.
+- Replace values in local `.env` after rotation.
+
+2. Secret scanning
+
+- Local scanner:
+
+      python scripts/scan_secrets.py
+
+- CI scanner:
+  - `.github/workflows/secret-scan.yml`
+
+3. Auth + rate limit for exposed service
+
+- API service entrypoint:
+  - `retrieval/api_service.py`
+- Required env:
+
+      CODESEEK_API_KEY=your-strong-random-token
+      CODESEEK_RATE_LIMIT_PER_MINUTE=60
+
+- Start server:
+  - Versioned API root: `/api/v1`
+
+      uvicorn retrieval.api_service:app --host 0.0.0.0 --port 8000
+
+- Query with bearer token:
+
+      curl -X POST http://localhost:8000/api/v1/query \
+        -H "Authorization: Bearer $CODESEEK_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"Where is account_info implemented?"}'
+
+- Health:
+
+      curl http://localhost:8000/api/v1/health
+
+- Backward-compatible aliases are still available:
+  - `/query`
+  - `/health`
+
+4. Reliability controls
+
+- Retries/timeouts/circuit breaker are enabled for Groq and Qdrant.
+- Dense retrieval gracefully degrades to metadata retrieval when embedding model load fails.
+
+Key env knobs:
+
+    RETRIEVAL_QDRANT_TIMEOUT_SECONDS=5
+    RETRIEVAL_GROQ_TIMEOUT_SECONDS=20
+    RETRIEVAL_RETRY_ATTEMPTS=3
+    RETRIEVAL_RETRY_BACKOFF_SECONDS=0.5
+    RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD=3
+    RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS=30
+
+Health endpoint:
+
+- `GET /health` now returns:
+  - `status` (`ok` or `degraded`)
+  - dependency states (`embedding_model`, `qdrant`)
+  - selected `collection` and `repo_root`
+  - `startup_errors` summary (if any)
+
+5. Data isolation policy (tenant + repo)
+
+- Canonical collection format:
+
+      repository_chunks__{tenant_id}__{repo_id}
+
+- `tenant_id` comes from `CODESEEK_TENANT_ID` (slugged).
+- `repo_id` comes from repository root directory name (slugged).
+- Strict validation is enabled by default:
+
+      CODESEEK_STRICT_ISOLATION=1
+
+- Guardrails:
+  - Ingestion validates `--collection` matches expected tenant/repo binding.
+  - Retrieval validates `repo_root` + `collection` before every query.
+  - API `/query` returns HTTP 409 on binding mismatch.
+
+6. Observability
+
+- Structured JSON logs are emitted for retrieval and API lifecycle events.
+- Request ID:
+  - Pass `X-Request-Id` header to `/query`, or service auto-generates one.
+- Logged events:
+  - `api.query.start`, `api.query.end`, `api.query.error`
+  - `retrieval.request.start`, `retrieval.request.end`
+- Metrics captured:
+  - total request latency
+  - per-stage latency (`history`, `query_processor`, `search`, `expand`, `assemble`, `llm`)
+  - source-filter decision metadata (caps, test filtering, selected counts)
+- Prometheus metrics endpoint:
+  - `/api/v1/metrics` (preferred)
+  - `/metrics` (compat)
+
+Core metric names:
+- `codeseek_api_requests_total{path,status}`
+- `codeseek_api_request_latency_seconds{path}`
+- `codeseek_retrieval_stage_latency_seconds{stage}`
+- `codeseek_retrieval_errors_total{error_type}`
+- `codeseek_retrieval_sources_selected`
+- `codeseek_retrieval_context_tokens`
+
+7. Load testing
+
+- Script:
+  - `scripts/load_test_api.py`
+- Example:
+
+      python scripts/load_test_api.py \
+        --base-url http://localhost:8000 \
+        --api-key "$CODESEEK_API_KEY" \
+        --query "Trace account_info() to final HTTP request" \
+        --requests 100 \
+        --concurrency 10
+
+8. Deployment hygiene
+
+- Pinned dependencies:
+  - `requirements.txt` uses exact versions for runtime stability.
+
+- Docker image:
+
+      docker build -t codeseek-api:latest .
+
+- Docker Compose (API + Qdrant):
+
+      docker compose up --build
+
+- Strict env validation on startup:
+  - `CODESEEK_STRICT_ENV_VALIDATION=1` (default)
+  - Service fails fast when required env or critical config is invalid.
+
+- Qdrant snapshot backup:
+
+      python scripts/qdrant_snapshot_backup.py \
+        --host localhost \
+        --port 6333 \
+        --collection repository_chunks__local__trading_bot_e2e \
+        --out-dir backups/qdrant
+
+- Qdrant snapshot restore:
+
+      python scripts/qdrant_snapshot_restore.py \
+        --host localhost \
+        --port 6333 \
+        --collection repository_chunks__local__trading_bot_e2e \
+        --snapshot-file backups/qdrant/<snapshot-file>
+
+- Automated scheduled backup + retention:
+
+      python scripts/qdrant_snapshot_schedule.py \
+        --host localhost \
+        --port 6333 \
+        --collections "repository_chunks__local__codeseek,repository_chunks__local__trading_bot_e2e" \
+        --out-dir backups/qdrant \
+        --keep-last 14 \
+        --max-age-days 30
+
+  Retention policy:
+  - keep latest `--keep-last` snapshots per collection
+  - delete snapshots older than `--max-age-days`
+
+- Example cron (daily at 02:15):
+
+      15 2 * * * cd /home/arch/DEV/RAG/Codeseek && /home/arch/DEV/RAG/Codeseek/.venv/bin/python scripts/qdrant_snapshot_schedule.py --host localhost --port 6333 --collections "repository_chunks__local__codeseek" --out-dir backups/qdrant --keep-last 14 --max-age-days 30 >> /tmp/codeseek_snapshot.log 2>&1
+
+- CI schedule workflow:
+  - `.github/workflows/qdrant-snapshot-schedule.yml`
+
 ---
 
 ## High Level Flow
@@ -210,6 +391,18 @@ All tuneable values live in config.py. These are the defaults to start with.
     FILE_CACHE_MAX_SIZE = 128           # lru_cache size for disk reads (number of files)
 
     REPO_ROOT = "/absolute/path/to/ingested/repository"    # must match the repository that was ingested
+
+Environment overrides supported:
+
+    CODESEEK_TENANT_ID=local
+    CODESEEK_STRICT_ISOLATION=1
+    QDRANT_COLLECTION_NAME=repository_chunks__local__trading_bot_e2e
+    QDRANT_HOST=localhost
+    QDRANT_PORT=6333
+    RETRIEVAL_REPO_ROOT=/tmp/trading-bot-e2e
+
+For multi-repo evaluation, use a separate collection per dataset to avoid cross-repo contamination.
+`scripts/retrieval_eval_suite.py` supports `collection_name` and `ingest_before_eval` per dataset entry.
 
 ---
 

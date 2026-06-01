@@ -5,14 +5,14 @@ from pathlib import Path
 
 import tiktoken
 
-from retrieval.config import FILE_CACHE_MAX_SIZE, MAX_CONTEXT_TOKENS, REPO_ROOT
+from retrieval.config import FILE_CACHE_MAX_SIZE, MAX_CONTEXT_TOKENS, get_repo_root
 
 _enc = tiktoken.get_encoding("cl100k_base")
 
 
 @lru_cache(maxsize=FILE_CACHE_MAX_SIZE)
-def _read_file_lines(relative_path: str) -> tuple[str, ...]:
-    path = Path(REPO_ROOT) / relative_path
+def _read_file_lines(repo_root: str, relative_path: str) -> tuple[str, ...]:
+    path = Path(repo_root) / relative_path
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         return tuple(handle.readlines())
 
@@ -73,8 +73,9 @@ def _read_chunk_content(chunk: dict) -> str | None:
     relative_path = chunk.get("relative_path")
     if not relative_path:
         return None
+    repo_root = get_repo_root()
     try:
-        lines = _read_file_lines(relative_path)
+        lines = _read_file_lines(repo_root, relative_path)
     except OSError:
         return None
 

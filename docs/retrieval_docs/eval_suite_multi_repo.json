@@ -1,0 +1,19 @@
+{
+  "name": "multi-repo-retrieval-suite-v1",
+  "datasets": [
+    {
+      "id": "trading_bot",
+      "eval_file": "docs/retrieval_docs/eval_trading_bot_hard.json",
+      "repo_root": "/tmp/trading-bot-e2e",
+      "ingest_before_eval": true,
+      "k": 10
+    },
+    {
+      "id": "codeseek",
+      "eval_file": "docs/retrieval_docs/eval_codeseek_hard.json",
+      "repo_root": "/home/arch/DEV/RAG/Codeseek",
+      "ingest_before_eval": true,
+      "k": 10
+    }
+  ]
+}

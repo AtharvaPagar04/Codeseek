@@ -15,9 +15,9 @@ principal design documents.
 
 ## Active Work Queue
 
-- Optionally strengthen file change detection using content hash in addition to `size_bytes` + `mtime_ns`.
-- Improve retrieval relevance/ranking quality (query intent heuristics, expansion tuning).
 - Keep docs and counters aligned with code behavior.
+- Continue retrieval quality tuning against hard eval suites.
+- Operationalize production rollout (monitoring dashboards, backup restore drills, staged deploys).
 
 ## Implementation Prompt
 
