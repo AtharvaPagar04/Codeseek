@@ -4,16 +4,19 @@ Use `docs/ingestion_docs/implementation_roadmap.md` as the active task sequence.
 The files `docs/ingestion_docs/architecture.md` and `docs/ingestion_docs/ingestion_pipeline_docs.md` remain the
 principal design documents.
 
-## Current Phase: Production Hardening (Post-Phase 6)
+## Current Phase: Retrieval Integration
 
 - Core roadmap phases (1-6) are implemented.
 - Private GitHub clone token support is implemented (`GITHUB_TOKEN` / `GH_TOKEN`).
 - Incremental unchanged-file skip is implemented with local state persistence.
 - Incremental stale-point cleanup is implemented for files removed from source repo.
+- Retrieval pipeline is implemented under `retrieval/` and validated against local Qdrant.
+- Retrieval LLM provider is Groq (`GROQ_API_KEY`).
 
 ## Active Work Queue
 
 - Optionally strengthen file change detection using content hash in addition to `size_bytes` + `mtime_ns`.
+- Improve retrieval relevance/ranking quality (query intent heuristics, expansion tuning).
 - Keep docs and counters aligned with code behavior.
 
 ## Implementation Prompt

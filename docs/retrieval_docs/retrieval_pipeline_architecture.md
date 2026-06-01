@@ -352,7 +352,7 @@ Blocks are separated by a blank line. The entire set forms the `assembled_contex
 
 ### llm.py
 
-**Role:** Stage 5. Build the full prompt, call Gemini Flash, and return the answer string.
+**Role:** Stage 5. Build the full prompt, call Groq, and return the answer string.
 
 **Public interface:**
 
@@ -383,22 +383,9 @@ Blocks are separated by a blank line. The entire set forms the `assembled_contex
 
 The history block is placed before the code context. This lets the LLM resolve conversational references from prior turns before reading the new code context.
 
-**Primary LLM: Gemini 2.0 Flash (Google AI Studio)**
+**Primary LLM: Groq (Llama 3.1 70B)**
 
-Free tier. 1 million token context window. Generous rate limits for personal use. API key from https://aistudio.google.com.
-
-    import google.generativeai as genai
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=system_prompt)
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.GenerationConfig(max_output_tokens=MAX_RESPONSE_TOKENS)
-    )
-    answer = response.text
-
-**Fallback LLM: Groq (Llama 3.1 70B)**
-
-Free tier. 128K context. Fast inference. API key from https://console.groq.com.
+Free tier. Fast inference. API key from https://console.groq.com.
 
     from groq import Groq
     client = Groq(api_key=GROQ_API_KEY)
@@ -412,7 +399,7 @@ Free tier. 128K context. Fast inference. API key from https://console.groq.com.
     )
     answer = response.choices[0].message.content
 
-**Dependencies:** `google-generativeai`, optionally `groq`, `config`.
+**Dependencies:** `groq`, `config`.
 
 ---
 
@@ -476,7 +463,7 @@ Exits cleanly on Ctrl+C, EOF, or the `exit` / `quit` command.
     searcher.py        (config, qdrant_client, sentence_transformers)
     expander.py        (config, qdrant_client)
     assembler.py       (config, qdrant_client, tiktoken, pathlib, functools)
-    llm.py             (config, google-generativeai)
+    llm.py             (config, groq)
 
     main.py            (imports all of the above)
 
@@ -484,30 +471,17 @@ No module imports from another pipeline module except `main.py`. The only shared
 
 ---
 
-## Build Order
+## Implementation Status
 
-Build in this order. Each stage is independently testable before the next is wired in.
+Retrieval is implemented with the documented module boundaries and stage flow:
 
-Stage 1 — searcher.py
-Dense search only. Print symbol_name, relative_path, score for a test query. Verify BGE query prefix is applied and scores look reasonable (0.6+ for relevant results).
-
-Stage 2 — assembler.py (disk read and format only, no budget logic yet)
-Take searcher output, read content from disk, print formatted context blocks. Verify line ranges are correct and lru_cache works.
-
-Stage 3 — llm.py
-Hard-code a small context string. Call Gemini. Verify API key and response parsing work.
-
-Stage 4 — main.py (wire stages 1–3, no memory yet)
-End-to-end: query → search → assemble → LLM → answer. Already useful at this point. Pause here and test with real queries before continuing.
-
-Stage 5 — memory.py + wire into main.py
-Add ConversationMemory. Test a multi-turn sequence to verify history is passed correctly.
-
-Stage 6 — query_processor.py
-Add intent classification and entity extraction. Wire into searcher to activate Layer B and Layer C.
-
-Stage 7 — expander.py
-Add split-part reassembly first (simplest). Then parent class fetch. Then callee expansion. Each is a config flag. Test each independently before enabling the next.
+- `query_processor.py` for intent/entity extraction.
+- `searcher.py` for dense + metadata + dependency retrieval.
+- `expander.py` for split/parent/callee expansion.
+- `assembler.py` for disk-backed context assembly and budgeting.
+- `llm.py` for Groq completion calls.
+- `memory.py` for in-process turn history.
+- `main.py` for REPL and single-query execution.
 
 ---
 
@@ -562,4 +536,4 @@ No BM25 / sparse search. Dense retrieval handles the vast majority of queries. A
 
     Python 3.10+
     Qdrant running locally on port 6333
-    uv pip install qdrant-client sentence-transformers tiktoken google-generativeai
+    uv pip install qdrant-client sentence-transformers tiktoken groq

@@ -41,11 +41,11 @@ Qdrant running locally on port 6333 (same instance used by ingestion)
 sentence-transformers (same model used at ingestion: BAAI/bge-small-en-v1.5)
 qdrant-client
 tiktoken
-google-generativeai
+groq
 
 Install:
 
-    uv pip install qdrant-client sentence-transformers tiktoken google-generativeai
+    uv pip install qdrant-client sentence-transformers tiktoken groq
 
 ---
 
@@ -76,7 +76,7 @@ Install:
                                format labeled context blocks
         |
         v
-    LLM (Gemini Flash)      -- system prompt + conversation history + context + query
+    LLM (Groq)              -- system prompt + conversation history + context + query
         |
         v
     Answer + source citations
@@ -221,7 +221,7 @@ All tuneable values live in config.py. These are the defaults to start with.
         searcher.py             Stage 2: dense + metadata filter + calls search
         expander.py             Stage 3: reference expansion (calls, parent, parts)
         assembler.py            Stage 4: disk reads (cached), ranking, token budget
-        llm.py                  Stage 5: prompt builder + Gemini client
+        llm.py                  Stage 5: prompt builder + Groq client
         memory.py               conversation turn storage and retrieval
         config.py               all configuration constants
 
@@ -669,17 +669,13 @@ context_token_count: total tokens used.
 
 ### Responsibility
 
-Build the full prompt including conversation history and code context, call Gemini Flash,
+Build the full prompt including conversation history and code context, call Groq,
 and return the answer with source citations.
 
 ### LLM Choice
 
-Primary: Google Gemini 2.0 Flash via Google AI Studio.
-Free tier. 1 million token context window. Generous rate limits for personal use.
-API key: https://aistudio.google.com
-
-Fallback: Groq (Llama 3.1 70B or DeepSeek R1 Distill).
-Free tier. 128K context. Very fast inference.
+Primary: Groq (Llama 3.1 70B or DeepSeek R1 Distill).
+Free tier. Fast inference.
 API key: https://console.groq.com
 
 ### System Prompt
@@ -710,23 +706,7 @@ The history block appears before the code context. This ordering lets the LLM re
 references from prior turns ("that function", "the one you mentioned") before reading
 the new code context.
 
-### Gemini API Call
-
-    import google.generativeai as genai
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(
-        "gemini-2.0-flash",
-        system_instruction=system_prompt
-    )
-
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.GenerationConfig(max_output_tokens=MAX_RESPONSE_TOKENS)
-    )
-    answer = response.text
-
-### Groq Fallback
+### Groq API Call
 
     from groq import Groq
 
@@ -822,35 +802,16 @@ Single query mode (non-interactive):
 
 ---
 
-## Build Order
+## Implementation Status
 
-Build in this order. Each stage is independently testable before wiring the next.
+The retrieval pipeline is implemented and runnable end-to-end:
 
-1. searcher.py
-   Dense search only. Print symbol_name, relative_path, score for a test query.
-   Verify BGE query prefix is applied and scores look reasonable (0.6+ for relevant results).
-
-2. assembler.py (disk read + format only, no budget logic yet)
-   Take searcher output, read content from disk, print formatted context blocks.
-   Verify line ranges are correct and lru_cache works.
-
-3. llm.py
-   Hard-code a small context string. Call Gemini. Verify API key and response parsing work.
-
-4. main.py (wire steps 1-3, no memory yet)
-   End-to-end: query -> search -> assemble -> LLM -> answer.
-   Already useful at this point. Pause here and test with real queries.
-
-5. memory.py + wire into main.py
-   Add ConversationMemory. Test a multi-turn sequence to verify history is passed correctly.
-
-6. query_processor.py
-   Add intent classification and entity extraction.
-   Wire into searcher to activate Layer B and Layer C.
-
-7. expander.py
-   Add split-part reassembly first (simplest). Then parent class fetch. Then callee expansion.
-   Each is a config flag. Test each one independently before enabling the next.
+1. `query_processor.py` classifies intent and extracts entities.
+2. `searcher.py` runs dense + metadata + dependency searches, then merges and ranks.
+3. `expander.py` adds split parts, parent class, and callee expansions.
+4. `assembler.py` re-reads code from disk and enforces context token budget.
+5. `llm.py` sends prompt/context to Groq using `GROQ_API_KEY`.
+6. `main.py` supports interactive mode and `--query` single-shot mode.
 
 ---
 
@@ -875,22 +836,29 @@ Build in this order. Each stage is independently testable before wiring the next
 
 ## Smoke Test
 
-After building stages 1-4, run with a real query:
+Run with a real query:
 
     uv run python -m retrieval.main --query "how does embedding work"
 
 Expected: answer references the embedder file, cites specific functions and line numbers.
 Sources block should show at least one primary hit and ideally one callee.
 
-Manual Qdrant check before building retrieval:
+Manual Qdrant payload check:
 
     from qdrant_client import QdrantClient
     client = QdrantClient("localhost", port=6333)
-    results = client.search(
-        collection_name="repository_chunks",
-        query_vector=[0.0] * 384,
-        limit=3
-    )
+    if hasattr(client, "search"):
+        results = client.search(
+            collection_name="repository_chunks",
+            query_vector=[0.0] * 384,
+            limit=3
+        )
+    else:
+        results = client.query_points(
+            collection_name="repository_chunks",
+            query=[0.0] * 384,
+            limit=3
+        ).points
     for r in results:
         print(r.payload["symbol_name"])
         print(r.payload["qualified_symbol"])
