@@ -2,7 +2,7 @@
 
 import argparse
 
-from rag_ingestion.config import COLLECTION_NAME
+from rag_ingestion.config import COLLECTION_NAME, ENABLE_INCREMENTAL_FILE_SKIP
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
 from rag_ingestion.stages.embedder import embed_chunks
@@ -15,7 +15,13 @@ from rag_ingestion.stages.parser import parse_file
 from rag_ingestion.stages.storage import store_chunks
 from rag_ingestion.stages.summary import generate_summary
 from rag_ingestion.utils.counters import PipelineCounters
-from rag_ingestion.utils.logger import skipped_files
+from rag_ingestion.utils.logger import log_skip, skipped_files
+from rag_ingestion.utils.state import (
+    build_file_signature,
+    is_file_unchanged,
+    load_ingestion_state,
+    save_ingestion_state,
+)
 
 
 def main() -> None:
@@ -36,10 +42,21 @@ def run_pipeline(source: str) -> PipelineCounters:
         counters,
     )
     language_files = detect_languages(filtered_files, counters)
+    previous_state: dict[str, dict[str, int]] = {}
+    next_state: dict[str, dict[str, int]] = {}
+    if ENABLE_INCREMENTAL_FILE_SKIP:
+        previous_state = load_ingestion_state(repository["repository_root"])
 
     all_chunks = []
     for file in language_files:
         if file.skipped:
+            continue
+        signature = build_file_signature(file)
+        if ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
+            file.relative_path, signature, previous_state
+        ):
+            log_skip(file.relative_path, "unchanged_file", "skipped")
+            next_state[file.relative_path] = signature
             continue
 
         parsed = parse_file(file, counters)
@@ -52,9 +69,16 @@ def run_pipeline(source: str) -> PipelineCounters:
 
         counters.chunks_generated += len(chunks)
         all_chunks.extend(chunks)
+        if ENABLE_INCREMENTAL_FILE_SKIP:
+            next_state[file.relative_path] = signature
 
-    embedded_chunks = embed_chunks(all_chunks, counters)
-    store_chunks(embedded_chunks, counters)
+    if all_chunks:
+        embedded_chunks = embed_chunks(all_chunks, counters)
+        store_chunks(embedded_chunks, counters)
+
+    if ENABLE_INCREMENTAL_FILE_SKIP:
+        save_ingestion_state(repository["repository_root"], next_state)
+
     _print_report(repository, counters)
     return counters
 

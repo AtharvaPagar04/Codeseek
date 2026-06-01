@@ -614,8 +614,10 @@ Create if not exists:
         vectors_config=VectorParams(size=384, distance=Distance.COSINE),
     )
 
-For local use, recreate_collection on every run is fine.
-Later when you want incremental reindexing, switch to create_collection + upsert.
+For local use, `recreate_collection` on every run is fine.
+For incremental mode, set:
+- `RECREATE_COLLECTION_EACH_RUN = False`
+- `ENABLE_INCREMENTAL_FILE_SKIP = True`
 
 ### HNSW Configuration
 
@@ -692,8 +694,10 @@ Print to stdout at end of run:
 
 ## Known Gaps (Fix Before Production, Fine For Local)
 
-1. No incremental reindexing. Every run recreates the collection from scratch.
-   Fix: check file mtime, skip unchanged files, upsert by chunk_id.
+1. Incremental mode is available but basic.
+   - Uses file signatures (`size_bytes` + `mtime_ns`) to skip unchanged files
+   - Does not use content hashes
+   - Does not remove stale Qdrant points for deleted files yet
 
 2. Private GitHub repos require credentials in environment variables:
    - GITHUB_TOKEN or GH_TOKEN for HTTPS cloning

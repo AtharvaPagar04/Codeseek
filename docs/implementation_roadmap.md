@@ -162,7 +162,8 @@ Each stage is a single file with one public function. No stage imports from anot
 
 ## Known Gaps to Fix Before Production
 
-- No true incremental reindexing policy (mtime/hash change detection is still missing)
+- Incremental mode uses `mtime_ns + size_bytes`; there is no content hash check
+- Incremental mode does not yet delete stale Qdrant points for deleted files
 - Content is not stored in Qdrant (must re-read from disk at retrieval time)
 - calls field is extracted but not yet used in retrieval
 - No auth or rate limiting

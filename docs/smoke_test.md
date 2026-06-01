@@ -30,9 +30,13 @@ export GH_TOKEN=your_token
 
 Optional incremental mode:
 
-Set `RECREATE_COLLECTION_EACH_RUN = False` in `rag_ingestion/config.py` to keep
-the collection and upsert by deterministic `chunk_id` instead of recreating it
-on every run.
+Set these in `rag_ingestion/config.py`:
+
+- `RECREATE_COLLECTION_EACH_RUN = False`
+- `ENABLE_INCREMENTAL_FILE_SKIP = True`
+
+This keeps the collection and skips unchanged files using file signatures
+(`size_bytes` + `mtime_ns`) stored in `.rag_ingestion_state.json`.
 
 Verify the Qdrant collection:
 
