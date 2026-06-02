@@ -84,6 +84,22 @@ class SourceFilteringTests(unittest.TestCase):
         self.assertIn("sign_query", symbols)
         self.assertNotIn("create_listen_key", symbols)
 
+    def test_project_overview_query_allows_broader_source_set(self) -> None:
+        query = "what is this project about"
+        sources = [
+            {
+                "relative_path": f"src/components/Section{i}.tsx",
+                "symbol_name": f"Section{i}",
+                "start_line": 1,
+                "end_line": 20,
+                "expansion_type": "primary",
+            }
+            for i in range(7)
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        self.assertEqual(len(selected), 6)
+
 
 if __name__ == "__main__":
     unittest.main()

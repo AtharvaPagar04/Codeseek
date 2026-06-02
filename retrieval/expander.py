@@ -5,12 +5,12 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from retrieval.config import (
     CALL_EXPANSION_LIMIT,
-    COLLECTION_NAME,
     EXPAND_CALLS,
     EXPAND_PARENT,
     EXPAND_SPLIT_PARTS,
     QDRANT_HOST,
     QDRANT_PORT,
+    get_collection_name,
 )
 
 _client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
@@ -67,7 +67,7 @@ def _merge(seen: dict[str, dict], chunks: list[dict], expansion_type: str) -> No
 
 def _split_parts(chunk: dict) -> list[dict]:
     hits, _ = _client.scroll(
-        collection_name=COLLECTION_NAME,
+        collection_name=get_collection_name(),
         scroll_filter=Filter(
             must=[
                 FieldCondition(key="relative_path", match=MatchValue(value=chunk["relative_path"])),
@@ -84,7 +84,7 @@ def _split_parts(chunk: dict) -> list[dict]:
 
 def _parent_chunk(chunk: dict) -> list[dict]:
     hits, _ = _client.scroll(
-        collection_name=COLLECTION_NAME,
+        collection_name=get_collection_name(),
         scroll_filter=Filter(
             must=[
                 FieldCondition(key="relative_path", match=MatchValue(value=chunk["relative_path"])),
@@ -100,7 +100,7 @@ def _parent_chunk(chunk: dict) -> list[dict]:
 
 def _callee_chunks(call_target: str) -> list[dict]:
     hits, _ = _client.scroll(
-        collection_name=COLLECTION_NAME,
+        collection_name=get_collection_name(),
         scroll_filter=Filter(
             must=[FieldCondition(key="symbol_name", match=MatchValue(value=call_target))]
         ),

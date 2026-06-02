@@ -8,10 +8,26 @@ class ConversationMemory:
         self.max_turns = max_turns
         self.turns: list[dict[str, str]] = []
 
-    def add(self, query: str, answer: str) -> None:
-        self.turns.append({"query": query, "answer": answer})
+    def add(self, query: str, answer: str, resolved_query: str | None = None) -> None:
+        self.turns.append(
+            {
+                "query": query,
+                "answer": answer,
+                "resolved_query": resolved_query or query,
+            }
+        )
         if len(self.turns) > self.max_turns:
             self.turns.pop(0)
+
+    def latest_query(self) -> str:
+        if not self.turns:
+            return ""
+        return self.turns[-1].get("query", "")
+
+    def latest_resolved_query(self) -> str:
+        if not self.turns:
+            return ""
+        return self.turns[-1].get("resolved_query", "") or self.turns[-1].get("query", "")
 
     def get_history_block(self) -> str:
         if not self.turns:

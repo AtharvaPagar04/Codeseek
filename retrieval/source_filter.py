@@ -11,6 +11,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     wants_tests = query_mentions_tests(raw_query)
     wants_compound = query_is_compound_trace(raw_query)
     wants_auth_trace = query_is_auth_flow_trace(raw_query)
+    wants_overview = query_is_overview_summary(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
 
@@ -31,10 +32,10 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     primary_relevant = [s for s in primary if overlap(s) > 0]
     expanded_relevant = [s for s in expanded if overlap(s) > 0]
 
-    strong_threshold = 1 if wants_compound else 2
+    strong_threshold = 1 if (wants_compound or wants_overview) else 2
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
-    primary_cap = 7 if wants_auth_trace else (6 if wants_compound else 5)
-    expanded_cap = 3 if wants_compound else 2
+    primary_cap = 7 if wants_auth_trace else (6 if (wants_compound or wants_overview) else 5)
+    expanded_cap = 3 if (wants_compound or wants_overview) else 2
     chosen_primary = (
         strong_primary[:primary_cap]
         if strong_primary
@@ -67,6 +68,7 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
     wants_tests = query_mentions_tests(raw_query)
     wants_compound = query_is_compound_trace(raw_query)
     wants_auth_trace = query_is_auth_flow_trace(raw_query)
+    wants_overview = query_is_overview_summary(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
 
@@ -83,8 +85,8 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         if expanded_non_tests:
             expanded = expanded_non_tests
 
-    primary_cap = 7 if wants_auth_trace else (6 if wants_compound else 5)
-    expanded_cap = 3 if wants_compound else 2
+    primary_cap = 7 if wants_auth_trace else (6 if (wants_compound or wants_overview) else 5)
+    expanded_cap = 3 if (wants_compound or wants_overview) else 2
     selected = select_sources_for_display(raw_query, sources)
     selected_primary = sum(1 for s in selected if s.get("expansion_type") == "primary")
     selected_expanded = len(selected) - selected_primary
@@ -93,6 +95,7 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         "wants_tests": wants_tests,
         "wants_compound": wants_compound,
         "wants_auth_trace": wants_auth_trace,
+        "wants_overview": wants_overview,
         "test_filtered": test_filtered,
         "input_primary": len([s for s in sources if s.get("expansion_type") == "primary"]),
         "input_expanded": len([s for s in sources if s.get("expansion_type") != "primary"]),
@@ -207,6 +210,23 @@ def query_is_auth_flow_trace(raw_query: str) -> bool:
     return (
         "trace" in q
         and any(k in q for k in ("account_info", "authenticated", "signature", "api key", "auth header"))
+    )
+
+
+def query_is_overview_summary(raw_query: str) -> bool:
+    q = raw_query.lower()
+    return any(
+        phrase in q
+        for phrase in (
+            "what is this project about",
+            "whats this project about",
+            "project overview",
+            "overview of the project",
+            "what does this project do",
+            "what does this app do",
+            "tech stack",
+            "architecture overview",
+        )
     )
 
 
