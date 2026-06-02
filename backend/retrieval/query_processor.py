@@ -97,8 +97,7 @@ def _extract_symbols(query: str) -> list[str]:
         c = candidate.strip()
         if not c:
             continue
-        # Keep CamelCase symbols even if they contain stopword-like parts.
-        if c.lower() in STOPWORDS and not re.search(r"[A-Z]", c):
+        if c.lower() in STOPWORDS:
             continue
         cleaned.append(c)
 

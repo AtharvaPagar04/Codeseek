@@ -2,9 +2,17 @@
 
 import argparse
 import os
+import re
 import time
 
 from retrieval.assembler import assemble
+from retrieval.code_answers import (
+    build_code_answer,
+    find_supporting_import_exports,
+    is_code_request,
+    is_explanation_request,
+    is_overview_request,
+)
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
     MAX_CONTEXT_TOKENS,
@@ -24,11 +32,30 @@ from retrieval.source_filter import (
 )
 
 
+FOLLOW_UP_MARKERS = {
+    "also",
+    "again",
+    "same",
+    "code",
+    "snippet",
+    "implementation",
+    "example",
+    "expand",
+    "more",
+    "details",
+    "it",
+    "that",
+    "those",
+    "this",
+}
+
+
 def run_query(
     raw_query: str,
     memory: ConversationMemory,
     request_id: str | None = None,
     return_meta: bool = False,
+    provider_config: dict | None = None,
 ) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, dict]:
     """Run one retrieval query end-to-end."""
     rid = request_id or new_request_id()
@@ -40,7 +67,7 @@ def run_query(
     history_block = memory.get_history_block()
     metrics.add_stage("history", started)
     started = time.perf_counter()
-    query_info = process_query(raw_query)
+    query_info = _resolve_query_info(raw_query, memory)
     metrics.add_stage("query_processor", started)
     started = time.perf_counter()
     candidates = search(query_info)
@@ -55,7 +82,7 @@ def run_query(
     shown_sources = select_sources_for_display(raw_query, sources)
     if not shown_sources:
         answer = "Not found in retrieved context."
-        memory.add(raw_query, answer)
+        memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -68,6 +95,13 @@ def run_query(
             rid,
             status="ok",
             fallback="no_sources",
+            collection=get_collection_name(),
+            repo_root=get_repo_root(),
+            intent=query_info.get("intent"),
+            entities=query_info.get("entities", {}),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            assembled_sources=len(sources),
             stage_latency_ms=metrics.stage_latency_ms,
             total_latency_ms=metrics.total_ms(),
             source_filter=meta["source_filter"],
@@ -99,15 +133,79 @@ def run_query(
     ]
     if llm_chunks:
         context, _, token_count = assemble(llm_chunks, history_block)
+    if is_code_request(raw_query):
+        started = time.perf_counter()
+        answer = build_code_answer(raw_query, shown_sources, llm_chunks or expanded)
+        metrics.add_stage("code_answer", started)
+        memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "errors": metrics.errors,
+            }
+        )
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(shown_sources),
+            source_filter=meta["source_filter"],
+            response_mode="code_excerpt",
+        )
+        if return_meta:
+            return answer, shown_sources, token_count, meta
+        return answer, shown_sources, token_count
+    response_sources = list(shown_sources)
+    extra_context_blocks: list[str] = []
+    if not is_code_request(raw_query):
+        supports = find_supporting_import_exports(
+            raw_query,
+            response_sources,
+            llm_chunks or expanded,
+            limit=2,
+        )
+        for support in supports:
+            support_source = {
+                "relative_path": support["relative_path"],
+                "symbol_name": support["symbol_name"],
+                "start_line": int(support["start_line"]),
+                "end_line": int(support["end_line"]),
+                "expansion_type": "supporting_import",
+            }
+            already_present = any(
+                (
+                    src.get("relative_path", ""),
+                    src.get("symbol_name", ""),
+                    int(src.get("start_line", 0)),
+                    int(src.get("end_line", 0)),
+                )
+                == (
+                    support_source["relative_path"],
+                    support_source["symbol_name"],
+                    support_source["start_line"],
+                    support_source["end_line"],
+                )
+                for src in response_sources
+            )
+            if not already_present:
+                response_sources.append(support_source)
+            extra_context_blocks.append(str(support["context_block"]))
     started = time.perf_counter()
     answer = generate_answer(
         raw_query,
         context,
         history_block,
-        allowed_sources=shown_sources,
+        allowed_sources=response_sources,
+        extra_context_blocks=extra_context_blocks,
+        provider_config=provider_config,
     )
     metrics.add_stage("llm", started)
-    memory.add(raw_query, answer)
+    memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
     meta.update(
         {
             "stage_latency_ms": metrics.stage_latency_ms,
@@ -127,8 +225,52 @@ def run_query(
         source_filter=meta["source_filter"],
     )
     if return_meta:
-        return answer, shown_sources, token_count, meta
-    return answer, shown_sources, token_count
+        return answer, response_sources, token_count, meta
+    return answer, response_sources, token_count
+
+
+def _resolve_query_info(raw_query: str, memory: ConversationMemory) -> dict:
+    query_info = process_query(raw_query)
+    if not _should_rewrite_follow_up(raw_query, query_info, memory):
+        return query_info
+
+    previous_query = memory.latest_query().strip()
+    previous_resolved_query = memory.latest_resolved_query().strip()
+    if not previous_query:
+        return query_info
+
+    anchor_query = previous_resolved_query or previous_query
+    combined = f"{anchor_query}\n{raw_query.strip()}"
+    combined_info = process_query(combined)
+    combined_info["follow_up_to"] = previous_query
+    combined_info["follow_up_resolved_to"] = anchor_query
+    combined_info["user_query"] = raw_query.strip()
+    return combined_info
+
+
+def _should_rewrite_follow_up(
+    raw_query: str, query_info: dict, memory: ConversationMemory
+) -> bool:
+    if not memory.turns:
+        return False
+
+    entities = query_info.get("entities", {})
+    if entities.get("symbols") or entities.get("files"):
+        return False
+
+    lowered = raw_query.strip().lower()
+    if not lowered:
+        return False
+
+    tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", lowered)
+    if len(tokens) <= 4:
+        return True
+
+    return any(token in FOLLOW_UP_MARKERS for token in tokens)
+
+
+def _resolved_query_text(query_info: dict, raw_query: str) -> str:
+    return str(query_info.get("raw_query") or raw_query).strip()
 
 
 def main() -> None:

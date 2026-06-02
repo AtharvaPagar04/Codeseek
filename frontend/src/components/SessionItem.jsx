@@ -1,0 +1,116 @@
+import { useState } from 'react';
+import ConfirmDialog from './ConfirmDialog';
+import { formatDistanceToNow } from 'date-fns';
+
+/**
+ * Strip markdown syntax for the last-message excerpt preview.
+ */
+function stripMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/```[\s\S]*?```/g, '[code]')
+    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
+    .replace(/[*_~#>\-]/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getExcerpt(messages) {
+  if (!messages || messages.length === 0) return 'No messages yet';
+  const last = [...messages].reverse().find((m) => m.content && !m.loading);
+  if (!last) return 'No messages yet';
+  const stripped = stripMarkdown(last.content);
+  return stripped.length > 60 ? stripped.slice(0, 60) + '…' : stripped;
+}
+
+function getRelativeTime(iso) {
+  if (!iso) return '';
+  try {
+    return formatDistanceToNow(new Date(iso), { addSuffix: true });
+  } catch {
+    return '';
+  }
+}
+
+export default function SessionItem({ session, isActive, onSelect, onDelete }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const handleDelete = (e) => {
+    e.stopPropagation();
+    setConfirmOpen(true);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSelect();
+    }
+  };
+
+  return (
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onSelect}
+        onKeyDown={handleKeyDown}
+        className={`group w-full text-left px-3 py-2.5 rounded transition-colors relative ${
+          isActive
+            ? 'bg-accent-glow border-l-2 border-accent text-text-primary'
+            : 'border-l-2 border-transparent hover:bg-surface-3 text-text-secondary hover:text-text-primary'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-sm truncate text-text-primary">
+              {session.repo_id}
+            </div>
+            <div className="text-xs text-text-muted truncate mt-0.5">
+              {getExcerpt(session.messages)}
+            </div>
+          </div>
+
+          {/* Delete button — visible on hover */}
+          <button
+            onClick={handleDelete}
+            type="button"
+            title="Delete session"
+            className="opacity-0 group-hover:opacity-100 shrink-0 text-text-muted hover:text-offline transition-all mt-0.5"
+            aria-label="Delete session"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+
+        <div className="text-2xs text-text-muted mt-1">
+          {getRelativeTime(session.last_active || session.created_at)}
+        </div>
+      </div>
+
+      {confirmOpen && (
+        <ConfirmDialog
+          message="Delete this session? This cannot be undone."
+          confirmLabel="Delete"
+          onConfirm={() => {
+            setConfirmOpen(false);
+            onDelete(session.id);
+          }}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z" />
+      <path
+        fillRule="evenodd"
+        d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"
+      />
+    </svg>
+  );
+}

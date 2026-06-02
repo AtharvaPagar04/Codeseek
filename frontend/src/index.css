@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties for values Tailwind can't generate dynamically */
+:root {
+  --border: #21262d;
+}
+
+/* Base resets */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #0d0f11;
+  color: #e6edf3;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thin scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #21262d;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #30363d;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(0, 212, 255, 0.2);
+  color: #e6edf3;
+}
+
+/* Focus rings */
+:focus-visible {
+  outline: 1px solid rgba(0, 212, 255, 0.5);
+  outline-offset: 2px;
+}
+
+/* Code block styling inside react-markdown */
+.prose-sm pre {
+  margin: 0;
+}
+
+.assistant-response > p:first-child {
+  font-size: 1rem;
+  line-height: 1.8;
+  color: #f0f6fc;
+}
+
+.assistant-response ul,
+.assistant-response ol {
+  margin-left: 0;
+}
+
+.assistant-response table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Transition defaults */
+button, a {
+  cursor: pointer;
+}
+
+/* Remove default button appearance */
+button {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}

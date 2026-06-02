@@ -87,6 +87,8 @@ def search(query_info: dict) -> list[dict]:
     dependency_results = _dependency_search(entities) if intent == "DEPENDENCY" else []
 
     merged = _merge_results(dense_results, filter_results, dependency_results)
+    if _is_overview_query(raw_query):
+        merged = _inject_overview_candidates(merged)
     merged = _rerank_with_query_tokens(raw_query, merged)
     return merged[:TOP_K_AFTER_MERGE]
 
@@ -295,6 +297,59 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[di
     return rescored
 
 
+def _inject_overview_candidates(candidates: list[dict]) -> list[dict]:
+    overview_hits = _repository_overview_candidates()
+    if not overview_hits:
+        return candidates
+
+    seen = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
+    merged = list(candidates)
+    for payload in overview_hits:
+        chunk_id = str(payload.get("chunk_id", "")).strip()
+        if not chunk_id or chunk_id in seen:
+            continue
+        merged.append(payload)
+        seen.add(chunk_id)
+    return merged
+
+
+def _repository_overview_candidates() -> list[dict]:
+    client = _get_client()
+    collection = get_collection_name()
+    response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        limit=400,
+        with_payload=True,
+    ))
+    if response is None:
+        return []
+    hits, _ = response
+    payloads = [hit.payload or {} for hit in hits]
+    payloads = [payload for payload in payloads if payload.get("chunk_id")]
+    payloads.sort(
+        key=lambda item: (
+            -_overview_priority(item),
+            item.get("relative_path", ""),
+            int(item.get("start_line", 0)),
+        )
+    )
+
+    chosen = []
+    seen_files = set()
+    for payload in payloads:
+        score = _overview_priority(payload)
+        if score <= 0:
+            continue
+        relative_path = str(payload.get("relative_path", "")).lower()
+        if relative_path in seen_files and score < 16:
+            continue
+        chosen.append(payload)
+        seen_files.add(relative_path)
+        if len(chosen) >= max(6, TOP_K_AFTER_MERGE):
+            break
+    return chosen
+
+
 def _query_tokens(raw_query: str) -> set[str]:
     tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", raw_query.lower()))
     stop = {
@@ -328,6 +383,83 @@ def _overlap_score(tokens: set[str], item: dict) -> int:
         ]
     ).lower()
     return sum(1 for t in tokens if t in hay)
+
+
+def _overview_priority(payload: dict) -> int:
+    relative_path = str(payload.get("relative_path", "")).lower()
+    symbol_name = str(payload.get("symbol_name", "")).lower()
+    chunk_type = str(payload.get("chunk_type", "")).lower()
+    score = 0
+
+    if not relative_path:
+        return score
+    if _is_test_path(relative_path) or symbol_name.startswith("test_"):
+        return -10
+
+    if relative_path in {"readme.md", "readme.mdx"}:
+        score += 30
+    if relative_path.endswith("package.json"):
+        score += 24
+    if relative_path.endswith("pyproject.toml") or relative_path.endswith("requirements.txt"):
+        score += 22
+    if any(
+        relative_path.endswith(name)
+        for name in (
+            "/src/app.jsx",
+            "/src/app.tsx",
+            "/src/main.jsx",
+            "/src/main.tsx",
+            "/src/main.py",
+            "/app/page.tsx",
+            "/main.py",
+        )
+    ):
+        score += 20
+    if any(key in relative_path for key in ("src/lib/data", "/data.ts", "/data.js")):
+        score += 18
+    if any(key in relative_path for key in ("project", "about", "skill", "contact", "education", "hero", "home")):
+        score += 14
+    if chunk_type == "file_summary":
+        score += 8
+    if payload.get("summary"):
+        score += 4
+    if symbol_name in {
+        "app",
+        "home",
+        "portfolio",
+        "projects",
+        "about",
+        "skills",
+        "contact",
+        "education",
+        "personal",
+        "skillcategories",
+    }:
+        score += 12
+    if symbol_name in {"readme", "package_json", "packagejson"}:
+        score += 10
+    return score
+
+
+def _is_overview_query(raw_query: str) -> bool:
+    q = raw_query.lower()
+    return any(
+        phrase in q
+        for phrase in (
+            "what is this project about",
+            "whats this project about",
+            "project overview",
+            "overview of the project",
+            "what does this project do",
+            "what does this app do",
+            "tech stack",
+            "architecture overview",
+        )
+    )
+
+
+def _is_test_path(relative_path: str) -> bool:
+    return "/test" in relative_path or relative_path.startswith("test")
 
 
 def dependency_health() -> dict[str, str]:

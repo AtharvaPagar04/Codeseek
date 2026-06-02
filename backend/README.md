@@ -81,12 +81,21 @@ curl -X POST http://localhost:8000/api/v1/query \
 
 - `GET /api/v1/health`
 - `POST /api/v1/query`
+- `POST /api/v1/sessions` (create session + start async clone/pull+ingestion job)
+- `GET /api/v1/sessions` (list sessions + status)
+- `GET /api/v1/sessions/{session_id}` (single session status/details)
 - `GET /api/v1/metrics` (Prometheus)
 
 Backward-compatible aliases:
 - `/health`
 - `/query`
 - `/metrics`
+
+Session initialization flow:
+- Create session: `POST /api/v1/sessions` with `repo_full_name` (`owner/repo`) and optional `repo_url`.
+- Backend immediately returns `status=indexing`.
+- Background worker clones/pulls repo, performs repo-scoped ingestion, and updates status to `ready` or `failed`.
+- Query can include `session_id`; backend rejects requests while session is not `ready`.
 
 ## Docs
 
