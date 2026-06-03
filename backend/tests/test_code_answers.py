@@ -1,12 +1,32 @@
 import os
+import sys
 import tempfile
 import textwrap
 import unittest
+import types
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from unittest.mock import patch
 
+fake_tiktoken = types.ModuleType("tiktoken")
+fake_tiktoken.__spec__ = ModuleSpec("tiktoken", loader=None)
+
+
+class _FakeEncoding:
+    def encode(self, text):
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens):
+        return bytes(tokens).decode("utf-8", errors="ignore")
+
+
+fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
+sys.modules.setdefault("tiktoken", fake_tiktoken)
+
 from retrieval.code_answers import (
     build_code_answer,
+    build_explanation_answer,
+    build_overview_answer,
     find_supporting_import_export,
     find_supporting_import_exports,
     is_code_request,
@@ -114,6 +134,127 @@ class CodeAnswerTests(unittest.TestCase):
             self.assertIn("export default function Skills()", answer)
             self.assertIn("src/lib/data.ts :: skillCategories", answer)
             self.assertIn("export const skillCategories = [", answer)
+
+    def test_build_overview_answer_extracts_summary_and_tech_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "README.md").write_text(
+                "# Codeseek\nRepository-grounded assistant for source code search and answers.\n",
+                encoding="utf-8",
+            )
+            (repo_root / "package.json").write_text(
+                json_text := textwrap.dedent(
+                    """
+                    {
+                      "name": "codeseek-frontend",
+                      "description": "Frontend for repository-grounded answers",
+                      "dependencies": {
+                        "react": "^18.0.0",
+                        "react-router-dom": "^6.0.0"
+                      },
+                      "devDependencies": {
+                        "vite": "^5.0.0",
+                        "tailwindcss": "^3.0.0"
+                      }
+                    }
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(json_text)
+            sources = [
+                {"relative_path": "README.md", "symbol_name": "README", "start_line": 1, "end_line": 2, "expansion_type": "primary"},
+                {"relative_path": "package.json", "symbol_name": "package_json", "start_line": 1, "end_line": 12, "expansion_type": "primary"},
+            ]
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                answer = build_overview_answer("what is this project about", sources, [])
+
+            self.assertIn("Repository-grounded assistant for source code search and answers.", answer)
+            self.assertIn("Tech stack: React, React Router, Vite, Tailwind CSS.", answer)
+            self.assertIn("Sources:", answer)
+
+    def test_build_overview_answer_extracts_python_stack_from_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "README.md").write_text(
+                "# Retrieval API\nFastAPI service for repository-grounded answers.\n",
+                encoding="utf-8",
+            )
+            (repo_root / "requirements.txt").write_text(
+                "fastapi==0.116.1\nuvicorn==0.35.0\nhttpx==0.28.1\nqdrant-client==1.15.1\n",
+                encoding="utf-8",
+            )
+            sources = [
+                {"relative_path": "README.md", "symbol_name": "README", "start_line": 1, "end_line": 2, "expansion_type": "primary"},
+                {"relative_path": "requirements.txt", "symbol_name": "requirements", "start_line": 1, "end_line": 4, "expansion_type": "primary"},
+            ]
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                answer = build_overview_answer("tech stack", sources, [])
+
+            self.assertIn("FastAPI service for repository-grounded answers.", answer)
+            self.assertIn("Tech stack: FastAPI, Uvicorn, HTTPX, Qdrant.", answer)
+
+    def test_build_explanation_answer_mentions_rendering_and_backing_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src/components").mkdir(parents=True)
+            (repo_root / "src/lib").mkdir(parents=True)
+            (repo_root / "src/components/Skills.tsx").write_text(
+                textwrap.dedent(
+                    """
+                    import { skillCategories } from "@/lib/data";
+
+                    export default function Skills() {
+                        return (
+                            <section id="skills">
+                                {skillCategories.map((cat) => (
+                                    <span key={cat.title}>{cat.title}</span>
+                                ))}
+                            </section>
+                        );
+                    }
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo_root / "src/lib/data.ts").write_text(
+                textwrap.dedent(
+                    """
+                    export const skillCategories = [
+                        { title: "Programming Languages", skills: ["Java", "Python"] },
+                        { title: "Frameworks", skills: ["React", "FastAPI"] }
+                    ];
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            source = {
+                "relative_path": "src/components/Skills.tsx",
+                "symbol_name": "Skills",
+                "start_line": 3,
+                "end_line": 10,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["imports"] = ['import { skillCategories } from "@/lib/data";']
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                answer = build_explanation_answer(
+                    "give me a detailed explanation of the skills section",
+                    [source],
+                    [chunk],
+                )
+
+            self.assertIn("Skills is implemented in src/components/Skills.tsx", answer)
+            self.assertIn("Backing data: src/lib/data.ts :: skillCategories", answer)
+            self.assertIn("Programming Languages", answer)
+            self.assertIn("Sources:", answer)
 
     def test_supporting_import_export_detects_backing_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,7 +399,49 @@ class CodeAnswerTests(unittest.TestCase):
             self.assertIn("Code snippets from retrieved context:", answer)
             self.assertEqual(sources, [source])
             self.assertEqual(token_count, 12)
-            generate_answer.assert_not_called()
+
+    def test_run_query_bypasses_llm_for_overview_requests(self) -> None:
+        source = {
+            "relative_path": "README.md",
+            "symbol_name": "README",
+            "start_line": 1,
+            "end_line": 5,
+            "expansion_type": "primary",
+        }
+        chunk = dict(source)
+        chunk["chunk_id"] = "overview-1"
+        chunk["retrieval_score"] = 1.0
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "README.md").write_text(
+                "# Codeseek\nRepository-grounded assistant for source code search and answers.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": str(repo_root),
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch("retrieval.main.process_query", return_value={"raw_query": "what is this project about", "intent": "SEMANTIC", "entities": {}}), patch(
+                "retrieval.main.search", return_value=[chunk]
+            ), patch("retrieval.main.expand", return_value=[chunk]), patch(
+                "retrieval.main.assemble", return_value=("context", [source], 12)
+            ), patch(
+                "retrieval.main.select_sources_for_display", return_value=[source]
+            ), patch(
+                "retrieval.main.generate_answer"
+            ) as generate_answer:
+                answer, sources, token_count = run_query("what is this project about", memory)
+
+        self.assertIn("Repository-grounded assistant for source code search and answers.", answer)
+        self.assertEqual(sources, [source])
+        self.assertEqual(token_count, 12)
+        generate_answer.assert_not_called()
 
     def test_run_query_includes_supporting_data_for_factual_section_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

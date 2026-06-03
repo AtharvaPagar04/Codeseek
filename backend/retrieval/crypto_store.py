@@ -13,6 +13,10 @@ NONCE_SIZE = 16
 TAG_SIZE = 32
 
 
+def has_explicit_app_encryption_key() -> bool:
+    return bool(os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip())
+
+
 def _master_key() -> bytes:
     raw = (
         os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip()

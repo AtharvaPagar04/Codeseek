@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import secrets
 import time
 import threading
+import urllib.parse
 import uuid
 from collections import defaultdict, deque
 
 import httpx
 from fastapi import APIRouter, Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from retrieval.auth_store import (
@@ -28,6 +33,7 @@ from retrieval.chat_store import (
     list_thread_messages,
 )
 from retrieval.config import get_collection_name, get_repo_root
+from retrieval.crypto_store import has_explicit_app_encryption_key
 from retrieval.db import init_db
 from retrieval.github_store import get_github_credential, upsert_github_credential
 from retrieval.isolation import validate_collection_binding
@@ -40,6 +46,7 @@ from retrieval.observability import (
     observe_api_request,
     observe_retrieval_meta,
     render_prometheus_metrics,
+    sanitize_for_log,
 )
 from retrieval.provider_store import (
     create_provider_credential,
@@ -80,8 +87,40 @@ AUTH_SESSION_SECURE_COOKIE = os.getenv("CODESEEK_AUTH_SESSION_SECURE_COOKIE", "0
     "yes",
     "on",
 }
+ENFORCE_HTTPS = os.getenv("CODESEEK_ENFORCE_HTTPS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+TRUST_X_FORWARDED_PROTO = os.getenv("CODESEEK_TRUST_X_FORWARDED_PROTO", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ALLOW_PLAINTEXT_SECRET_SUBMISSION = os.getenv(
+    "CODESEEK_ALLOW_PLAINTEXT_SECRET_SUBMISSION",
+    "1",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY = os.getenv(
+    "CODESEEK_REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_USER_URL = "https://api.github.com/user"
+CODESEEK_FRONTEND_URL = os.getenv("CODESEEK_FRONTEND_URL", "http://localhost:5173")
+OAUTH_STATE_COOKIE = "codeseek_oauth_state"
 
 app = FastAPI(title="Codeseek Retrieval API", version="1.0.0")
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
@@ -93,6 +132,34 @@ _query_lock = threading.Lock()
 def _cors_origins() -> list[str]:
     raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _is_https_request(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    if not TRUST_X_FORWARDED_PROTO:
+        return False
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+
+
+def _allow_http_request(request: Request) -> bool:
+    return request.url.path in {
+        "/health",
+        "/metrics",
+        "/api/v1/health",
+        "/api/v1/metrics",
+    }
+
+
+@app.middleware("http")
+async def enforce_https_middleware(request: Request, call_next):
+    if ENFORCE_HTTPS and not _allow_http_request(request) and not _is_https_request(request):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "HTTPS is required for this deployment"},
+        )
+    return await call_next(request)
 
 
 app.add_middleware(
@@ -187,6 +254,11 @@ def _resolve_query_session(session_id: str | None, auth_user: dict | None = None
 def _resolve_submitted_secret(plaintext: str | None, encrypted_secret: dict | None) -> str:
     raw = (plaintext or "").strip()
     if raw:
+        if not ALLOW_PLAINTEXT_SECRET_SUBMISSION:
+            raise HTTPException(
+                status_code=400,
+                detail="Plaintext secret submission is disabled; refresh and retry with encrypted submission",
+            )
         return raw
     if not encrypted_secret:
         return ""
@@ -215,6 +287,14 @@ def startup_checks() -> None:
         _startup_errors.append(f"repo root not found: {get_repo_root()}")
     if RATE_LIMIT_PER_MINUTE <= 0:
         _startup_errors.append("invalid CODESEEK_RATE_LIMIT_PER_MINUTE (must be > 0)")
+    if ENFORCE_HTTPS and not AUTH_SESSION_SECURE_COOKIE:
+        _startup_errors.append(
+            "CODESEEK_AUTH_SESSION_SECURE_COOKIE must be enabled when CODESEEK_ENFORCE_HTTPS=1"
+        )
+    if REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY and not has_explicit_app_encryption_key():
+        _startup_errors.append(
+            "CODESEEK_APP_ENCRYPTION_KEY must be set explicitly in deployment"
+        )
     try:
         validate_collection_binding(get_collection_name(), get_repo_root())
     except ValueError as exc:
@@ -403,6 +483,15 @@ def _persist_github_login(access_token: str) -> dict:
         "username": username,
         "avatar_url": avatar_url,
     }
+
+
+def _log_http_error(event: str, request_id: str, status_code: int, detail: object) -> None:
+    log_event(
+        event,
+        request_id,
+        status_code=status_code,
+        detail=sanitize_for_log(detail),
+    )
 
 
 def _query_impl(
@@ -613,6 +702,14 @@ def create_provider_credential_v1(
         model=model,
         set_active=should_be_active,
     )
+    log_event(
+        "api.provider_credential.created",
+        new_request_id(),
+        user_id=user["id"],
+        provider=provider,
+        label=label,
+        is_active=should_be_active,
+    )
     return {"provider_credential": record}
 
 
@@ -669,6 +766,14 @@ def create_session_v1(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_event(
+        "api.session.created",
+        new_request_id(),
+        session_id=session["id"],
+        repo_full_name=session["repo_full_name"],
+        tenant_id=session["tenant_id"],
+        user_id=auth_user["id"] if auth_user else "",
+    )
     return {"session": session}
 
 
@@ -839,11 +944,142 @@ def retry_session_v1(
     session = retry_indexing(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    log_event(
+        "api.session.retry",
+        new_request_id(),
+        session_id=session["id"],
+        status=session["status"],
+        user_id=auth_user["id"] if auth_user else "",
+    )
     return {"session": session}
+
+
+def _oauth_popup_html(*, success: bool, error: str = "") -> str:
+    """Return a minimal HTML page that postMessages the auth result to the opener popup."""
+    frontend_origin = CODESEEK_FRONTEND_URL.rstrip("/")
+    safe_error = error.replace("\\", "\\\\").replace("'", "\\'").replace("<", "&lt;").replace(">", "&gt;")
+    status = "success" if success else "error"
+    icon = "&#10003;" if success else "&#10007;"
+    msg_text = "Connected! Closing&hellip;" if success else "Login failed. Closing&hellip;"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>GitHub Login</title>
+  <style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      height:100vh;background:#0a0a0a;color:#a3a3a3;font-size:13px;gap:10px}}
+    .icon{{font-size:28px;color:{'#22c55e' if success else '#ef4444'}}}
+  </style>
+</head>
+<body>
+  <span class="icon">{icon}</span>
+  <p>{msg_text}</p>
+  <script>
+    (function(){{
+      try{{
+        if(window.opener&&!window.opener.closed){{
+          window.opener.postMessage(
+            {{type:'CODESEEK_GITHUB_AUTH',status:'{status}',error:'{safe_error}'}},
+            '{frontend_origin}'
+          );
+        }}
+      }}catch(e){{}}
+      setTimeout(function(){{window.close();}},600);
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/auth/github/login", response_model=None)
+def auth_github_login() -> HTMLResponse | RedirectResponse:
+    """Start GitHub OAuth: generate CSRF state cookie and redirect browser to GitHub."""
+    try:
+        client_id, _, redirect_uri = _github_oauth_config()
+    except HTTPException as exc:
+        return HTMLResponse(content=_oauth_popup_html(success=False, error=str(exc.detail)), status_code=200)
+
+    if not redirect_uri:
+        redirect_uri = f"{CODESEEK_FRONTEND_URL.rstrip('/')}/auth/github/callback"
+
+    state = secrets.token_urlsafe(32)
+    params = urllib.parse.urlencode({
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": "repo",
+        "state": state,
+    })
+    response = RedirectResponse(
+        url=f"https://github.com/login/oauth/authorize?{params}",
+        status_code=302,
+    )
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        state,
+        httponly=True,
+        secure=AUTH_SESSION_SECURE_COOKIE,
+        samesite="lax",
+        max_age=300,
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/github/callback", response_model=None)
+def auth_github_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> HTMLResponse:
+    """GitHub OAuth callback: verify CSRF state, exchange code, set session cookie, close popup."""
+    # User cancelled or GitHub error
+    if error:
+        msg = error_description or error
+        return HTMLResponse(content=_oauth_popup_html(success=False, error=msg))
+
+    # CSRF state check
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
+    if not code or not state or not cookie_state or not hmac.compare_digest(cookie_state, state):
+        return HTMLResponse(content=_oauth_popup_html(success=False, error="Invalid or expired OAuth state. Please try again."))
+
+    request_id = new_request_id()
+    try:
+        token_data = _exchange_github_code(code)
+        access_token = str(token_data.get("access_token", "")).strip()
+    except HTTPException as exc:
+        _log_http_error("api.auth.github.error", request_id, exc.status_code, exc.detail)
+        return HTMLResponse(content=_oauth_popup_html(success=False, error=str(exc.detail)))
+    except Exception as exc:
+        _log_http_error("api.auth.github.error", request_id, 502, str(exc))
+        return HTMLResponse(content=_oauth_popup_html(success=False, error="GitHub OAuth failed. Please try again."))
+
+    try:
+        persisted = _persist_github_login(access_token)
+    except Exception as exc:
+        _log_http_error("api.auth.github.error", request_id, 502, str(exc))
+        return HTMLResponse(content=_oauth_popup_html(success=False, error="GitHub profile fetch failed."))
+
+    session_token, _session = create_auth_session(persisted["user"]["id"])
+    log_event(
+        "api.auth.github.success",
+        request_id,
+        user_id=persisted["user"]["id"],
+        username=persisted["username"],
+    )
+    html_response = HTMLResponse(content=_oauth_popup_html(success=True))
+    html_response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+    html_response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    return html_response
 
 
 @app.post("/auth/github")
 def auth_github(body: GithubAuthCodeRequest, response: Response) -> dict:
+    request_id = new_request_id()
     code = body.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
@@ -851,16 +1087,25 @@ def auth_github(body: GithubAuthCodeRequest, response: Response) -> dict:
         token_data = _exchange_github_code(code)
         access_token = str(token_data.get("access_token", "")).strip()
     except HTTPException:
+        _log_http_error("api.auth.github.error", request_id, 400, "code exchange rejected")
         raise
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text.strip() or str(exc)
+        _log_http_error("api.auth.github.error", request_id, 502, detail)
         raise HTTPException(status_code=502, detail=f"GitHub OAuth request failed: {detail}") from exc
     except httpx.HTTPError as exc:
+        _log_http_error("api.auth.github.error", request_id, 502, str(exc))
         raise HTTPException(status_code=502, detail=f"GitHub OAuth network error: {exc}") from exc
 
     persisted = _persist_github_login(access_token)
     session_token, _session = create_auth_session(persisted["user"]["id"])
     response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+    log_event(
+        "api.auth.github.success",
+        request_id,
+        user_id=persisted["user"]["id"],
+        username=persisted["username"],
+    )
 
     return {
         "authenticated": True,
@@ -871,21 +1116,31 @@ def auth_github(body: GithubAuthCodeRequest, response: Response) -> dict:
 
 @app.post("/auth/github/token")
 def auth_github_token(body: GithubTokenConnectRequest, response: Response) -> dict:
+    request_id = new_request_id()
     access_token = _resolve_submitted_secret(body.access_token, body.encrypted_secret)
     if not access_token:
         raise HTTPException(status_code=400, detail="access_token is required")
     try:
         persisted = _persist_github_login(access_token)
     except HTTPException:
+        _log_http_error("api.auth.github_token.error", request_id, 400, "token rejected")
         raise
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text.strip() or str(exc)
+        _log_http_error("api.auth.github_token.error", request_id, 400, detail)
         raise HTTPException(status_code=400, detail=f"GitHub token validation failed: {detail}") from exc
     except httpx.HTTPError as exc:
+        _log_http_error("api.auth.github_token.error", request_id, 502, str(exc))
         raise HTTPException(status_code=502, detail=f"GitHub token validation network error: {exc}") from exc
 
     session_token, _session = create_auth_session(persisted["user"]["id"])
     response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+    log_event(
+        "api.auth.github_token.success",
+        request_id,
+        user_id=persisted["user"]["id"],
+        username=persisted["username"],
+    )
     return {
         "authenticated": True,
         "username": persisted["username"],

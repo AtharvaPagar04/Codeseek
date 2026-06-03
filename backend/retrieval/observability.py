@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -67,9 +68,40 @@ RETRIEVAL_CONTEXT_TOKENS = Gauge(
     "Context tokens used for latest request",
 )
 
+_SENSITIVE_FIELD_MARKERS = (
+    "api_key",
+    "token",
+    "secret",
+    "authorization",
+    "password",
+    "cookie",
+    "ciphertext",
+)
+_BEARER_RE = re.compile(r"bearer\s+[a-z0-9_\-\.]+", re.IGNORECASE)
+
 
 def new_request_id() -> str:
     return uuid.uuid4().hex
+
+
+def sanitize_for_log(value):
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, inner in value.items():
+            key_text = str(key)
+            if any(marker in key_text.lower() for marker in _SENSITIVE_FIELD_MARKERS):
+                sanitized[key_text] = "[redacted]"
+            else:
+                sanitized[key_text] = sanitize_for_log(inner)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [sanitize_for_log(item) for item in value]
+    if isinstance(value, str):
+        redacted = _BEARER_RE.sub("Bearer [redacted]", value)
+        if len(redacted) > 512:
+            return redacted[:509] + "..."
+        return redacted
+    return value
 
 
 def log_event(event: str, request_id: str, **fields) -> None:
@@ -78,7 +110,7 @@ def log_event(event: str, request_id: str, **fields) -> None:
         "event": event,
         "request_id": request_id,
     }
-    payload.update(fields)
+    payload.update(sanitize_for_log(fields))
     print(json.dumps(payload, ensure_ascii=True))
 
 

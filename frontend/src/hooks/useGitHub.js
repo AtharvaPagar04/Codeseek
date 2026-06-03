@@ -6,8 +6,7 @@ import {
   logoutGithubSession,
 } from '../utils/api';
 
-const CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
-const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI || `${window.location.origin}/auth/callback`;
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export function useGitHub() {
   const [username, setUsername] = useState(null);
@@ -16,46 +15,85 @@ export function useGitHub() {
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthError, setOauthError] = useState(null);
+
+  const loadAuthState = useCallback(async () => {
+    try {
+      const data = await fetchGithubSessionMe();
+      if (!data?.authenticated || !data.user) {
+        setIsConnected(false);
+        setUsername(null);
+        setAvatarUrl(null);
+        return;
+      }
+      setIsConnected(true);
+      setUsername(data.user.username || null);
+      setAvatarUrl(data.user.avatar_url || null);
+    } catch {
+      setIsConnected(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    fetchGithubSessionMe()
-      .then((data) => {
-        if (cancelled) return;
-        if (!data?.authenticated || !data.user) {
-          setIsConnected(false);
-          setUsername(null);
-          setAvatarUrl(null);
-          return;
-        }
-        setIsConnected(true);
-        setUsername(data.user.username || null);
-        setAvatarUrl(data.user.avatar_url || null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setIsConnected(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    loadAuthState();
+  }, [loadAuthState]);
 
   const initiateOAuth = useCallback(() => {
-    const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      scope: 'repo',
-    });
-    const url = `https://github.com/login/oauth/authorize?${params}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }, []);
+    setOauthError(null);
+    setOauthLoading(true);
+
+    const loginUrl = `${API_BASE}/auth/github/login`;
+    const popup = window.open(
+      loginUrl,
+      'codeseek_github_login',
+      'width=600,height=720,scrollbars=yes,resizable=yes,left=200,top=100'
+    );
+
+    // Popup blocked — fall back to full-page redirect
+    if (!popup || popup.closed) {
+      setOauthLoading(false);
+      window.location.href = loginUrl;
+      return;
+    }
+
+    const handleMessage = (event) => {
+      // Only accept from our backend origin (where the popup page is served)
+      if (
+        event.data?.type !== 'CODESEEK_GITHUB_AUTH' ||
+        !event.origin.includes(new URL(API_BASE).hostname)
+      ) return;
+
+      cleanup();
+
+      if (event.data.status === 'success') {
+        loadAuthState().finally(() => setOauthLoading(false));
+      } else {
+        setOauthError(event.data.error || 'GitHub login failed. Please try again.');
+        setOauthLoading(false);
+      }
+    };
+
+    const pollTimer = setInterval(() => {
+      if (popup.closed) {
+        cleanup();
+        // Popup closed without postMessage (user closed it) — try refresh anyway
+        loadAuthState().finally(() => setOauthLoading(false));
+      }
+    }, 500);
+
+    const cleanup = () => {
+      clearInterval(pollTimer);
+      window.removeEventListener('message', handleMessage);
+    };
+
+    window.addEventListener('message', handleMessage);
+  }, [loadAuthState]);
 
   const storeAuth = useCallback(async (accessToken) => {
     const data = await connectGithubToken(accessToken);
-    const nextUsername = data.username || null;
     setIsConnected(true);
-    setUsername(nextUsername);
+    setUsername(data.username || null);
     setAvatarUrl(data.avatar_url || null);
   }, []);
 
@@ -67,7 +105,6 @@ export function useGitHub() {
       const data = await listGithubRepos();
       setRepos(data);
     } catch (err) {
-      console.error('[useGitHub] fetchRepos error:', err);
       setReposError(err.message || 'Could not load repositories. Check your GitHub connection.');
     } finally {
       setReposLoading(false);
@@ -93,6 +130,8 @@ export function useGitHub() {
     repos,
     reposLoading,
     reposError,
+    oauthLoading,
+    oauthError,
     initiateOAuth,
     storeAuth,
     fetchRepos,

@@ -1,5 +1,23 @@
 import unittest
+import sys
+import types
+from importlib.machinery import ModuleSpec
 from unittest.mock import patch
+
+fake_tiktoken = types.ModuleType("tiktoken")
+fake_tiktoken.__spec__ = ModuleSpec("tiktoken", loader=None)
+
+
+class _FakeEncoding:
+    def encode(self, text):
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens):
+        return bytes(tokens).decode("utf-8", errors="ignore")
+
+
+fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
+sys.modules.setdefault("tiktoken", fake_tiktoken)
 
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory
@@ -17,7 +35,10 @@ class RetrievalNoEvidenceGuardTests(unittest.TestCase):
         ), patch("retrieval.main.generate_answer") as gen:
             answer, sources, token_count = run_query("q", memory)
 
-        self.assertEqual(answer, "Not found in retrieved context.")
+        self.assertEqual(
+            answer,
+            "Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.",
+        )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 42)
         gen.assert_not_called()

@@ -9,6 +9,55 @@ const authHeaders = () => ({
 
 let submissionKeyPromise = null;
 
+const readErrorDetail = async (res) => {
+  try {
+    const parsed = await res.json();
+    return parsed.detail || parsed.message || '';
+  } catch {
+    return await res.text().catch(() => '');
+  }
+};
+
+const formatApiError = ({ action, status, detail = '' }) => {
+  const normalizedDetail = `${detail}`.trim();
+  if (status === 401) {
+    if (normalizedDetail.toLowerCase().includes('authentication required')) {
+      return `${action} failed (${status}): auth session expired. Sign in to GitHub again.`;
+    }
+    return `${action} failed (${status}): authentication failed. Check the backend API key and sign in again.`;
+  }
+  if (status === 429) {
+    return `${action} failed (${status}): rate limit reached. Wait and retry, or switch provider credentials.`;
+  }
+  if (normalizedDetail.includes('No active provider credential configured')) {
+    return `${action} failed (${status}): no active provider credential. Open API Config and add or activate a provider key.`;
+  }
+  if (normalizedDetail.includes('Session is not ready (status=failed)')) {
+    return `${action} failed (${status}): indexing failed for this repo session. Retry indexing after checking GitHub access and backend logs.`;
+  }
+  if (normalizedDetail.includes('Session is not ready')) {
+    return `${action} failed (${status}): repository indexing is still running. Wait for the session to become ready, then retry.`;
+  }
+  if (normalizedDetail.includes('Plaintext secret submission is disabled')) {
+    return `${action} failed (${status}): secure secret submission requires a refresh. Reload the page and retry.`;
+  }
+  if (normalizedDetail.includes('GitHub token validation failed')) {
+    return `${action} failed (${status}): GitHub rejected the token. Confirm repo scope and retry.`;
+  }
+  if (normalizedDetail.includes('GitHub OAuth')) {
+    return `${action} failed (${status}): GitHub OAuth is misconfigured or unavailable. Check backend OAuth env vars and callback URL.`;
+  }
+  if (normalizedDetail.includes('GitHub repo fetch failed')) {
+    return `${action} failed (${status}): GitHub repository listing failed. Reconnect GitHub and verify token scope.`;
+  }
+  return `${action} failed (${status})${normalizedDetail ? `: ${normalizedDetail}` : ''}`;
+};
+
+const throwApiError = async (action, res) => {
+  const detail = await readErrorDetail(res);
+  throw new Error(formatApiError({ action, status: res.status, detail }));
+};
+
 const pemToArrayBuffer = (pem) => {
   const base64 = pem
     .replace('-----BEGIN PUBLIC KEY-----', '')
@@ -84,14 +133,7 @@ const sendQuery = async (body) => {
   });
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const parsed = await res.json();
-      detail = parsed.detail || parsed.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Query failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Query', res);
   }
 
   return res.json();
@@ -138,14 +180,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
   );
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Session create failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Session create', res);
   }
 
   const data = await res.json();
@@ -161,7 +196,7 @@ export const listSessions = async () => {
       }),
     'List sessions'
   );
-  if (!res.ok) throw new Error(`List sessions failed (${res.status})`);
+  if (!res.ok) await throwApiError('List sessions', res);
   const data = await res.json();
   return data.sessions || [];
 };
@@ -172,7 +207,7 @@ export const deleteSessionApi = async (sessionId) => {
     credentials: 'include',
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`Delete session failed (${res.status})`);
+  if (!res.ok) await throwApiError('Delete session', res);
   return res.json();
 };
 
@@ -185,7 +220,7 @@ export const fetchSessionMessages = async (sessionId) => {
       }),
     'Fetch session messages'
   );
-  if (!res.ok) throw new Error(`Fetch session messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Fetch session messages', res);
   const data = await res.json();
   return data.messages || [];
 };
@@ -199,7 +234,7 @@ export const listSessionThreads = async (sessionId) => {
       }),
     'List session threads'
   );
-  if (!res.ok) throw new Error(`List session threads failed (${res.status})`);
+  if (!res.ok) await throwApiError('List session threads', res);
   const data = await res.json();
   return data.threads || [];
 };
@@ -214,7 +249,7 @@ export const createSessionThread = async (sessionId) => {
       }),
     'Create session thread'
   );
-  if (!res.ok) throw new Error(`Create session thread failed (${res.status})`);
+  if (!res.ok) await throwApiError('Create session thread', res);
   const data = await res.json();
   return data.thread;
 };
@@ -228,7 +263,7 @@ export const fetchThreadMessages = async (threadId) => {
       }),
     'Fetch thread messages'
   );
-  if (!res.ok) throw new Error(`Fetch thread messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Fetch thread messages', res);
   const data = await res.json();
   return data.messages || [];
 };
@@ -243,7 +278,7 @@ export const clearThreadMessagesApi = async (threadId) => {
       }),
     'Clear thread messages'
   );
-  if (!res.ok) throw new Error(`Clear thread messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Clear thread messages', res);
   return res.json();
 };
 
@@ -257,7 +292,7 @@ export const clearSessionMessagesApi = async (sessionId) => {
       }),
     'Clear session messages'
   );
-  if (!res.ok) throw new Error(`Clear session messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Clear session messages', res);
   return res.json();
 };
 
@@ -290,14 +325,7 @@ export const exchangeGithubCode = async (code) => {
   });
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`GitHub auth failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('GitHub auth', res);
   }
 
   return res.json();
@@ -313,14 +341,7 @@ export const connectGithubToken = async (accessToken) => {
   });
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`GitHub token connect failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('GitHub token connect', res);
   }
 
   return res.json();
@@ -331,14 +352,7 @@ export const listGithubRepos = async () => {
     credentials: 'include',
   });
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`GitHub repo list failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('GitHub repo list', res);
   }
   const data = await res.json();
   return data.repos || [];
@@ -354,14 +368,7 @@ export const listProviderCredentials = async () => {
     'List provider credentials'
   );
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`List provider credentials failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('List provider credentials', res);
   }
   const data = await res.json();
   return data.provider_credentials || [];
@@ -386,14 +393,7 @@ export const createProviderCredential = async ({ provider, label, apiKey, model 
     'Create provider credential'
   );
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Create provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Create provider credential', res);
   }
   const data = await res.json();
   return data.provider_credential;
@@ -410,14 +410,7 @@ export const activateProviderCredential = async (credentialId) => {
     'Activate provider credential'
   );
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Activate provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Activate provider credential', res);
   }
   const data = await res.json();
   return data.provider_credential;
@@ -434,14 +427,7 @@ export const deleteProviderCredential = async (credentialId) => {
     'Delete provider credential'
   );
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Delete provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Delete provider credential', res);
   }
   return res.json();
 };
@@ -451,7 +437,7 @@ export const fetchGithubSessionMe = async () => {
     credentials: 'include',
   });
   if (!res.ok) {
-    throw new Error(`Auth me failed (${res.status})`);
+    await throwApiError('Auth me', res);
   }
   return res.json();
 };
@@ -462,7 +448,7 @@ export const logoutGithubSession = async () => {
     credentials: 'include',
   });
   if (!res.ok) {
-    throw new Error(`Auth logout failed (${res.status})`);
+    await throwApiError('Auth logout', res);
   }
   return res.json();
 };

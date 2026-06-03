@@ -132,6 +132,21 @@ def create_session(
     }
     with _lock:
         state = _load_state()
+        existing = _find_existing_session(
+            state.get("sessions", []),
+            repo_full_name=repo_full_name,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if existing:
+            if github_token.strip():
+                _session_tokens[existing["id"]] = github_token.strip()
+            ensure_default_thread(
+                existing["id"],
+                user_id=user_id,
+                title=repo_full_name,
+            )
+            return existing
         state.setdefault("sessions", []).append(session)
         _save_state(state)
         if github_token.strip():
@@ -143,6 +158,27 @@ def create_session(
     )
     _enqueue_index_job(session["id"])
     return session
+
+
+def _find_existing_session(
+    sessions: list[dict],
+    *,
+    repo_full_name: str,
+    tenant_id: str,
+    user_id: str,
+) -> dict | None:
+    normalized_repo = repo_full_name.strip().lower()
+    normalized_tenant = tenant_id.strip()
+    normalized_user = user_id.strip()
+    for session in sessions:
+        if str(session.get("tenant_id", "")).strip() != normalized_tenant:
+            continue
+        if str(session.get("user_id", "")).strip() != normalized_user:
+            continue
+        if str(session.get("repo_full_name", "")).strip().lower() != normalized_repo:
+            continue
+        return session
+    return None
 
 
 def retry_indexing(session_id: str) -> dict | None:

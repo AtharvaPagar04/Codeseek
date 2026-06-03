@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+from retrieval import auth_store
 from retrieval import session_indexer
 
 
@@ -20,6 +21,55 @@ def test_create_session_persists_indexing_state(monkeypatch, tmp_path: Path):
     all_sessions = session_indexer.list_sessions()
     assert len(all_sessions) == 1
     assert all_sessions[0]["id"] == session["id"]
+
+
+def test_create_session_reuses_existing_repo_session(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    queued: list[str] = []
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda session_id: queued.append(session_id))
+
+    first = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+    )
+    second = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+    )
+
+    assert first["id"] == second["id"]
+    assert queued == [first["id"]]
+    assert len(session_indexer.list_sessions()) == 1
+
+
+def test_create_session_deduplicates_per_user_scope(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+
+    user_one = auth_store.upsert_github_user("user-1-gh", "user-one", "")
+    user_two = auth_store.upsert_github_user("user-2-gh", "user-two", "")
+
+    first = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+        user_id=user_one["id"],
+    )
+    reused = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+        user_id=user_one["id"],
+    )
+    other_user = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+        user_id=user_two["id"],
+    )
+
+    assert first["id"] == reused["id"]
+    assert first["id"] != other_user["id"]
+    assert len(session_indexer.list_sessions()) == 2
 
 
 def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: Path):

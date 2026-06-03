@@ -6,7 +6,6 @@ import SessionView from './components/SessionView';
 import RepoPickerModal from './components/RepoPickerModal';
 import ApiTokensModal from './components/ApiTokensModal';
 import LiveBackground from './components/LiveBackground';
-import AuthCallback from './pages/AuthCallback';
 import { useSessions } from './hooks/useSessions';
 import { useGitHub } from './hooks/useGitHub';
 import {
@@ -37,6 +36,8 @@ function Shell() {
     repos,
     reposLoading,
     reposError,
+    oauthLoading,
+    oauthError,
     initiateOAuth,
     storeAuth,
     fetchRepos,
@@ -235,6 +236,8 @@ function Shell() {
           onConnectGitHub={initiateOAuth}
           onLoadRepos={fetchRepos}
           onSaveToken={storeAuth}
+          oauthLoading={oauthLoading}
+          oauthError={oauthError}
         />
       )}
 
@@ -267,7 +270,6 @@ export default function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/" element={<Shell />} />
-        <Route path="/auth/callback" element={<AuthCallback />} />
       </Routes>
     </BrowserRouter>
   );

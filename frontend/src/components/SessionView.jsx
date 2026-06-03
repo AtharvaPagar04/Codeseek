@@ -21,6 +21,7 @@ export default function SessionView({
     session.threads?.[0] ||
     null;
   const canChat = isReady && !!activeThread;
+  const statusMessage = statusCopy(session);
 
   // Auto-scroll when messages change
   useEffect(() => {
@@ -68,6 +69,9 @@ export default function SessionView({
       {/* Message list or empty state */}
       {!hasMessages ? (
         <div className="flex-1 flex flex-col items-center justify-center px-5 min-h-0">
+          {statusMessage && (
+            <StatusNotice tone={session.status === 'failed' ? 'error' : 'info'} message={statusMessage} />
+          )}
           <EmptyState
             repoName={session.repo_id}
           />
@@ -103,6 +107,9 @@ export default function SessionView({
       ) : (
         <>
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
+            {statusMessage && (
+              <StatusNotice tone={session.status === 'failed' ? 'error' : 'info'} message={statusMessage} />
+            )}
             {(activeThread?.messages || []).map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
@@ -155,6 +162,30 @@ export default function SessionView({
           onCancel={() => setConfirmClear(false)}
         />
       )}
+    </div>
+  );
+}
+
+function statusCopy(session) {
+  if (session.status === 'failed') {
+    return session.error
+      ? `Indexing failed: ${session.error}. Retry indexing after checking GitHub access and backend logs.`
+      : 'Indexing failed. Retry after checking GitHub access and backend logs.';
+  }
+  if (session.status && session.status !== 'ready') {
+    return 'Repository indexing is still running. Questions will be enabled when the session becomes ready.';
+  }
+  return '';
+}
+
+function StatusNotice({ tone, message }) {
+  const toneClass =
+    tone === 'error'
+      ? 'border-offline/40 bg-offline/10 text-offline'
+      : 'border-warning/40 bg-warning/10 text-warning';
+  return (
+    <div className={`w-full max-w-xl mb-4 rounded-xl border px-4 py-3 text-xs font-mono leading-relaxed ${toneClass}`}>
+      {message}
     </div>
   );
 }

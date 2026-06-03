@@ -16,11 +16,11 @@ export default function LiveBackground() {
     let animationId;
     let particles = [];
 
-    const PARTICLE_COUNT = 45;
-    const MAX_CONNECT_DIST = 120;
-    const PARTICLE_COLOR = 'rgba(255, 255, 255, 0.08)';
+    const PARTICLE_COUNT = 60;
+    const MAX_CONNECT_DIST = 160;
+    const PARTICLE_COLOR = 'rgba(255, 255, 255, 0.18)';
     const LINE_COLOR_BASE = [255, 255, 255];
-    const LINE_OPACITY = 0.04;
+    const LINE_OPACITY = 0.10;
 
     const resize = () => {
       canvas.width = window.innerWidth;
@@ -35,7 +35,7 @@ export default function LiveBackground() {
           y: Math.random() * canvas.height,
           vx: (Math.random() - 0.5) * 0.3,
           vy: (Math.random() - 0.5) * 0.3,
-          r: Math.random() * 1.2 + 0.4,
+          r: Math.random() * 1.6 + 0.6,
           opacity: Math.random() * 0.5 + 0.3,
         });
       }
@@ -57,7 +57,7 @@ export default function LiveBackground() {
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
             ctx.strokeStyle = `rgba(${LINE_COLOR_BASE[0]}, ${LINE_COLOR_BASE[1]}, ${LINE_COLOR_BASE[2]}, ${alpha})`;
-            ctx.lineWidth = 0.5;
+            ctx.lineWidth = 0.8;
             ctx.stroke();
           }
         }

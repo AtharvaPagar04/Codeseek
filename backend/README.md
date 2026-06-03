@@ -14,6 +14,8 @@ Current local status is production-baseline:
 - Security baseline (auth, rate limit, secret scan).
 - Reliability controls (timeouts, retries, circuit breakers, degraded fallback).
 - Observability (structured logs, request IDs, Prometheus metrics endpoint).
+- Deterministic overview/explanation response modes for broad repo-summary and section-explanation queries.
+- Import-backed retrieval heuristics for section queries that depend on exported data files.
 - CI quality gates (retrieval thresholds, API black-box checks, load smoke).
 - Deployment support (Docker, compose, release workflow, snapshot backup/restore + schedule).
 
@@ -54,6 +56,16 @@ For Postgres-backed local runs:
 docker compose up -d postgres qdrant
 ```
 
+For deployment-style runs, use the provided `.env.example` values as a base and keep:
+
+```bash
+CODESEEK_DB_BACKEND=postgres
+CODESEEK_REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY=1
+CODESEEK_AUTH_SESSION_SECURE_COOKIE=1
+CODESEEK_ENFORCE_HTTPS=1
+CODESEEK_ALLOW_PLAINTEXT_SECRET_SUBMISSION=0
+```
+
 4. Ingest a repo:
 
 ```bash
@@ -79,6 +91,22 @@ set -a && source .env && set +a
 CODESEEK_TENANT_ID=local \
 RETRIEVAL_REPO_ROOT=/tmp/trading-bot-e2e \
 ./.venv/bin/uvicorn retrieval.api_service:app --host 0.0.0.0 --port 8000
+```
+
+Shortcut for local development:
+
+```bash
+./scripts/run_local_backend.sh
+```
+
+This starts the API only. In the session-based app flow, the repository selected by the user at session creation is what gets cloned/indexed.
+
+The script ignores any stale `RETRIEVAL_REPO_ROOT` you may have exported in your shell and defaults it to the backend repo so startup validation succeeds before any session exists.
+
+If you want to override the startup repo root used for non-session CLI queries/health checks:
+
+```bash
+RETRIEVAL_REPO_ROOT=/absolute/path/to/repo ./scripts/run_local_backend.sh
 ```
 
 7. Query API:
@@ -113,12 +141,14 @@ Session initialization flow:
 ## Docs
 
 - Project docs index: [docs/README.md](docs/README.md)
+- Deployment runbook: [docs/deployment_runbook.md](docs/deployment_runbook.md)
 - Ingestion docs: `docs/ingestion_docs/*`
 - Retrieval docs: `docs/retrieval_docs/*`
 
 ## Operations
 
 - Secret scan: `python scripts/scan_secrets.py`
+- Postgres readiness validation: `python scripts/validate_postgres_readiness.py`
 - Load smoke: `python scripts/load_test_api.py ...`
 - Snapshot backup: `python scripts/qdrant_snapshot_backup.py ...`
 - Snapshot restore: `python scripts/qdrant_snapshot_restore.py ...`

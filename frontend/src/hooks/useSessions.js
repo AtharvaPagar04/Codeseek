@@ -1,16 +1,87 @@
 import { useState, useCallback } from 'react';
 
-const sortByLastActive = (sessions) =>
+export const sortByLastActive = (sessions) =>
   [...sessions].sort(
     (a, b) =>
       new Date(b.last_active || b.created_at) - new Date(a.last_active || a.created_at)
   );
 
+export const normalizeThreads = (threads) =>
+  Array.isArray(threads) ? threads.map((thread) => ({ ...thread, messages: thread.messages || [] })) : [];
+
+export const applyClearSessionMessages = (sessions, sessionId, now) => {
+  const next = sessions.map((session) =>
+    session.id === sessionId
+      ? {
+          ...session,
+          threads: session.threads.map((thread) =>
+            thread.id === session.active_thread_id ? { ...thread, messages: [] } : thread
+          ),
+          last_active: now,
+        }
+      : session
+  );
+  return sortByLastActive(next);
+};
+
+export const applySetThreadMessages = (sessions, sessionId, threadId, messages) => {
+  const next = sessions.map((session) =>
+    session.id === sessionId
+      ? {
+          ...session,
+          threads: session.threads.map((thread) =>
+            thread.id === threadId
+              ? { ...thread, messages: Array.isArray(messages) ? messages : [] }
+              : thread
+          ),
+        }
+      : session
+  );
+  return sortByLastActive(next);
+};
+
+export const applyAppendMessage = (sessions, sessionId, threadId, message, now) => {
+  const next = sessions.map((session) => {
+    if (session.id !== sessionId) return session;
+
+    const threads = session.threads.map((thread) => {
+      if (thread.id !== threadId) return thread;
+      let messages;
+      if (message.__replaceId) {
+        const { __replaceId, ...realMessage } = message;
+        messages = (thread.messages || []).map((m) => (m.id === __replaceId ? realMessage : m));
+      } else {
+        messages = [...(thread.messages || []), message];
+      }
+      return { ...thread, messages };
+    });
+
+    return { ...session, last_active: now, threads };
+  });
+  return sortByLastActive(next);
+};
+
+export const applySetSessionThreads = (sessions, sessionId, threads) => {
+  const next = sessions.map((session) =>
+    session.id === sessionId
+      ? (() => {
+          const normalizedThreads = normalizeThreads(threads);
+          const activeThreadId = normalizedThreads.some((thread) => thread.id === session.active_thread_id)
+            ? session.active_thread_id
+            : normalizedThreads[0]?.id || null;
+          return {
+            ...session,
+            threads: normalizedThreads,
+            active_thread_id: activeThreadId,
+          };
+        })()
+      : session
+  );
+  return sortByLastActive(next);
+};
+
 export function useSessions() {
   const [sessions, setSessions] = useState([]);
-
-  const normalizeThreads = (threads) =>
-    Array.isArray(threads) ? threads.map((thread) => ({ ...thread, messages: thread.messages || [] })) : [];
 
   const addSession = useCallback((sessionData) => {
     const now = new Date().toISOString();
@@ -41,38 +112,11 @@ export function useSessions() {
 
   const clearSessionMessages = useCallback((sessionId) => {
     const now = new Date().toISOString();
-    setSessions((prev) => {
-      const next = prev.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              threads: session.threads.map((thread) =>
-                thread.id === session.active_thread_id ? { ...thread, messages: [] } : thread
-              ),
-              last_active: now,
-            }
-          : session
-      );
-      return sortByLastActive(next);
-    });
+    setSessions((prev) => applyClearSessionMessages(prev, sessionId, now));
   }, []);
 
   const setThreadMessages = useCallback((sessionId, threadId, messages) => {
-    setSessions((prev) => {
-      const next = prev.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              threads: session.threads.map((thread) =>
-                thread.id === threadId
-                  ? { ...thread, messages: Array.isArray(messages) ? messages : [] }
-                  : thread
-              ),
-            }
-          : session
-      );
-      return sortByLastActive(next);
-    });
+    setSessions((prev) => applySetThreadMessages(prev, sessionId, threadId, messages));
   }, []);
 
   /**
@@ -83,47 +127,11 @@ export function useSessions() {
    */
   const appendMessage = useCallback((sessionId, threadId, message) => {
     const now = new Date().toISOString();
-    setSessions((prev) => {
-      const next = prev.map((s) => {
-        if (s.id !== sessionId) return s;
-
-        const threads = s.threads.map((thread) => {
-          if (thread.id !== threadId) return thread;
-          let messages;
-          if (message.__replaceId) {
-            const { __replaceId, ...realMessage } = message;
-            messages = (thread.messages || []).map((m) => (m.id === __replaceId ? realMessage : m));
-          } else {
-            messages = [...(thread.messages || []), message];
-          }
-          return { ...thread, messages };
-        });
-
-        return { ...s, last_active: now, threads };
-      });
-      return sortByLastActive(next);
-    });
+    setSessions((prev) => applyAppendMessage(prev, sessionId, threadId, message, now));
   }, []);
 
   const setSessionThreads = useCallback((sessionId, threads) => {
-    setSessions((prev) => {
-      const next = prev.map((session) =>
-        session.id === sessionId
-          ? (() => {
-              const normalizedThreads = normalizeThreads(threads);
-              const activeThreadId = normalizedThreads.some((thread) => thread.id === session.active_thread_id)
-                ? session.active_thread_id
-                : normalizedThreads[0]?.id || null;
-              return {
-                ...session,
-                threads: normalizedThreads,
-                active_thread_id: activeThreadId,
-              };
-            })()
-          : session
-      );
-      return sortByLastActive(next);
-    });
+    setSessions((prev) => applySetSessionThreads(prev, sessionId, threads));
   }, []);
 
   const setActiveThread = useCallback((sessionId, threadId) => {

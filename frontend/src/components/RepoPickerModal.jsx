@@ -10,6 +10,8 @@ export default function RepoPickerModal({
   onConnectGitHub,
   onLoadRepos,
   onSaveToken,
+  oauthLoading = false,
+  oauthError = null,
 }) {
   const [filter, setFilter] = useState('');
   const [patLoading, setPatLoading] = useState(false);
@@ -59,10 +61,21 @@ export default function RepoPickerModal({
               </p>
               <button
                 onClick={onConnectGitHub}
-                className="px-4 py-2 text-sm text-text-primary bg-surface-3 border border-border rounded-xl hover:bg-surface-2 hover:border-text-muted transition-colors font-semibold"
+                disabled={oauthLoading}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-text-primary bg-surface-3 border border-border rounded-xl hover:bg-surface-2 hover:border-text-muted transition-colors font-semibold disabled:opacity-60 disabled:cursor-wait"
               >
-                Connect via GitHub OAuth (New Tab)
+                {oauthLoading ? (
+                  <>
+                    <span className="w-3.5 h-3.5 rounded-full border-2 border-text-muted border-t-text-primary animate-spin" />
+                    Connecting…
+                  </>
+                ) : (
+                  <>Connect via GitHub</>
+                )}
               </button>
+              {oauthError && (
+                <p className="text-xs text-offline/90 font-mono text-center">⚠ {oauthError}</p>
+              )}
             </div>
 
             <div className="flex items-center gap-3 select-none">

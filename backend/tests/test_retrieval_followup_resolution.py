@@ -1,6 +1,24 @@
 import unittest
 import os
+import sys
+import types
+from importlib.machinery import ModuleSpec
 from unittest.mock import patch
+
+fake_tiktoken = types.ModuleType("tiktoken")
+fake_tiktoken.__spec__ = ModuleSpec("tiktoken", loader=None)
+
+
+class _FakeEncoding:
+    def encode(self, text):
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens):
+        return bytes(tokens).decode("utf-8", errors="ignore")
+
+
+fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
+sys.modules.setdefault("tiktoken", fake_tiktoken)
 
 from retrieval import chat_store, session_indexer
 from retrieval.main import run_query
@@ -29,7 +47,10 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         ) as gen:
             answer, sources, token_count = run_query("also provide code", memory)
 
-        self.assertEqual(answer, "Not found in retrieved context.")
+        self.assertEqual(
+            answer,
+            "Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.",
+        )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 0)
         self.assertEqual(
@@ -69,7 +90,10 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         ) as gen:
             answer, sources, token_count = run_query("i want code snippit", memory)
 
-        self.assertEqual(answer, "Not found in retrieved context.")
+        self.assertEqual(
+            answer,
+            "Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.",
+        )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 0)
         self.assertEqual(
@@ -143,7 +167,10 @@ class RetrievalSessionFollowUpResolutionTests(unittest.TestCase):
                 ) as gen:
                     answer, sources, token_count = run_query("i want code snippit", memory)
 
-                self.assertEqual(answer, "Not found in retrieved context.")
+                self.assertEqual(
+                    answer,
+                    "Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.",
+                )
                 self.assertEqual(sources, [])
                 self.assertEqual(token_count, 0)
                 self.assertEqual(captured["query_info"]["entities"]["symbols"], ["account_info"])

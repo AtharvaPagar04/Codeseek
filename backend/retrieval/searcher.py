@@ -1,6 +1,7 @@
 """Qdrant search stage for retrieval."""
 
 from collections import defaultdict
+from pathlib import Path
 import re
 import time
 
@@ -21,6 +22,7 @@ from retrieval.config import (
     TOP_K_AFTER_MERGE,
     TOP_K_DENSE,
     get_collection_name,
+    get_repo_root,
 )
 
 _client = None
@@ -89,6 +91,7 @@ def search(query_info: dict) -> list[dict]:
     merged = _merge_results(dense_results, filter_results, dependency_results)
     if _is_overview_query(raw_query):
         merged = _inject_overview_candidates(merged)
+    merged = _inject_import_backing_candidates(raw_query, merged)
     merged = _rerank_with_query_tokens(raw_query, merged)
     return merged[:TOP_K_AFTER_MERGE]
 
@@ -272,6 +275,36 @@ def _merge_results(*layers):
     return merged
 
 
+def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) -> list[dict]:
+    tokens = _query_tokens(raw_query)
+    if not tokens:
+        return candidates
+
+    backing_hits: list[dict] = []
+    seen = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
+    for candidate in candidates[: min(len(candidates), 6)]:
+        relative_path = str(candidate.get("relative_path", "")).strip()
+        imports = list(candidate.get("imports") or [])
+        if not relative_path or not imports:
+            continue
+
+        for statement in imports:
+            for imported_name, module_path in _parse_named_imports(statement):
+                if _identifier_token_overlap(imported_name, tokens) <= 0:
+                    continue
+                resolved = _resolve_import_relative_path(relative_path, module_path)
+                if not resolved:
+                    continue
+                payloads = _fetch_import_symbol_chunks(resolved, imported_name)
+                for payload in payloads:
+                    chunk_id = str(payload.get("chunk_id", "")).strip()
+                    if not chunk_id or chunk_id in seen:
+                        continue
+                    backing_hits.append(payload)
+                    seen.add(chunk_id)
+    return candidates + backing_hits
+
+
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[dict]:
     """Apply a small lexical boost so specific queries rank matching symbols/files higher."""
     tokens = _query_tokens(raw_query)
@@ -373,6 +406,86 @@ def _query_tokens(raw_query: str) -> set[str]:
     return {t for t in tokens if t not in stop}
 
 
+def _identifier_token_overlap(identifier: str, tokens: set[str]) -> int:
+    parts = set(re.findall(r"[a-zA-Z]+", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", identifier).lower()))
+    parts |= {part[:-1] for part in list(parts) if part.endswith("s") and len(part) > 3}
+    score = 0
+    lowered = identifier.lower()
+    for token in tokens:
+        singular = token[:-1] if token.endswith("s") and len(token) > 3 else token
+        if token in parts or singular in parts:
+            score += 2
+        elif token in lowered or singular in lowered:
+            score += 1
+    return score
+
+
+def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
+    match = re.search(r'import\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', statement)
+    if not match:
+        return []
+    names = []
+    for part in match.group(1).split(","):
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        imported_name = cleaned.split(" as ", 1)[0].strip()
+        if imported_name:
+            names.append((imported_name, match.group(2).strip()))
+    return names
+
+
+def _resolve_import_relative_path(source_relative_path: str, module_path: str) -> str | None:
+    repo_root = Path(get_repo_root())
+    source_path = repo_root / source_relative_path
+
+    if module_path.startswith("@/"):
+        base = repo_root / "src" / module_path[2:]
+    elif module_path.startswith("./") or module_path.startswith("../"):
+        base = (source_path.parent / module_path).resolve()
+    else:
+        return None
+
+    candidates = [
+        base,
+        base.with_suffix(".ts"),
+        base.with_suffix(".tsx"),
+        base.with_suffix(".js"),
+        base.with_suffix(".jsx"),
+        base / "index.ts",
+        base / "index.tsx",
+        base / "index.js",
+        base / "index.jsx",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return str(candidate.relative_to(repo_root))
+            except ValueError:
+                return None
+    return None
+
+
+def _fetch_import_symbol_chunks(relative_path: str, symbol_name: str) -> list[dict]:
+    client = _get_client()
+    collection = get_collection_name()
+    response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(key="relative_path", match=MatchValue(value=relative_path)),
+                FieldCondition(key="symbol_name", match=MatchValue(value=symbol_name)),
+            ]
+        ),
+        limit=10,
+        with_payload=True,
+    ))
+    if response is None:
+        return []
+    hits, _ = response
+    return [hit.payload or {} for hit in hits]
+
+
 def _overlap_score(tokens: set[str], item: dict) -> int:
     hay = " ".join(
         [
@@ -400,8 +513,14 @@ def _overview_priority(payload: dict) -> int:
         score += 30
     if relative_path.endswith("package.json"):
         score += 24
+    if relative_path.endswith(("package-lock.json", "pnpm-lock.yaml", "yarn.lock")):
+        score += 18
     if relative_path.endswith("pyproject.toml") or relative_path.endswith("requirements.txt"):
         score += 22
+    if relative_path.endswith((".env.example", ".env", "docker-compose.yml")):
+        score += 20
+    if relative_path.endswith(("vite.config.js", "vite.config.ts", "tailwind.config.js", "tailwind.config.ts")):
+        score += 20
     if any(
         relative_path.endswith(name)
         for name in (
@@ -454,6 +573,8 @@ def _is_overview_query(raw_query: str) -> bool:
             "what does this app do",
             "tech stack",
             "architecture overview",
+            "architecture",
+            "stack used",
         )
     )
 
@@ -471,7 +592,6 @@ def dependency_health() -> dict[str, str]:
         model_status = "ok"
 
     client = _get_client()
-    collection = get_collection_name()
-    qdrant_ready = _qdrant_call(lambda: client.get_collection(collection))
+    qdrant_ready = _qdrant_call(lambda: client.get_collections())
     qdrant_status = "ok" if qdrant_ready is not None else "degraded"
     return {"embedding_model": model_status, "qdrant": qdrant_status}
