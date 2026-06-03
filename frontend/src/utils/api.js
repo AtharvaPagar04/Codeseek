@@ -1,10 +1,4 @@
-import {
-  clearRegisteredProviderConfigId,
-  getActiveApiConfig,
-  getBackendApiKey,
-  getRegisteredProviderConfigId,
-  setRegisteredProviderConfigId,
-} from './storage';
+import { getBackendApiKey } from './storage';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -13,94 +7,94 @@ const authHeaders = () => ({
   Authorization: `Bearer ${getBackendApiKey()}`,
 });
 
-const activeProviderConfig = () => {
-  const active = getActiveApiConfig();
-  if (!active?.provider || !active?.key) {
-    throw new Error('No active LLM provider configuration selected.');
+let submissionKeyPromise = null;
+
+const pemToArrayBuffer = (pem) => {
+  const base64 = pem
+    .replace('-----BEGIN PUBLIC KEY-----', '')
+    .replace('-----END PUBLIC KEY-----', '')
+    .replace(/\s+/g, '');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
   }
-  return active;
+  return bytes.buffer;
 };
 
-const registerProviderConfig = async (config) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/provider-configs`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          provider: config.provider,
-          api_key: config.key,
-          label: config.label || '',
-        }),
-      }),
-    'Provider config register'
+const fetchSubmissionPublicKey = async () => {
+  if (!submissionKeyPromise) {
+    submissionKeyPromise = withNetworkError(
+      async () => {
+        const res = await fetch(`${API_BASE}/api/v1/crypto/submission-key`, {
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          throw new Error(`Submission key fetch failed (${res.status})`);
+        }
+        return res.json();
+      },
+      'Submission key fetch'
+    ).catch((err) => {
+      submissionKeyPromise = null;
+      throw err;
+    });
+  }
+  return submissionKeyPromise;
+};
+
+const encryptSecretForSubmission = async (secret) => {
+  const value = `${secret || ''}`.trim();
+  if (!value) {
+    throw new Error('Secret value cannot be empty.');
+  }
+  if (!window.crypto?.subtle) {
+    throw new Error('Browser crypto support is unavailable for secure submission.');
+  }
+  const keyPayload = await fetchSubmissionPublicKey();
+  const importedKey = await window.crypto.subtle.importKey(
+    'spki',
+    pemToArrayBuffer(keyPayload.public_key_pem),
+    { name: 'RSA-OAEP', hash: 'SHA-256' },
+    false,
+    ['encrypt']
   );
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: 'RSA-OAEP' },
+    importedKey,
+    new TextEncoder().encode(value)
+  );
+  const bytes = new Uint8Array(ciphertext);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return {
+    key_id: keyPayload.key_id,
+    ciphertext: btoa(binary),
+  };
+};
+
+const sendQuery = async (body) => {
+  const res = await fetch(`${API_BASE}/api/v1/query`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
 
   if (!res.ok) {
     let detail = '';
     try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
+      const parsed = await res.json();
+      detail = parsed.detail || parsed.message || '';
     } catch {
       detail = await res.text().catch(() => '');
     }
-    throw new Error(`Provider config register failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    throw new Error(`Query failed (${res.status})${detail ? `: ${detail}` : ''}`);
   }
 
-  const data = await res.json();
-  return data.provider_config?.id || '';
-};
-
-const ensureProviderConfigId = async () => {
-  const active = activeProviderConfig();
-  const cached = getRegisteredProviderConfigId(active.id);
-  if (cached) return cached;
-
-  const providerConfigId = await registerProviderConfig(active);
-  if (!providerConfigId) {
-    throw new Error('Provider config registration did not return an id.');
-  }
-  setRegisteredProviderConfigId(active.id, providerConfigId);
-  return providerConfigId;
-};
-
-const isExpiredProviderConfigError = (message) =>
-  message.includes('provider_config_id is invalid or expired');
-
-const sendQuery = async (body) => {
-  const active = activeProviderConfig();
-  const doRequest = async (providerConfigId) => {
-    const res = await fetch(`${API_BASE}/api/v1/query`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ ...body, provider_config_id: providerConfigId }),
-    });
-
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const parsed = await res.json();
-        detail = parsed.detail || parsed.message || '';
-      } catch {
-        detail = await res.text().catch(() => '');
-      }
-      throw new Error(`Query failed (${res.status})${detail ? `: ${detail}` : ''}`);
-    }
-
-    return res.json();
-  };
-
-  let providerConfigId = await ensureProviderConfigId();
-  try {
-    return await doRequest(providerConfigId);
-  } catch (err) {
-    if (!isExpiredProviderConfigError(err.message || '')) {
-      throw err;
-    }
-    clearRegisteredProviderConfigId(active.id);
-    providerConfigId = await ensureProviderConfigId();
-    return doRequest(providerConfigId);
-  }
+  return res.json();
 };
 
 const withNetworkError = async (fn, label) => {
@@ -122,8 +116,8 @@ export const queryRepo = async ({ question, repo_id }) => {
   return sendQuery({ question, repo_id, tenant_id: 'default' });
 };
 
-export const querySession = async ({ question, session_id }) => {
-  return sendQuery({ question, session_id });
+export const querySession = async ({ question, session_id, thread_id = '' }) => {
+  return sendQuery({ question, session_id, thread_id: thread_id || undefined });
 };
 
 export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local', githubToken = '' }) => {
@@ -131,6 +125,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
         method: 'POST',
+        credentials: 'include',
         headers: authHeaders(),
         body: JSON.stringify({
           repo_full_name: repoFullName,
@@ -161,6 +156,7 @@ export const listSessions = async () => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'List sessions'
@@ -173,6 +169,7 @@ export const listSessions = async () => {
 export const deleteSessionApi = async (sessionId) => {
   const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}`, {
     method: 'DELETE',
+    credentials: 'include',
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`Delete session failed (${res.status})`);
@@ -183,6 +180,7 @@ export const fetchSessionMessages = async (sessionId) => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'Fetch session messages'
@@ -192,11 +190,69 @@ export const fetchSessionMessages = async (sessionId) => {
   return data.messages || [];
 };
 
+export const listSessionThreads = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'List session threads'
+  );
+  if (!res.ok) throw new Error(`List session threads failed (${res.status})`);
+  const data = await res.json();
+  return data.threads || [];
+};
+
+export const createSessionThread = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Create session thread'
+  );
+  if (!res.ok) throw new Error(`Create session thread failed (${res.status})`);
+  const data = await res.json();
+  return data.thread;
+};
+
+export const fetchThreadMessages = async (threadId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch thread messages'
+  );
+  if (!res.ok) throw new Error(`Fetch thread messages failed (${res.status})`);
+  const data = await res.json();
+  return data.messages || [];
+};
+
+export const clearThreadMessagesApi = async (threadId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Clear thread messages'
+  );
+  if (!res.ok) throw new Error(`Clear thread messages failed (${res.status})`);
+  return res.json();
+};
+
 export const clearSessionMessagesApi = async (sessionId) => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
         method: 'DELETE',
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'Clear session messages'
@@ -212,6 +268,7 @@ export const clearSessionMessagesApi = async (sessionId) => {
 export const fetchHealth = async () => {
   try {
     const res = await fetch(`${API_BASE}/api/v1/health`, {
+      credentials: 'include',
       headers: { Authorization: `Bearer ${getBackendApiKey()}` },
     });
     return res.ok;
@@ -222,12 +279,12 @@ export const fetchHealth = async () => {
 
 /**
  * POST /auth/github
- * Exchange GitHub OAuth code for an access token via the backend.
- * Returns { access_token, username }.
+ * Exchange GitHub OAuth code via the backend and create a server-side session.
  */
 export const exchangeGithubCode = async (code) => {
   const res = await fetch(`${API_BASE}/auth/github`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code }),
   });
@@ -243,5 +300,169 @@ export const exchangeGithubCode = async (code) => {
     throw new Error(`GitHub auth failed (${res.status})${detail ? `: ${detail}` : ''}`);
   }
 
+  return res.json();
+};
+
+export const connectGithubToken = async (accessToken) => {
+  const encryptedSecret = await encryptSecretForSubmission(accessToken);
+  const res = await fetch(`${API_BASE}/auth/github/token`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encrypted_secret: encryptedSecret }),
+  });
+
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`GitHub token connect failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+
+  return res.json();
+};
+
+export const listGithubRepos = async () => {
+  const res = await fetch(`${API_BASE}/api/v1/github/repos`, {
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`GitHub repo list failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  const data = await res.json();
+  return data.repos || [];
+};
+
+export const listProviderCredentials = async () => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'List provider credentials'
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`List provider credentials failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  const data = await res.json();
+  return data.provider_credentials || [];
+};
+
+export const createProviderCredential = async ({ provider, label, apiKey, model = '', isActive }) => {
+  const encryptedSecret = await encryptSecretForSubmission(apiKey);
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          provider,
+          label,
+          encrypted_secret: encryptedSecret,
+          model,
+          is_active: isActive,
+        }),
+      }),
+    'Create provider credential'
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`Create provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  const data = await res.json();
+  return data.provider_credential;
+};
+
+export const activateProviderCredential = async (credentialId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}/activate`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Activate provider credential'
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`Activate provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  const data = await res.json();
+  return data.provider_credential;
+};
+
+export const deleteProviderCredential = async (credentialId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Delete provider credential'
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    throw new Error(`Delete provider credential failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  }
+  return res.json();
+};
+
+export const fetchGithubSessionMe = async () => {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw new Error(`Auth me failed (${res.status})`);
+  }
+  return res.json();
+};
+
+export const logoutGithubSession = async () => {
+  const res = await fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw new Error(`Auth logout failed (${res.status})`);
+  }
   return res.json();
 };

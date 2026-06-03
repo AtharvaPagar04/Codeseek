@@ -20,11 +20,11 @@ export default function SourceCard({ source }) {
   };
 
   return (
-    <div className="inline-flex items-center gap-2 bg-surface-3 border border-border rounded px-2.5 py-1 text-2xs font-mono">
+    <div className="inline-flex items-center gap-2 bg-surface-3 border border-border rounded-full px-3 py-1 text-2xs font-mono">
       <button
         onClick={handleCopy}
         title="Copy path"
-        className="text-accent hover:text-accent-dim transition-colors truncate max-w-[240px]"
+        className="text-text-primary hover:text-text-secondary transition-colors truncate max-w-[240px]"
       >
         {copied ? '✓ copied' : file || 'unknown source'}
       </button>
@@ -36,7 +36,7 @@ export default function SourceCard({ source }) {
       )}
 
       {symbol && (
-        <span className="bg-accent-glow text-accent px-1.5 py-0.5 rounded text-2xs shrink-0">
+        <span className="bg-surface-2 text-text-secondary px-1.5 py-0.5 rounded-full text-2xs shrink-0">
           {symbol}
         </span>
       )}

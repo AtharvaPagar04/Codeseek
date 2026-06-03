@@ -35,10 +35,23 @@ uv pip install --python .venv/bin/python -r requirements.txt
 cp .env.example .env
 ```
 
-3. Start Qdrant (docker compose includes it):
+SQLite is the default local persistence backend. To run with Postgres instead, set:
+
+```bash
+CODESEEK_DB_BACKEND=postgres
+CODESEEK_DATABASE_URL=postgresql://codeseek:codeseek@localhost:5432/codeseek
+```
+
+3. Start infrastructure:
 
 ```bash
 docker compose up -d qdrant
+```
+
+For Postgres-backed local runs:
+
+```bash
+docker compose up -d postgres qdrant
 ```
 
 4. Ingest a repo:

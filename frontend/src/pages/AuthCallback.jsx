@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { exchangeGithubCode } from '../utils/api';
-import { setGithubToken, setGithubUser } from '../utils/storage';
+import { connectGithubToken, exchangeGithubCode } from '../utils/api';
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams();
@@ -19,10 +18,8 @@ export default function AuthCallback() {
     let cancelled = false;
 
     exchangeGithubCode(code)
-      .then(({ access_token, username }) => {
+      .then(() => {
         if (cancelled) return;
-        setGithubToken(access_token);
-        if (username) setGithubUser(username);
         navigate('/', { replace: true });
       })
       .catch((err) => {
@@ -59,10 +56,7 @@ export default function AuthCallback() {
                 const tokenInput = e.target.elements.pat.value.trim();
                 if (!tokenInput) return;
                 try {
-                  const { fetchGithubUser } = await import('../utils/github');
-                  const user = await fetchGithubUser(tokenInput);
-                  setGithubToken(tokenInput);
-                  setGithubUser(user.login);
+                  await connectGithubToken(tokenInput);
                   navigate('/', { replace: true });
                 } catch (err) {
                   alert(err.message || 'Verification failed. Please try a different token.');

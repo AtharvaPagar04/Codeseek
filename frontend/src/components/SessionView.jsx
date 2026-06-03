@@ -4,7 +4,11 @@ import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
 import { useChat } from '../hooks/useChat';
 
-export default function SessionView({ session, appendMessage, onClearMessages }) {
+export default function SessionView({
+  session,
+  appendMessage,
+  onClearMessages,
+}) {
   const [input, setInput] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
   const bottomRef = useRef(null);
@@ -12,15 +16,20 @@ export default function SessionView({ session, appendMessage, onClearMessages })
 
   const { isLoading, sendMessage } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
+  const activeThread =
+    session.threads?.find((thread) => thread.id === session.active_thread_id) ||
+    session.threads?.[0] ||
+    null;
+  const canChat = isReady && !!activeThread;
 
   // Auto-scroll when messages change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [session.messages]);
+  }, [activeThread?.messages]);
 
   const handleSend = () => {
     const text = input.trim();
-    if (!text || isLoading || !isReady) return;
+    if (!text || isLoading || !canChat) return;
     setInput('');
     sendMessage(session, text);
   };
@@ -40,12 +49,12 @@ export default function SessionView({ session, appendMessage, onClearMessages })
     el.style.height = Math.min(el.scrollHeight, 84) + 'px';
   }, [input]);
 
-  const hasMessages = session.messages.length > 0;
+  const hasMessages = (activeThread?.messages || []).length > 0;
 
   return (
     <div className="flex flex-col h-full min-w-0 relative">
       {/* Floating clear-chat button — top-right corner */}
-      {session.messages.length > 0 && (
+      {(activeThread?.messages || []).length > 0 && (
         <button
           onClick={() => setConfirmClear(true)}
           title="Clear chat"
@@ -56,58 +65,87 @@ export default function SessionView({ session, appendMessage, onClearMessages })
         </button>
       )}
 
-      {/* Message list — extra bottom padding to clear floating input bar */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
-        {!hasMessages ? (
+      {/* Message list or empty state */}
+      {!hasMessages ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-5 min-h-0">
           <EmptyState
             repoName={session.repo_id}
-            onChipClick={(text) => setInput(text)}
           />
-        ) : (
-          <>
-            {session.messages.map((msg) => (
+          {/* Input bar inline below empty state */}
+          <div className="w-full max-w-xl mt-8">
+            <div
+              className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
+              style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
+            >
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading || !canChat}
+                placeholder={`Ask about ${session.repo_id}…`}
+                rows={1}
+                className="flex-1 resize-none bg-transparent border-none text-sm text-text-primary placeholder-text-muted font-sans focus:outline-none disabled:opacity-50 leading-normal"
+                style={{ minHeight: '24px', maxHeight: '84px' }}
+              />
+              <button
+                onClick={handleSend}
+                disabled={isLoading || !input.trim() || !canChat}
+                title="Send (Enter)"
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                style={{ color: '#0a0a0a' }}
+              >
+                {isLoading ? <SpinnerIcon /> : <SendIcon />}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
+            {(activeThread?.messages || []).map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
             <div ref={bottomRef} />
-          </>
-        )}
-      </div>
-
-      {/* Floating input bar */}
-      <div className="absolute bottom-0 left-0 right-0 px-4 pb-2 pt-6 pointer-events-none"
-           style={{ background: 'linear-gradient(to top, #0d0f11 50%, transparent)' }}>
-        <div className="pointer-events-auto max-w-3xl mx-auto">
-          <div
-            className="flex items-center gap-2 px-4 py-1.5 rounded-3xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-accent/50"
-            style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.4), 0 0 2px rgba(0, 212, 255, 0.05)' }}
-          >
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isLoading || !isReady}
-              placeholder={`Ask about ${session.repo_id}…`}
-              rows={1}
-              className="flex-1 resize-none bg-transparent border-none text-sm text-text-primary placeholder-text-muted font-sans focus:outline-none disabled:opacity-50 leading-normal"
-              style={{ minHeight: '24px', maxHeight: '84px' }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={isLoading || !input.trim() || !isReady}
-              title="Send (Enter)"
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-accent text-base hover:bg-accent-dim disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-              style={{ color: '#0d0f11' }}
-            >
-              {isLoading ? <SpinnerIcon /> : <SendIcon />}
-            </button>
           </div>
-        </div>
-      </div>
+
+          {/* Floating input bar — only when messages exist */}
+          <div className="absolute bottom-0 left-0 right-0 px-4 pb-2 pt-6 pointer-events-none"
+               style={{ background: 'linear-gradient(to top, #0a0a0a 50%, transparent)' }}>
+            <div className="pointer-events-auto max-w-xl mx-auto">
+              <div
+                className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
+                style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
+              >
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={isLoading || !canChat}
+                  placeholder={`Ask about ${session.repo_id}…`}
+                  rows={1}
+                  className="flex-1 resize-none bg-transparent border-none text-sm text-text-primary placeholder-text-muted font-sans focus:outline-none disabled:opacity-50 leading-normal"
+                  style={{ minHeight: '24px', maxHeight: '84px' }}
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={isLoading || !input.trim() || !canChat}
+                  title="Send (Enter)"
+                  className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                  style={{ color: '#0a0a0a' }}
+                >
+                  {isLoading ? <SpinnerIcon /> : <SendIcon />}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {confirmClear && (
         <ConfirmDialog
-          message="Clear all chat messages from this session? The session will remain available."
+          message="Clear this chat? The repo session will remain available."
           confirmLabel="Clear Chat"
           danger={false}
           onConfirm={() => {

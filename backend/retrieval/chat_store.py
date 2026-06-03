@@ -7,6 +7,8 @@ import uuid
 from datetime import datetime, timezone
 
 from retrieval.db import db_cursor
+from retrieval.memory_store import clear_session_memory_for_thread
+from retrieval.thread_store import ensure_default_thread
 
 
 def _now() -> str:
@@ -14,15 +16,20 @@ def _now() -> str:
 
 
 def list_session_messages(session_id: str) -> list[dict]:
+    thread = ensure_default_thread(session_id)
+    return list_thread_messages(thread["id"])
+
+
+def list_thread_messages(thread_id: str) -> list[dict]:
     with db_cursor() as (_conn, cursor):
         rows = cursor.execute(
             """
             SELECT id, role, content, sources_json, context_tokens, is_error, created_at
             FROM chat_messages
-            WHERE session_id = ?
+            WHERE thread_id = ?
             ORDER BY created_at ASC
             """,
-            (session_id,),
+            (thread_id,),
         ).fetchall()
     return [_row_to_message(row) for row in rows]
 
@@ -36,9 +43,32 @@ def append_message(
     *,
     is_error: bool = False,
 ) -> dict:
+    thread = ensure_default_thread(session_id)
+    return append_thread_message(
+        thread["id"],
+        session_id,
+        role,
+        content,
+        sources=sources,
+        context_tokens=context_tokens,
+        is_error=is_error,
+    )
+
+
+def append_thread_message(
+    thread_id: str,
+    session_id: str,
+    role: str,
+    content: str,
+    sources: list[dict] | None = None,
+    context_tokens: int | None = None,
+    *,
+    is_error: bool = False,
+) -> dict:
     message = {
         "id": uuid.uuid4().hex,
         "session_id": session_id,
+        "thread_id": thread_id,
         "role": role,
         "content": content,
         "sources": sources or [],
@@ -50,12 +80,13 @@ def append_message(
         cursor.execute(
             """
             INSERT INTO chat_messages (
-                id, session_id, role, content, sources_json, context_tokens, is_error, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, session_id, thread_id, role, content, sources_json, context_tokens, is_error, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message["id"],
                 session_id,
+                thread_id,
                 role,
                 content,
                 json.dumps(message["sources"]),
@@ -76,9 +107,41 @@ def append_message(
 
 
 def clear_session_messages(session_id: str) -> int:
+    thread = ensure_default_thread(session_id)
+    return clear_thread_messages(thread["id"])
+
+
+def clear_thread_messages(thread_id: str) -> int:
     with db_cursor() as (_conn, cursor):
-        cursor.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-        return int(cursor.rowcount or 0)
+        cursor.execute("DELETE FROM chat_messages WHERE thread_id = ?", (thread_id,))
+        deleted = int(cursor.rowcount or 0)
+    clear_session_memory_for_thread(thread_id)
+    return deleted
+
+
+def list_session_turns(session_id: str) -> list[dict]:
+    thread = ensure_default_thread(session_id)
+    return list_thread_turns(thread["id"])
+
+
+def list_thread_turns(thread_id: str) -> list[dict]:
+    messages = list_thread_messages(thread_id)
+    turns: list[dict] = []
+    pending_user: dict | None = None
+    for message in messages:
+        role = message.get("role")
+        if role == "user":
+            pending_user = message
+        elif role == "assistant" and pending_user:
+            turns.append(
+                {
+                    "query": pending_user.get("content", ""),
+                    "answer": message.get("content", ""),
+                    "resolved_query": pending_user.get("resolved_query", "") or pending_user.get("content", ""),
+                }
+            )
+            pending_user = None
+    return turns
 
 
 def _row_to_message(row) -> dict:

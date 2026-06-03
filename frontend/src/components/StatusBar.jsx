@@ -13,7 +13,7 @@ export default function StatusBar({
   const { status } = useHealth();
 
   return (
-    <header className="flex items-center justify-between h-12 px-4 bg-surface border-b border-border shrink-0 z-20">
+    <header className="flex items-center justify-between h-12 px-5 bg-surface/80 backdrop-blur-md border-b border-border shrink-0 z-20">
       {/* Left: hamburger + app name + repo context */}
       <div className="flex items-center gap-3 min-w-0">
         <button
@@ -103,7 +103,7 @@ export default function StatusBar({
         ) : (
           <button
             onClick={onConnectGitHub}
-            className="text-xs text-accent hover:text-accent-dim transition-colors"
+            className="text-xs text-text-primary bg-surface-3 border border-border rounded-full px-3 py-1 hover:bg-surface-2 hover:border-text-muted transition-colors"
           >
             Connect GitHub
           </button>

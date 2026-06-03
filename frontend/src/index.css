@@ -1,12 +1,13 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* CSS custom properties for values Tailwind can't generate dynamically */
+/* CSS custom properties */
 :root {
-  --border: #21262d;
+  --border: #262626;
+  --bg-base: #0a0a0a;
 }
 
 /* Base resets */
@@ -21,9 +22,9 @@ html, body, #root {
 }
 
 body {
-  background-color: #0d0f11;
-  color: #e6edf3;
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  background-color: #0a0a0a;
+  color: #f0f0f0;
+  font-family: 'Inter', 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -39,22 +40,22 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #21262d;
+  background: #262626;
   border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #30363d;
+  background: #3a3a3a;
 }
 
 /* Selection color */
 ::selection {
-  background: rgba(0, 212, 255, 0.2);
-  color: #e6edf3;
+  background: rgba(255, 255, 255, 0.15);
+  color: #f0f0f0;
 }
 
 /* Focus rings */
 :focus-visible {
-  outline: 1px solid rgba(0, 212, 255, 0.5);
+  outline: 1px solid rgba(255, 255, 255, 0.3);
   outline-offset: 2px;
 }
 
@@ -66,7 +67,7 @@ body {
 .assistant-response > p:first-child {
   font-size: 1rem;
   line-height: 1.8;
-  color: #f0f6fc;
+  color: #f0f0f0;
 }
 
 .assistant-response ul,

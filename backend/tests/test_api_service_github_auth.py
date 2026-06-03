@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
+from fastapi import Response
 
 from retrieval import api_service
 
@@ -51,6 +52,28 @@ class ApiServiceGithubAuthTests(unittest.TestCase):
         self.assertEqual(data["login"], "octocat")
         self.assertEqual(data["avatar_url"], "https://avatars.example/octocat.png")
         http_get.assert_called_once()
+
+    def test_persist_github_login_stores_user_and_credential(self) -> None:
+        github_user = {"id": 12345, "login": "octocat", "avatar_url": "https://avatars.example/octocat.png"}
+        with patch("retrieval.api_service._fetch_github_user", return_value=github_user), \
+             patch("retrieval.api_service.upsert_github_user", return_value={"id": "user-1"}), \
+             patch("retrieval.api_service.upsert_github_credential") as upsert_credential:
+            persisted = api_service._persist_github_login("ghp_secret")
+
+        self.assertEqual(persisted["username"], "octocat")
+        upsert_credential.assert_called_once()
+        _, kwargs = upsert_credential.call_args
+        self.assertEqual(kwargs["token_type"], "bearer")
+
+    def test_auth_me_returns_unauthenticated_without_cookie(self) -> None:
+        response = api_service.auth_me(None)
+        self.assertEqual(response, {"authenticated": False})
+
+    def test_auth_logout_clears_cookie(self) -> None:
+        response = Response()
+        payload = api_service.auth_logout(response, None)
+        self.assertTrue(payload["logged_out"])
+        self.assertFalse(payload["session_cleared"])
 
 
 if __name__ == "__main__":

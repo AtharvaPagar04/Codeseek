@@ -4,39 +4,42 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Base backgrounds
-        base: '#0d0f11',
-        surface: '#111418',
-        'surface-2': '#161b22',
-        'surface-3': '#1c2128',
-        border: '#21262d',
-        'border-subtle': '#1c2128',
+        // Base backgrounds — pure dark monochrome
+        base: '#0a0a0a',
+        surface: '#111111',
+        'surface-2': '#161616',
+        'surface-3': '#1c1c1c',
+        border: '#262626',
+        'border-subtle': '#1e1e1e',
 
-        // Text
-        'text-primary': '#e6edf3',
-        'text-secondary': '#8b949e',
-        'text-muted': '#484f58',
+        // Text — neutral whites & grays
+        'text-primary': '#f0f0f0',
+        'text-secondary': '#a0a0a0',
+        'text-muted': '#555555',
 
-        // Accent — electric cyan
-        accent: '#00d4ff',
-        'accent-dim': '#00a8cc',
-        'accent-glow': 'rgba(0, 212, 255, 0.12)',
+        // Accent — soft white/light for active states
+        accent: '#ffffff',
+        'accent-dim': '#d4d4d4',
+        'accent-glow': 'rgba(255, 255, 255, 0.06)',
 
         // Status
-        online: '#3fb950',
-        offline: '#f85149',
-        warning: '#f5a623',
+        online: '#4ade80',
+        offline: '#f87171',
+        warning: '#fbbf24',
 
         // User message
-        'user-bg': '#1a2332',
-        'user-border': '#264466',
+        'user-bg': '#1a1a1a',
+        'user-border': '#2a2a2a',
       },
       fontFamily: {
-        sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
-        mono: ['"IBM Plex Mono"', '"Fira Code"', 'monospace'],
+        sans: ['"Inter"', '"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', '"Fira Code"', 'monospace'],
       },
       fontSize: {
         '2xs': ['0.65rem', { lineHeight: '1rem' }],
+      },
+      borderRadius: {
+        'card': '16px',
       },
       keyframes: {
         blink: {
@@ -59,14 +62,19 @@ export default {
           '0%, 80%, 100%': { transform: 'translateY(0)' },
           '40%': { transform: 'translateY(-6px)' },
         },
+        slideDown: {
+          from: { opacity: '0', maxHeight: '0', transform: 'translateY(-8px)' },
+          to: { opacity: '1', maxHeight: '500px', transform: 'translateY(0)' },
+        },
       },
       animation: {
         blink: 'blink 1s step-end infinite',
-        fadeIn: 'fadeIn 0.15s ease-out',
+        fadeIn: 'fadeIn 0.2s ease-out',
         slideIn: 'slideIn 0.2s ease-out',
         'dot-1': 'dotBounce 1.2s ease-in-out infinite',
         'dot-2': 'dotBounce 1.2s ease-in-out 0.2s infinite',
         'dot-3': 'dotBounce 1.2s ease-in-out 0.4s infinite',
+        slideDown: 'slideDown 0.2s ease-out forwards',
       },
     },
   },

@@ -55,10 +55,10 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
         tabIndex={0}
         onClick={onSelect}
         onKeyDown={handleKeyDown}
-        className={`group w-full text-left px-3 py-2.5 rounded transition-colors relative ${
+        className={`group w-full text-left px-3 py-2.5 rounded-xl transition-all duration-150 relative ${
           isActive
-            ? 'bg-accent-glow border-l-2 border-accent text-text-primary'
-            : 'border-l-2 border-transparent hover:bg-surface-3 text-text-secondary hover:text-text-primary'
+            ? 'bg-surface-3 border border-border text-text-primary'
+            : 'border border-transparent hover:bg-surface-2 text-text-secondary hover:text-text-primary'
         }`}
       >
         <div className="flex items-start justify-between gap-2">

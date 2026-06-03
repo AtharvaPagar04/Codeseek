@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { clearRegisteredProviderConfigId, getApiTokens, saveApiTokens } from '../utils/storage';
-import { v4 as uuidv4 } from 'uuid';
+import {
+  activateProviderCredential,
+  createProviderCredential,
+  deleteProviderCredential,
+  listProviderCredentials,
+} from '../utils/api';
 
 const PROVIDER_OPTIONS = [
   { value: 'groq', label: 'Groq' },
@@ -15,11 +19,22 @@ export default function ApiTokensModal({ onClose }) {
   const [labelInput, setLabelInput] = useState('');
   const [providerInput, setProviderInput] = useState(PROVIDER_OPTIONS[0].value);
   const [error, setError] = useState(null);
+  const [showAddForm, setShowAddForm] = useState(false);
   const overlayRef = useRef(null);
+  const formRef = useRef(null);
 
-  // Load tokens on mount
   useEffect(() => {
-    setTokens(getApiTokens());
+    let cancelled = false;
+    listProviderCredentials()
+      .then((data) => {
+        if (!cancelled) setTokens(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || 'Failed to load provider configurations.');
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Handle Escape key
@@ -31,7 +46,7 @@ export default function ApiTokensModal({ onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const handleAdd = (e) => {
+  const handleAdd = async (e) => {
     e.preventDefault();
     setError(null);
 
@@ -44,54 +59,63 @@ export default function ApiTokensModal({ onClose }) {
       return;
     }
 
-    const isDuplicate = tokens.some((t) => t.key === key && t.provider === provider);
+    const isDuplicate = tokens.some((t) => t.label === label && t.provider === provider);
     if (isDuplicate) {
-      setError('This provider key is already added.');
+      setError('A configuration with this label and provider already exists.');
       return;
     }
 
-    // If it's the first token added, make it active
     const shouldBeActive = tokens.length === 0 || !tokens.some((t) => t.isActive);
-
-    const newToken = {
-      id: uuidv4(),
-      key,
-      label,
-      provider,
-      isActive: shouldBeActive,
-      created_at: new Date().toISOString(),
-    };
-
-    const next = [...tokens, newToken];
-    setTokens(next);
-    saveApiTokens(next);
-
-    setTokenInput('');
-    setLabelInput('');
-    setProviderInput(PROVIDER_OPTIONS[0].value);
-  };
-
-  const handleSelect = (id) => {
-    const next = tokens.map((t) => ({
-      ...t,
-      isActive: t.id === id,
-    }));
-    setTokens(next);
-    saveApiTokens(next);
-  };
-
-  const handleDelete = (id) => {
-    const target = tokens.find((t) => t.id === id);
-    const next = tokens.filter((t) => t.id !== id);
-
-    // If we deleted the active one, make the first remaining token active (if any)
-    if (target?.isActive && next.length > 0) {
-      next[0].isActive = true;
+    try {
+      const created = await createProviderCredential({
+        provider,
+        label,
+        apiKey: key,
+        isActive: shouldBeActive,
+      });
+      setTokens((prev) => {
+        const next = shouldBeActive
+          ? prev.map((t) => ({ ...t, isActive: false }))
+          : [...prev];
+        return [...next, created];
+      });
+      setTokenInput('');
+      setLabelInput('');
+      setProviderInput(PROVIDER_OPTIONS[0].value);
+      setShowAddForm(false);
+    } catch (err) {
+      setError(err.message || 'Failed to save configuration.');
     }
+  };
 
-    setTokens(next);
-    saveApiTokens(next);
-    clearRegisteredProviderConfigId(id);
+  const handleSelect = async (id) => {
+    try {
+      await activateProviderCredential(id);
+      setTokens((prev) =>
+        prev.map((t) => ({
+          ...t,
+          isActive: t.id === id,
+        }))
+      );
+    } catch (err) {
+      setError(err.message || 'Failed to activate configuration.');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    const target = tokens.find((t) => t.id === id);
+    try {
+      await deleteProviderCredential(id);
+      setTokens((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        if (target?.isActive && next.length > 0) {
+          next[0] = { ...next[0], isActive: true };
+        }
+        return next;
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to delete configuration.');
+    }
   };
 
   const activeToken = tokens.find((t) => t.isActive);
@@ -102,11 +126,11 @@ export default function ApiTokensModal({ onClose }) {
       className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-[10vh]"
       onClick={(e) => e.target === overlayRef.current && onClose()}
     >
-      <div className="bg-surface-2 border border-border rounded w-full max-w-lg mx-4 shadow-xl animate-fadeIn flex flex-col max-h-[75vh]">
+      <div className="bg-surface-2 border border-border rounded-2xl w-full max-w-lg mx-4 shadow-xl animate-fadeIn flex flex-col max-h-[75vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <span className="text-sm font-medium text-text-primary flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            <span className="w-1.5 h-1.5 rounded-full bg-online" />
             LLM Provider Configurations
           </span>
           <button
@@ -124,14 +148,14 @@ export default function ApiTokensModal({ onClose }) {
               Active Configuration
             </h3>
             {tokens.length === 0 ? (
-              <div className="bg-surface-3 border border-border rounded p-3 text-xs text-text-secondary font-mono leading-relaxed">
+              <div className="bg-surface-3 border border-border rounded-xl p-3 text-xs text-text-secondary font-mono leading-relaxed">
                 <span className="text-warning">⚠️ No custom configurations added.</span>
                 <p className="mt-1 text-text-muted text-[11px]">
                   Query requests will use the currently selected provider key from this list.
                 </p>
               </div>
             ) : (
-              <div className="bg-accent-glow/20 border border-accent/30 rounded p-3 flex items-start justify-between gap-3">
+              <div className="bg-surface-3 border border-border rounded-xl p-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-medium text-sm text-text-primary truncate">
                     {activeToken?.label}
@@ -139,11 +163,8 @@ export default function ApiTokensModal({ onClose }) {
                   <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide">
                     {providerLabel(activeToken?.provider)}
                   </div>
-                  <div className="font-mono text-xs text-accent mt-0.5 truncate">
-                    Key {activeToken?.key.slice(0, 12)}...{activeToken?.key.slice(-4)}
-                  </div>
                 </div>
-                <span className="shrink-0 text-2xs bg-accent/15 text-accent border border-accent/30 px-1.5 py-0.5 rounded font-mono font-medium">
+                <span className="shrink-0 text-2xs bg-online/15 text-online border border-online/30 px-1.5 py-0.5 rounded-full font-mono font-medium">
                   Active
                 </span>
               </div>
@@ -155,7 +176,7 @@ export default function ApiTokensModal({ onClose }) {
               <h3 className="text-2xs font-mono text-text-secondary uppercase tracking-wider mb-2">
                 Saved Configurations
               </h3>
-              <div className="border border-border rounded divide-y divide-border/60 overflow-hidden bg-surface-3">
+              <div className="border border-border rounded-xl divide-y divide-border/60 overflow-hidden bg-surface-3">
                 {tokens.map((t) => (
                   <div
                     key={t.id}
@@ -169,7 +190,7 @@ export default function ApiTokensModal({ onClose }) {
                         type="radio"
                         checked={t.isActive}
                         onChange={() => handleSelect(t.id)}
-                        className="accent-accent scale-105 shrink-0"
+                        className="accent-white scale-105 shrink-0"
                       />
                       <div className="min-w-0">
                         <div className="font-medium text-sm text-text-primary truncate">
@@ -177,9 +198,6 @@ export default function ApiTokensModal({ onClose }) {
                         </div>
                         <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide">
                           {providerLabel(t.provider)}
-                        </div>
-                        <div className="font-mono text-2xs text-text-muted mt-0.5 truncate">
-                          {t.key.slice(0, 8)}...{t.key.slice(-4)}
                         </div>
                       </div>
                     </div>
@@ -201,74 +219,98 @@ export default function ApiTokensModal({ onClose }) {
           )}
         </div>
 
-        {/* Add new token form */}
-        <form
-          onSubmit={handleAdd}
-          className="border-t border-border bg-surface-3/80 p-4 shrink-0 flex flex-col gap-3"
-        >
-          <h3 className="text-2xs font-mono text-text-secondary uppercase tracking-wider">
-            Add Configuration
-          </h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="token-value" className="text-2xs font-mono text-text-muted uppercase">
-                API Key
-              </label>
-              <input
-                id="token-value"
-                type="password"
-                placeholder="Provider API key"
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value)}
-                required
-                className="bg-surface-2 border border-border rounded px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-accent/60 transition-colors"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="token-label" className="text-2xs font-mono text-text-muted uppercase">
-                Label
-              </label>
-              <input
-                id="token-label"
-                type="text"
-                placeholder="e.g. Personal Groq, Personal Gemini"
-                value={labelInput}
-                onChange={(e) => setLabelInput(e.target.value)}
-                className="bg-surface-2 border border-border rounded px-3 py-1.5 text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-accent/60 transition-colors"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="token-provider" className="text-2xs font-mono text-text-muted uppercase">
-              Provider
-            </label>
-            <select
-              id="token-provider"
-              value={providerInput}
-              onChange={(e) => setProviderInput(e.target.value)}
-              className="bg-surface-2 border border-border rounded px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent/60 transition-colors"
+        {/* Add API toggle button / Add new token form */}
+        <div className="border-t border-border shrink-0">
+          {!showAddForm ? (
+            <button
+              type="button"
+              onClick={() => { setShowAddForm(true); setError(null); }}
+              className="w-full py-3 px-4 bg-surface-3/80 hover:bg-surface-2 text-text-primary text-xs font-semibold font-mono tracking-wider transition-colors flex items-center justify-center gap-2 rounded-b-2xl"
             >
-              {PROVIDER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+              <span className="text-base leading-none">+</span> ADD API
+            </button>
+          ) : (
+            <form
+              ref={formRef}
+              onSubmit={handleAdd}
+              className="bg-surface-3/80 p-4 flex flex-col gap-3 animate-slideDown"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-2xs font-mono text-text-secondary uppercase tracking-wider">
+                  Add Configuration
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => { setShowAddForm(false); setError(null); setTokenInput(''); setLabelInput(''); setProviderInput(PROVIDER_OPTIONS[0].value); }}
+                  className="text-text-muted hover:text-text-primary transition-colors text-sm leading-none"
+                  title="Cancel"
+                >
+                  ×
+                </button>
+              </div>
 
-          {error && <p className="text-2xs text-offline/90 font-mono">⚠ {error}</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="token-value" className="text-2xs font-mono text-text-muted uppercase">
+                    API Key
+                  </label>
+                  <input
+                    id="token-value"
+                    type="password"
+                    placeholder="Provider API key"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    required
+                    autoFocus
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted transition-colors"
+                  />
+                </div>
 
-          <button
-            type="submit"
-            className="py-2 bg-accent hover:bg-accent-dim text-base rounded text-xs font-semibold font-mono tracking-wider transition-colors"
-            style={{ color: '#0d0f11' }}
-          >
-            + ADD CONFIGURATION
-          </button>
-        </form>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="token-label" className="text-2xs font-mono text-text-muted uppercase">
+                    Label
+                  </label>
+                  <input
+                    id="token-label"
+                    type="text"
+                    placeholder="e.g. Personal Groq, Personal Gemini"
+                    value={labelInput}
+                    onChange={(e) => setLabelInput(e.target.value)}
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-text-muted transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label htmlFor="token-provider" className="text-2xs font-mono text-text-muted uppercase">
+                  Provider
+                </label>
+                <select
+                  id="token-provider"
+                  value={providerInput}
+                  onChange={(e) => setProviderInput(e.target.value)}
+                  className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted transition-colors"
+                >
+                  {PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {error && <p className="text-2xs text-offline/90 font-mono">⚠ {error}</p>}
+
+              <button
+                type="submit"
+                className="py-2 bg-text-primary hover:bg-text-secondary text-base rounded-lg text-xs font-semibold font-mono tracking-wider transition-colors"
+                style={{ color: '#0a0a0a' }}
+              >
+                + ADD CONFIGURATION
+              </button>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   );

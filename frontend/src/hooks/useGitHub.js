@@ -1,25 +1,45 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
-  getGithubToken,
-  setGithubToken,
-  getGithubUser,
-  setGithubUser,
-  clearGithubAuth,
-} from '../utils/storage';
-import { fetchUserRepos, fetchGithubUser } from '../utils/github';
+  connectGithubToken,
+  fetchGithubSessionMe,
+  listGithubRepos,
+  logoutGithubSession,
+} from '../utils/api';
 
 const CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
 const REDIRECT_URI = import.meta.env.VITE_REDIRECT_URI || `${window.location.origin}/auth/callback`;
 
 export function useGitHub() {
-  const [token, setToken] = useState(() => getGithubToken());
-  const [username, setUsername] = useState(() => getGithubUser());
+  const [username, setUsername] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [repos, setRepos] = useState([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
 
-  const isConnected = !!token;
+  useEffect(() => {
+    let cancelled = false;
+    fetchGithubSessionMe()
+      .then((data) => {
+        if (cancelled) return;
+        if (!data?.authenticated || !data.user) {
+          setIsConnected(false);
+          setUsername(null);
+          setAvatarUrl(null);
+          return;
+        }
+        setIsConnected(true);
+        setUsername(data.user.username || null);
+        setAvatarUrl(data.user.avatar_url || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setIsConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const initiateOAuth = useCallback(() => {
     const params = new URLSearchParams({
@@ -31,37 +51,20 @@ export function useGitHub() {
     window.open(url, '_blank', 'noopener,noreferrer');
   }, []);
 
-  /**
-   * Called from AuthCallback after receiving token from backend.
-   * Persists token + fetches user profile.
-   */
-  const storeAuth = useCallback(async (accessToken, usernameOverride) => {
-    setGithubToken(accessToken);
-    setToken(accessToken);
-
-    if (usernameOverride) {
-      setGithubUser(usernameOverride);
-      setUsername(usernameOverride);
-      return;
-    }
-
-    // Fetch user from GitHub API
-    try {
-      const user = await fetchGithubUser(accessToken);
-      setGithubUser(user.login);
-      setUsername(user.login);
-      setAvatarUrl(user.avatar_url);
-    } catch (err) {
-      console.error('[useGitHub] Failed to fetch user profile:', err);
-    }
+  const storeAuth = useCallback(async (accessToken) => {
+    const data = await connectGithubToken(accessToken);
+    const nextUsername = data.username || null;
+    setIsConnected(true);
+    setUsername(nextUsername);
+    setAvatarUrl(data.avatar_url || null);
   }, []);
 
   const fetchRepos = useCallback(async () => {
-    if (!token) return;
+    if (!isConnected) return;
     setReposLoading(true);
     setReposError(null);
     try {
-      const data = await fetchUserRepos(token);
+      const data = await listGithubRepos();
       setRepos(data);
     } catch (err) {
       console.error('[useGitHub] fetchRepos error:', err);
@@ -69,11 +72,15 @@ export function useGitHub() {
     } finally {
       setReposLoading(false);
     }
-  }, [token]);
+  }, [isConnected]);
 
-  const disconnect = useCallback(() => {
-    clearGithubAuth();
-    setToken(null);
+  const disconnect = useCallback(async () => {
+    try {
+      await logoutGithubSession();
+    } catch (err) {
+      console.warn('[useGitHub] backend logout failed:', err?.message || err);
+    }
+    setIsConnected(false);
     setUsername(null);
     setAvatarUrl(null);
     setRepos([]);
@@ -81,7 +88,6 @@ export function useGitHub() {
 
   return {
     isConnected,
-    token,
     username,
     avatarUrl,
     repos,

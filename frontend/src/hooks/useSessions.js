@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { getSessions, saveSessions } from '../utils/storage';
 
 const sortByLastActive = (sessions) =>
   [...sessions].sort(
@@ -8,12 +7,10 @@ const sortByLastActive = (sessions) =>
   );
 
 export function useSessions() {
-  const [sessions, setSessions] = useState(() => sortByLastActive(getSessions()));
+  const [sessions, setSessions] = useState([]);
 
-  const persist = (next) => {
-    saveSessions(next);
-    return sortByLastActive(next);
-  };
+  const normalizeThreads = (threads) =>
+    Array.isArray(threads) ? threads.map((thread) => ({ ...thread, messages: thread.messages || [] })) : [];
 
   const addSession = useCallback((sessionData) => {
     const now = new Date().toISOString();
@@ -29,14 +26,17 @@ export function useSessions() {
       error: sessionData.error || '',
       created_at: sessionData.created_at || now,
       last_active: now,
-      messages: [],
+      threads: [],
+      active_thread_id: null,
     };
-    setSessions((prev) => persist([newSession, ...prev.filter((s) => s.id !== newSession.id)]));
+    setSessions((prev) =>
+      sortByLastActive([newSession, ...prev.filter((s) => s.id !== newSession.id)])
+    );
     return newSession;
   }, []);
 
   const deleteSession = useCallback((sessionId) => {
-    setSessions((prev) => persist(prev.filter((s) => s.id !== sessionId)));
+    setSessions((prev) => sortByLastActive(prev.filter((s) => s.id !== sessionId)));
   }, []);
 
   const clearSessionMessages = useCallback((sessionId) => {
@@ -44,21 +44,34 @@ export function useSessions() {
     setSessions((prev) => {
       const next = prev.map((session) =>
         session.id === sessionId
-          ? { ...session, messages: [], last_active: now }
+          ? {
+              ...session,
+              threads: session.threads.map((thread) =>
+                thread.id === session.active_thread_id ? { ...thread, messages: [] } : thread
+              ),
+              last_active: now,
+            }
           : session
       );
-      return persist(next);
+      return sortByLastActive(next);
     });
   }, []);
 
-  const setSessionMessages = useCallback((sessionId, messages) => {
+  const setThreadMessages = useCallback((sessionId, threadId, messages) => {
     setSessions((prev) => {
       const next = prev.map((session) =>
         session.id === sessionId
-          ? { ...session, messages: Array.isArray(messages) ? messages : [] }
+          ? {
+              ...session,
+              threads: session.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, messages: Array.isArray(messages) ? messages : [] }
+                  : thread
+              ),
+            }
           : session
       );
-      return persist(next);
+      return sortByLastActive(next);
     });
   }, []);
 
@@ -68,25 +81,75 @@ export function useSessions() {
    *  2. Replace: if message has __replaceId, replace the message with that id instead of appending.
    *     This is used to swap the loading placeholder with the real assistant response.
    */
-  const appendMessage = useCallback((sessionId, message) => {
+  const appendMessage = useCallback((sessionId, threadId, message) => {
     const now = new Date().toISOString();
     setSessions((prev) => {
       const next = prev.map((s) => {
         if (s.id !== sessionId) return s;
 
-        let messages;
-        if (message.__replaceId) {
-          // Replace loading placeholder in-place
-          const { __replaceId, ...realMessage } = message;
-          messages = s.messages.map((m) => (m.id === __replaceId ? realMessage : m));
-        } else {
-          messages = [...s.messages, message];
-        }
+        const threads = s.threads.map((thread) => {
+          if (thread.id !== threadId) return thread;
+          let messages;
+          if (message.__replaceId) {
+            const { __replaceId, ...realMessage } = message;
+            messages = (thread.messages || []).map((m) => (m.id === __replaceId ? realMessage : m));
+          } else {
+            messages = [...(thread.messages || []), message];
+          }
+          return { ...thread, messages };
+        });
 
-        return { ...s, last_active: now, messages };
+        return { ...s, last_active: now, threads };
       });
-      return persist(next);
+      return sortByLastActive(next);
     });
+  }, []);
+
+  const setSessionThreads = useCallback((sessionId, threads) => {
+    setSessions((prev) => {
+      const next = prev.map((session) =>
+        session.id === sessionId
+          ? (() => {
+              const normalizedThreads = normalizeThreads(threads);
+              const activeThreadId = normalizedThreads.some((thread) => thread.id === session.active_thread_id)
+                ? session.active_thread_id
+                : normalizedThreads[0]?.id || null;
+              return {
+                ...session,
+                threads: normalizedThreads,
+                active_thread_id: activeThreadId,
+              };
+            })()
+          : session
+      );
+      return sortByLastActive(next);
+    });
+  }, []);
+
+  const setActiveThread = useCallback((sessionId, threadId) => {
+    setSessions((prev) =>
+      sortByLastActive(
+        prev.map((session) =>
+          session.id === sessionId ? { ...session, active_thread_id: threadId } : session
+        )
+      )
+    );
+  }, []);
+
+  const addThread = useCallback((sessionId, thread) => {
+    setSessions((prev) =>
+      sortByLastActive(
+        prev.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                threads: [...session.threads, { ...thread, messages: [] }],
+                active_thread_id: thread.id,
+              }
+            : session
+        )
+      )
+    );
   }, []);
 
   const mergeBackendSessions = useCallback((backendSessions) => {
@@ -105,12 +168,13 @@ export function useSessions() {
           error: b.error || '',
           created_at: b.created_at || current?.created_at,
           last_active: current?.last_active || b.updated_at || b.created_at,
-          messages: current?.messages || [],
+          threads: current?.threads || [],
+          active_thread_id: current?.active_thread_id || null,
         });
       }
       const backendIds = new Set(backendSessions.map((s) => s.id));
       const merged = [...byId.values()].filter((s) => backendIds.has(s.id));
-      return persist(merged);
+      return sortByLastActive(merged);
     });
   }, []);
 
@@ -119,8 +183,11 @@ export function useSessions() {
     addSession,
     deleteSession,
     clearSessionMessages,
-    setSessionMessages,
+    setThreadMessages,
     appendMessage,
     mergeBackendSessions,
+    setSessionThreads,
+    setActiveThread,
+    addThread,
   };
 }

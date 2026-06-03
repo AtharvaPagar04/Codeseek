@@ -9,20 +9,30 @@ import uuid
 from collections import defaultdict, deque
 
 import httpx
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from retrieval.auth_store import (
+    create_auth_session,
+    delete_auth_session,
+    get_user_for_session_token,
+    upsert_github_user,
+)
 from retrieval.chat_store import (
     append_message,
+    append_thread_message,
     clear_session_messages,
+    clear_thread_messages,
     list_session_messages,
+    list_thread_messages,
 )
 from retrieval.config import get_collection_name, get_repo_root
 from retrieval.db import init_db
+from retrieval.github_store import get_github_credential, upsert_github_credential
 from retrieval.isolation import validate_collection_binding
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -30,6 +40,13 @@ from retrieval.observability import (
     observe_api_request,
     observe_retrieval_meta,
     render_prometheus_metrics,
+)
+from retrieval.provider_store import (
+    create_provider_credential,
+    delete_provider_credential,
+    get_active_provider_credential,
+    list_provider_credentials,
+    set_active_provider_credential,
 )
 from retrieval.searcher import dependency_health
 from retrieval.session_indexer import (
@@ -39,6 +56,12 @@ from retrieval.session_indexer import (
     list_sessions,
     retry_indexing,
 )
+from retrieval.submission_crypto import (
+    decrypt_submission_secret,
+    get_submission_key_id,
+    get_submission_public_key_pem,
+)
+from retrieval.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
 
 RATE_LIMIT_PER_MINUTE = int(os.getenv("CODESEEK_RATE_LIMIT_PER_MINUTE", "60"))
 API_KEY_ENV = "CODESEEK_API_KEY"
@@ -50,6 +73,13 @@ STRICT_ENV_VALIDATION = os.getenv("CODESEEK_STRICT_ENV_VALIDATION", "1").strip()
     "off",
 }
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+AUTH_SESSION_COOKIE = os.getenv("CODESEEK_AUTH_SESSION_COOKIE", "codeseek_session")
+AUTH_SESSION_SECURE_COOKIE = os.getenv("CODESEEK_AUTH_SESSION_SECURE_COOKIE", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_USER_URL = "https://api.github.com/user"
 
@@ -59,9 +89,6 @@ memory = ConversationMemory(max_turns=5)
 _request_windows: dict[str, deque[float]] = defaultdict(deque)
 _startup_errors: list[str] = []
 _query_lock = threading.Lock()
-_provider_configs_lock = threading.Lock()
-_provider_configs: dict[str, dict[str, str]] = {}
-
 
 def _cors_origins() -> list[str]:
     raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
@@ -71,7 +98,7 @@ def _cors_origins() -> list[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -81,14 +108,16 @@ class QueryRequest(BaseModel):
     query: str | None = None
     question: str | None = None
     session_id: str | None = None
-    provider_config_id: str | None = None
+    thread_id: str | None = None
 
 
-class ProviderConfigRegisterRequest(BaseModel):
+class ProviderCredentialCreateRequest(BaseModel):
     provider: str
-    api_key: str
+    api_key: str | None = None
+    encrypted_secret: dict | None = None
     model: str | None = None
     label: str | None = None
+    is_active: bool | None = None
 
 
 class SessionCreateRequest(BaseModel):
@@ -102,48 +131,45 @@ class GithubAuthCodeRequest(BaseModel):
     code: str
 
 
+class GithubTokenConnectRequest(BaseModel):
+    access_token: str | None = None
+    encrypted_secret: dict | None = None
+
+
+class SubmissionPublicKeyResponse(BaseModel):
+    key_id: str
+    algorithm: str
+    public_key_pem: str
+
+
 def _ready_sessions() -> list[dict]:
     return [session for session in list_sessions() if session.get("status") == "ready"]
 
 
-def _register_provider_config(
-    provider: str,
-    api_key: str,
-    model: str = "",
-    label: str = "",
-) -> dict[str, str]:
-    config_id = uuid.uuid4().hex
-    record = {
-        "id": config_id,
-        "provider": provider.strip().lower(),
-        "api_key": api_key.strip(),
-        "model": model.strip(),
-        "label": label.strip(),
-        "created_at": str(int(time.time())),
-    }
-    with _provider_configs_lock:
-        _provider_configs[config_id] = record
-    return {
-        "id": record["id"],
-        "provider": record["provider"],
-        "model": record["model"],
-        "label": record["label"],
-        "created_at": record["created_at"],
-    }
+def _session_visible_to_user(session: dict, auth_user: dict | None) -> bool:
+    owner_id = (session.get("user_id") or "").strip()
+    if not owner_id:
+        return True
+    if not auth_user:
+        return False
+    return owner_id == auth_user["id"]
 
 
-def _get_provider_config(config_id: str) -> dict[str, str] | None:
-    with _provider_configs_lock:
-        record = _provider_configs.get(config_id)
-        if not record:
-            return None
-        return dict(record)
+def _thread_visible_to_user(thread: dict, auth_user: dict | None) -> bool:
+    owner_id = (thread.get("user_id") or "").strip()
+    if not owner_id:
+        return True
+    if not auth_user:
+        return False
+    return owner_id == auth_user["id"]
 
 
-def _resolve_query_session(session_id: str | None) -> dict | None:
+def _resolve_query_session(session_id: str | None, auth_user: dict | None = None) -> dict | None:
     if session_id:
         session = get_session(session_id)
         if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not _session_visible_to_user(session, auth_user):
             raise HTTPException(status_code=404, detail="Session not found")
         if session.get("status") != "ready":
             raise HTTPException(
@@ -152,10 +178,28 @@ def _resolve_query_session(session_id: str | None) -> dict | None:
             )
         return session
 
-    ready_sessions = _ready_sessions()
+    ready_sessions = [session for session in _ready_sessions() if _session_visible_to_user(session, auth_user)]
     if len(ready_sessions) == 1:
         return ready_sessions[0]
     return None
+
+
+def _resolve_submitted_secret(plaintext: str | None, encrypted_secret: dict | None) -> str:
+    raw = (plaintext or "").strip()
+    if raw:
+        return raw
+    if not encrypted_secret:
+        return ""
+    key_id = str(encrypted_secret.get("key_id", "")).strip()
+    ciphertext = str(encrypted_secret.get("ciphertext", "")).strip()
+    if not key_id or not ciphertext:
+        raise HTTPException(status_code=400, detail="Encrypted secret payload is incomplete")
+    try:
+        return decrypt_submission_secret(ciphertext, key_id=key_id).strip()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Encrypted secret could not be decrypted") from exc
 
 
 @app.on_event("startup")
@@ -284,11 +328,89 @@ def _fetch_github_user(access_token: str) -> dict:
     return response.json()
 
 
+def _fetch_github_repos(access_token: str) -> list[dict]:
+    page = 1
+    repos: list[dict] = []
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    while True:
+        response = httpx.get(
+            "https://api.github.com/user/repos",
+            headers=headers,
+            params={
+                "per_page": 100,
+                "page": page,
+                "sort": "updated",
+                "visibility": "all",
+                "affiliation": "owner,collaborator,organization_member",
+            },
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        repos.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return repos
+
+
+def _cookie_settings() -> dict[str, object]:
+    return {
+        "httponly": True,
+        "secure": AUTH_SESSION_SECURE_COOKIE,
+        "samesite": "lax",
+        "path": "/",
+    }
+
+
+def _current_auth_user(session_token: str | None) -> dict | None:
+    raw = (session_token or "").strip()
+    if not raw:
+        return None
+    return get_user_for_session_token(raw)
+
+
+def _require_auth_user(session_token: str | None) -> dict:
+    user = _current_auth_user(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+def _persist_github_login(access_token: str) -> dict:
+    user = _fetch_github_user(access_token)
+    github_user_id = str(user.get("id", "")).strip()
+    username = str(user.get("login", "")).strip()
+    avatar_url = str(user.get("avatar_url", "")).strip()
+    if not github_user_id or not username:
+        raise HTTPException(status_code=502, detail="GitHub user profile was incomplete")
+    stored_user = upsert_github_user(github_user_id, username, avatar_url)
+    upsert_github_credential(
+        stored_user["id"],
+        username,
+        access_token,
+        token_type="bearer",
+        scope_info="repo",
+    )
+    return {
+        "user": stored_user,
+        "username": username,
+        "avatar_url": avatar_url,
+    }
+
+
 def _query_impl(
     body: QueryRequest,
     request: Request,
     authorization: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
+    session_token: str | None = None,
 ) -> dict:
     request_id = x_request_id or new_request_id()
     started = time.perf_counter()
@@ -300,21 +422,27 @@ def _query_impl(
     query_text = (body.query or body.question or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
-    provider_config_id = (body.provider_config_id or "").strip()
-    if not provider_config_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Active frontend LLM provider config is required (provider_config_id)",
-        )
-    provider_config = _get_provider_config(provider_config_id)
+    previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
+    previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
+    auth_user = _current_auth_user(session_token)
+    if not auth_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    provider_config = get_active_provider_credential(auth_user["id"])
     if not provider_config:
         raise HTTPException(
             status_code=400,
-            detail="provider_config_id is invalid or expired; re-register the active provider config",
+            detail="No active provider credential configured for this user",
         )
-    previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
-    previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
-    session = _resolve_query_session(body.session_id)
+    session = _resolve_query_session(body.session_id, auth_user)
+    thread = None
+    if body.thread_id:
+        thread = get_thread(body.thread_id.strip())
+        if not thread or not _thread_visible_to_user(thread, auth_user):
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if session and thread.get("repo_session_id") != session["id"]:
+            raise HTTPException(status_code=409, detail="Thread does not belong to the selected session")
+    elif session:
+        thread = ensure_default_thread(session["id"], user_id=auth_user["id"] if auth_user else "")
     if session:
         os.environ["RETRIEVAL_REPO_ROOT"] = session["repo_root"]
         os.environ["QDRANT_COLLECTION_NAME"] = session["collection"]
@@ -334,23 +462,40 @@ def _query_impl(
         log_event("api.query.error", request_id, error=str(exc), status_code=409)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
+        if thread and session:
+            query_memory = ThreadConversationMemory(thread["id"], session["id"], max_turns=5)
+        elif session:
+            query_memory = SessionConversationMemory(session["id"], max_turns=5)
+        else:
+            query_memory = memory
         with _query_lock:
             answer, sources, token_count, meta = run_query(
                 query_text,
-                memory,
+                query_memory,
                 request_id=request_id,
                 return_meta=True,
                 provider_config=provider_config,
             )
         if session:
-            append_message(session["id"], "user", query_text)
-            append_message(
-                session["id"],
-                "assistant",
-                answer,
-                sources=sources,
-                context_tokens=token_count,
-            )
+            if thread:
+                append_thread_message(thread["id"], session["id"], "user", query_text)
+                append_thread_message(
+                    thread["id"],
+                    session["id"],
+                    "assistant",
+                    answer,
+                    sources=sources,
+                    context_tokens=token_count,
+                )
+            else:
+                append_message(session["id"], "user", query_text)
+                append_message(
+                    session["id"],
+                    "assistant",
+                    answer,
+                    sources=sources,
+                    context_tokens=token_count,
+                )
         total_ms = int((time.perf_counter() - started) * 1000)
         log_event(
             "api.query.end",
@@ -408,6 +553,15 @@ def health_v1() -> dict[str, str]:
     return _health_payload()
 
 
+@v1.get("/crypto/submission-key", response_model=SubmissionPublicKeyResponse)
+def submission_public_key_v1() -> SubmissionPublicKeyResponse:
+    return SubmissionPublicKeyResponse(
+        key_id=get_submission_key_id(),
+        algorithm="RSA-OAEP-256",
+        public_key_pem=get_submission_public_key_pem(),
+    )
+
+
 @v1.get("/metrics")
 def metrics_v1() -> Response:
     body, content_type = render_prometheus_metrics()
@@ -420,56 +574,143 @@ def query_v1(
     request: Request,
     authorization: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    return _query_impl(body, request, authorization, x_request_id)
+    return _query_impl(body, request, authorization, x_request_id, session_token)
 
 
-@v1.post("/provider-configs")
-def register_provider_config_v1(
-    body: ProviderConfigRegisterRequest,
+@v1.get("/provider-credentials")
+def list_provider_credentials_v1(
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth(authorization)
+    user = _require_auth_user(session_token)
+    return {"provider_credentials": list_provider_credentials(user["id"])}
+
+
+@v1.post("/provider-credentials")
+def create_provider_credential_v1(
+    body: ProviderCredentialCreateRequest,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    user = _require_auth_user(session_token)
     provider = body.provider.strip().lower()
-    api_key = body.api_key.strip()
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     model = (body.model or "").strip()
     label = (body.label or "").strip()
-    if not provider or not api_key:
-        raise HTTPException(status_code=400, detail="provider and api_key are required")
-    record = _register_provider_config(provider, api_key, model=model, label=label)
-    return {"provider_config": record}
+    if not provider or not api_key or not label:
+        raise HTTPException(status_code=400, detail="provider, label, and api_key are required")
+    existing = list_provider_credentials(user["id"])
+    should_be_active = body.is_active if body.is_active is not None else not existing
+    record = create_provider_credential(
+        user["id"],
+        provider,
+        label,
+        api_key,
+        model=model,
+        set_active=should_be_active,
+    )
+    return {"provider_credential": record}
+
+
+@v1.post("/provider-credentials/{credential_id}/activate")
+def activate_provider_credential_v1(
+    credential_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    user = _require_auth_user(session_token)
+    record = set_active_provider_credential(user["id"], credential_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Provider credential not found")
+    record.pop("api_key", None)
+    return {"provider_credential": record}
+
+
+@v1.delete("/provider-credentials/{credential_id}")
+def delete_provider_credential_v1(
+    credential_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    user = _require_auth_user(session_token)
+    deleted = delete_provider_credential(user["id"], credential_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Provider credential not found")
+    return {"deleted": True, "credential_id": credential_id}
 
 
 @v1.post("/sessions")
 def create_session_v1(
     body: SessionCreateRequest,
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth(authorization)
     tenant_id = (body.tenant_id or DEFAULT_TENANT_ID).strip() or DEFAULT_TENANT_ID
+    auth_user = _current_auth_user(session_token)
+    github_token = (body.github_token or "").strip()
+    if not github_token and auth_user:
+        stored_github = get_github_credential(auth_user["id"])
+        if stored_github:
+            github_token = stored_github["access_token"]
     try:
         session = create_session(
             repo_full_name=body.repo_full_name.strip(),
             tenant_id=tenant_id,
             repo_url=(body.repo_url or "").strip(),
-            github_token=(body.github_token or "").strip(),
+            github_token=github_token,
+            user_id=auth_user["id"] if auth_user else "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"session": session}
 
 
+@v1.get("/github/repos")
+def list_github_repos_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    user = _require_auth_user(session_token)
+    credential = get_github_credential(user["id"])
+    if not credential:
+        raise HTTPException(status_code=404, detail="No GitHub credential connected for this user")
+    try:
+        repos = _fetch_github_repos(credential["access_token"])
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text.strip() or str(exc)
+        raise HTTPException(status_code=502, detail=f"GitHub repo fetch failed: {detail}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub repo fetch network error: {exc}") from exc
+    return {"repos": repos}
+
+
 @v1.get("/sessions")
-def list_sessions_v1(authorization: str | None = Header(default=None)) -> dict:
+def list_sessions_v1(
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
     _require_auth(authorization)
-    return {"sessions": list_sessions()}
+    auth_user = _current_auth_user(session_token)
+    sessions = [s for s in list_sessions() if _session_visible_to_user(s, auth_user)]
+    return {"sessions": sessions}
 
 
 @v1.get("/sessions/{session_id}")
-def get_session_v1(session_id: str, authorization: str | None = Header(default=None)) -> dict:
+def get_session_v1(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
     _require_auth(authorization)
     session = get_session(session_id)
-    if not session:
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session": session}
 
@@ -478,30 +719,106 @@ def get_session_v1(session_id: str, authorization: str | None = Header(default=N
 def list_session_messages_v1(
     session_id: str,
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth(authorization)
     session = get_session(session_id)
-    if not session:
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"messages": list_session_messages(session_id)}
+
+
+@v1.get("/sessions/{session_id}/threads")
+def list_session_threads_v1(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    session = get_session(session_id)
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    threads = [t for t in list_threads_for_session(session_id) if _thread_visible_to_user(t, auth_user)]
+    return {"threads": threads}
+
+
+@v1.post("/sessions/{session_id}/threads")
+def create_session_thread_v1(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    session = get_session(session_id)
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    count = len(list_threads_for_session(session_id)) + 1
+    thread = create_thread(
+        session_id,
+        user_id=auth_user["id"] if auth_user else "",
+        title=f"Thread {count}",
+    )
+    return {"thread": thread}
+
+
+@v1.get("/threads/{thread_id}/messages")
+def list_thread_messages_v1(
+    thread_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    auth_user = _current_auth_user(session_token)
+    thread = get_thread(thread_id)
+    if not thread or not _thread_visible_to_user(thread, auth_user):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return {"messages": list_thread_messages(thread_id)}
+
+
+@v1.delete("/threads/{thread_id}/messages")
+def clear_thread_messages_v1(
+    thread_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth(authorization)
+    auth_user = _current_auth_user(session_token)
+    thread = get_thread(thread_id)
+    if not thread or not _thread_visible_to_user(thread, auth_user):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    deleted = clear_thread_messages(thread_id)
+    return {"cleared": deleted, "thread_id": thread_id}
 
 
 @v1.delete("/sessions/{session_id}/messages")
 def clear_session_messages_v1(
     session_id: str,
     authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth(authorization)
     session = get_session(session_id)
-    if not session:
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     deleted = clear_session_messages(session_id)
     return {"cleared": deleted, "session_id": session_id}
 
 
 @v1.delete("/sessions/{session_id}")
-def delete_session_v1(session_id: str, authorization: str | None = Header(default=None)) -> dict:
+def delete_session_v1(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
     _require_auth(authorization)
+    session = get_session(session_id)
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
     deleted = delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -509,8 +826,16 @@ def delete_session_v1(session_id: str, authorization: str | None = Header(defaul
 
 
 @v1.post("/sessions/{session_id}/retry")
-def retry_session_v1(session_id: str, authorization: str | None = Header(default=None)) -> dict:
+def retry_session_v1(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
     _require_auth(authorization)
+    session = get_session(session_id)
+    auth_user = _current_auth_user(session_token)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
     session = retry_indexing(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -518,14 +843,13 @@ def retry_session_v1(session_id: str, authorization: str | None = Header(default
 
 
 @app.post("/auth/github")
-def auth_github(body: GithubAuthCodeRequest) -> dict:
+def auth_github(body: GithubAuthCodeRequest, response: Response) -> dict:
     code = body.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
     try:
         token_data = _exchange_github_code(code)
         access_token = str(token_data.get("access_token", "")).strip()
-        user = _fetch_github_user(access_token)
     except HTTPException:
         raise
     except httpx.HTTPStatusError as exc:
@@ -534,11 +858,61 @@ def auth_github(body: GithubAuthCodeRequest) -> dict:
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"GitHub OAuth network error: {exc}") from exc
 
+    persisted = _persist_github_login(access_token)
+    session_token, _session = create_auth_session(persisted["user"]["id"])
+    response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+
     return {
-        "access_token": access_token,
-        "username": str(user.get("login", "")).strip(),
-        "avatar_url": str(user.get("avatar_url", "")).strip(),
+        "authenticated": True,
+        "username": persisted["username"],
+        "avatar_url": persisted["avatar_url"],
     }
+
+
+@app.post("/auth/github/token")
+def auth_github_token(body: GithubTokenConnectRequest, response: Response) -> dict:
+    access_token = _resolve_submitted_secret(body.access_token, body.encrypted_secret)
+    if not access_token:
+        raise HTTPException(status_code=400, detail="access_token is required")
+    try:
+        persisted = _persist_github_login(access_token)
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text.strip() or str(exc)
+        raise HTTPException(status_code=400, detail=f"GitHub token validation failed: {detail}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub token validation network error: {exc}") from exc
+
+    session_token, _session = create_auth_session(persisted["user"]["id"])
+    response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+    return {
+        "authenticated": True,
+        "username": persisted["username"],
+        "avatar_url": persisted["avatar_url"],
+    }
+
+
+@app.get("/auth/me")
+def auth_me(session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE)) -> dict:
+    user = _current_auth_user(session_token)
+    if not user:
+        return {"authenticated": False}
+    return {
+        "authenticated": True,
+        "user": user,
+        "github_connected": bool(get_github_credential(user["id"])),
+    }
+
+
+@app.post("/auth/logout")
+def auth_logout(
+    response: Response,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    deleted = delete_auth_session(session_token or "")
+    response.delete_cookie(AUTH_SESSION_COOKIE, path="/")
+    return {"logged_out": True, "session_cleared": deleted}
 
 
 # Backward-compatible aliases
@@ -559,8 +933,9 @@ def query(
     request: Request,
     authorization: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    return _query_impl(body, request, authorization, x_request_id)
+    return _query_impl(body, request, authorization, x_request_id, session_token)
 
 
 app.include_router(v1)
