@@ -41,6 +41,27 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertIn("create_session", indexing["entities"]["symbols"])
         self.assertIn("_index_job", indexing["entities"]["symbols"])
 
+    def test_injects_deployment_config_files_for_metadata_search(self) -> None:
+        result = query_processor.process_query("how does deployment configuration work")
+
+        self.assertIn("docker-compose.yml", result["entities"]["files"])
+        self.assertIn("Dockerfile", result["entities"]["files"])
+        self.assertIn(".env.example", result["entities"]["files"])
+
+    def test_injects_provider_credential_symbols_for_metadata_search(self) -> None:
+        result = query_processor.process_query("explain provider credential lifecycle")
+
+        self.assertIn("create_provider_credential_v1", result["entities"]["symbols"])
+        self.assertIn("create_provider_credential", result["entities"]["symbols"])
+        self.assertIn("get_active_provider_credential", result["entities"]["symbols"])
+
+    def test_injects_architecture_files_for_metadata_search(self) -> None:
+        result = query_processor.process_query("architecture overview")
+
+        self.assertIn("README.md", result["entities"]["files"])
+        self.assertIn("docker-compose.yml", result["entities"]["files"])
+        self.assertIn("retrieval/api_service.py", result["entities"]["files"])
+
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")
 

@@ -49,6 +49,33 @@ _FLOW_TERMS = {
     "orchestration": {"query", "request", "api", "run_query", "provider", "thread", "source", "response"},
     "auth_session": {"auth", "authentication", "oauth", "github", "session", "cookie", "login", "logout", "credential"},
     "indexing_session": {"index", "indexing", "ingestion", "session", "repo", "clone", "collection", "qdrant"},
+    "deployment_config": {
+        "deploy",
+        "deployment",
+        "runtime",
+        "docker",
+        "compose",
+        "container",
+        "postgres",
+        "qdrant",
+        "environment",
+        "configuration",
+        "config",
+        "health",
+    },
+    "provider_credentials": {
+        "provider",
+        "credential",
+        "credentials",
+        "api_key",
+        "apikey",
+        "llm",
+        "model",
+        "active",
+        "activate",
+        "delete",
+        "settings",
+    },
 }
 
 FLOW_EVIDENCE_MODEL = {
@@ -145,6 +172,82 @@ FLOW_EVIDENCE_MODEL = {
             },
         ],
     },
+    "deployment_config": {
+        "title": "Deployment And Configuration Flow",
+        "roles": [
+            {
+                "name": "Runtime services",
+                "paths": {"docker-compose.yml", "docker-compose.yaml"},
+                "step": "Docker Compose defines the runtime services, service dependencies, ports, volumes, and health checks for local or container deployment.",
+                "required": True,
+            },
+            {
+                "name": "Backend container",
+                "paths": {"Dockerfile", "dockerfile"},
+                "step": "The backend Dockerfile builds the Python runtime, installs requirements, exposes the API port, and starts the FastAPI service with Uvicorn.",
+                "required": True,
+            },
+            {
+                "name": "Environment contract",
+                "paths": {".env.example", "deploy/.env.example"},
+                "step": "The environment template documents required secrets, database configuration, HTTPS/CORS settings, tenant identity, GitHub OAuth, and frontend/backend URLs.",
+                "required": True,
+            },
+            {
+                "name": "Deployment runbook",
+                "paths": {"docs/deployment_runbook.md", "deployment_runbook.md"},
+                "step": "The deployment runbook describes production environment setup, reverse proxy/TLS expectations, smoke tests, backups, rollback, and operational checks.",
+                "required": False,
+            },
+            {
+                "name": "Local backend runner",
+                "paths": {"scripts/run_local_backend.sh"},
+                "step": "The local runner starts Qdrant, loads `.env`, sets default repo/session values, and starts the API server for development validation.",
+                "required": False,
+            },
+        ],
+    },
+    "provider_credentials": {
+        "title": "Provider Credential Lifecycle",
+        "roles": [
+            {
+                "name": "List credentials API",
+                "symbols": {"list_provider_credentials_v1"},
+                "step": "The list endpoint authenticates the user and returns saved provider credentials without decrypted API keys.",
+                "required": True,
+            },
+            {
+                "name": "Create credential API",
+                "symbols": {"create_provider_credential_v1"},
+                "step": "The create endpoint validates provider, label, and submitted secret data, resolves encrypted/plain secret submission, and stores the credential for the authenticated user.",
+                "required": True,
+            },
+            {
+                "name": "Credential storage",
+                "symbols": {"create_provider_credential"},
+                "step": "`create_provider_credential()` encrypts the API key, writes provider/model metadata, and optionally marks the new credential active.",
+                "required": True,
+            },
+            {
+                "name": "Activation flow",
+                "symbols": {"activate_provider_credential_v1", "set_active_provider_credential"},
+                "step": "Activation clears other active credentials for the user and marks the selected credential active.",
+                "required": False,
+            },
+            {
+                "name": "Deletion flow",
+                "symbols": {"delete_provider_credential_v1", "delete_provider_credential"},
+                "step": "Deletion removes the credential and ensures another saved credential becomes active when possible.",
+                "required": False,
+            },
+            {
+                "name": "Query-time lookup",
+                "symbols": {"get_active_provider_credential", "_query_impl"},
+                "step": "Query execution requires an active provider credential and passes the decrypted provider config into retrieval answer generation.",
+                "required": False,
+            },
+        ],
+    },
 }
 
 
@@ -174,6 +277,83 @@ def is_code_request(raw_query: str) -> bool:
         return False
 
     return "snippet" in tokens
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: single-symbol deep-dive detector
+# ---------------------------------------------------------------------------
+
+_DEEP_DIVE_PHRASES = (
+    "what does",
+    "what is",
+    "how does",
+    "how do i use",
+    "what is the purpose of",
+    "what does the",
+    "how is",
+    "tell me about",
+    "describe the",
+    "show me how",
+    "show me what",
+    "explain the",
+    "explain this",
+)
+
+_SYMBOL_HINT_TOKENS = {
+    "function",
+    "method",
+    "class",
+    "variable",
+    "constant",
+    "module",
+    "attribute",
+    "field",
+    "param",
+    "parameter",
+    "decorator",
+    "endpoint",
+    "route",
+    "helper",
+    "util",
+    "handler",
+    "hook",
+    "component",
+}
+
+
+def is_symbol_deep_dive_request(raw_query: str) -> bool:
+    """Return True when the query is asking about a specific named symbol.
+
+    Triggered when:
+    - query contains a deep-dive phrase AND references a symbol-like token
+      (snake_case, camelCase, or a function/class/method keyword)
+    - query uses a backtick-quoted identifier (`symbol_name`)
+    """
+    query = raw_query.strip().lower()
+    if not query:
+        return False
+    # Exclude broader structural / flow queries
+    if is_architecture_request(raw_query) or is_flow_explanation_request(raw_query):
+        return False
+    if is_overview_request(raw_query):
+        return False
+
+    # Backtick-quoted identifier is a strong signal
+    if re.search(r'`[A-Za-z_][A-Za-z0-9_.()]*`', raw_query):
+        return True
+
+    has_deep_dive_phrase = any(phrase in query for phrase in _DEEP_DIVE_PHRASES)
+    if not has_deep_dive_phrase:
+        return False
+
+    tokens = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', raw_query))
+    # snake_case or camelCase symbol (has underscore or mixed case, length > 3)
+    has_symbol_token = any(
+        ("_" in t or (t != t.lower() and t != t.upper())) and len(t) > 3
+        for t in tokens
+    )
+    has_symbol_hint = bool(tokens & _SYMBOL_HINT_TOKENS)
+    return has_symbol_token or has_symbol_hint
 
 
 def is_explanation_request(raw_query: str) -> bool:
@@ -215,6 +395,24 @@ def is_overview_request(raw_query: str) -> bool:
     ) and bool(tokens & {"about", "purpose", "summary", "explain", "describe", "what"})
 
 
+def is_architecture_request(raw_query: str) -> bool:
+    query = raw_query.strip().lower()
+    if not query:
+        return False
+    return any(
+        phrase in query
+        for phrase in (
+            "architecture",
+            "system design",
+            "project structure",
+            "how is this project structured",
+            "how is the project structured",
+            "module layout",
+            "runtime shape",
+        )
+    )
+
+
 def is_flow_explanation_request(raw_query: str) -> bool:
     query = raw_query.strip().lower()
     if not query:
@@ -232,6 +430,9 @@ def is_flow_explanation_request(raw_query: str) -> bool:
         "process",
         "work",
         "works",
+        "deployment",
+        "configuration",
+        "config",
     }
     phase_one_terms = set().union(*_FLOW_TERMS.values())
     if not (tokens & flow_markers):
@@ -267,15 +468,9 @@ def build_flow_answer(
         lines.append("This answer is based on partial retrieved evidence; some adjacent helpers may be outside the selected source set.")
         lines.append("")
 
-    lines.append("Flow:")
-    steps = _flow_steps(flow_kind, selected_sources)
+    lines.append("Lifecycle:" if flow_kind == "auth_session" else "Flow:")
+    steps = _flow_step_lines(flow_kind, selected_sources)
     lines.extend(f"{index}. {step}" for index, step in enumerate(steps, start=1))
-    lines.append("")
-    lines.append("Key evidence:")
-    lines.extend(_flow_evidence_lines(selected_sources))
-    lines.append("")
-    lines.append("Sources:")
-    lines.extend(_source_reference_lines(selected_sources[:7]))
     answer = "\n".join(lines)
     if return_sources:
         return answer, selected_sources[:7]
@@ -286,10 +481,14 @@ def build_code_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -
     selected_sources = _preferred_sources(sources)
     snippets: list[str] = []
 
-    for source in selected_sources:
-        formatted = _format_source_snippet(source)
-        if formatted:
-            snippets.append(formatted)
+    best = _select_best_snippet(raw_query, selected_sources)
+    if best:
+        snippets.append(best)
+    else:
+        for source in selected_sources:
+            formatted = _format_source_snippet(source)
+            if formatted:
+                snippets.append(formatted)
 
     for support in find_supporting_import_exports(raw_query, selected_sources, chunks, limit=2):
         if support["formatted"] not in snippets:
@@ -300,6 +499,103 @@ def build_code_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -
 
     intro = "Code snippets from retrieved context:"
     return f"{intro}\n\n" + "\n\n".join(snippets[:2])
+
+def build_symbol_deep_dive_answer(
+    raw_query: str,
+    sources: list[dict],
+    chunks: list[dict],
+) -> str:
+    """Deterministic single-symbol deep-dive answer.
+
+    Triggered when a query asks about a specific named symbol and the
+    full symbol evidence is retrieved.  Returns None-equivalent empty
+    string when evidence is insufficient so the caller can fall through
+    to the LLM path.
+    """
+    selected = _preferred_sources(sources)
+    if not selected:
+        return ""
+
+    primary = selected[0]
+    symbol = str(primary.get("symbol_name", "")).strip() or "<file>"
+    path = str(primary.get("relative_path", "")).strip()
+    start = int(primary.get("start_line", 0))
+    end = int(primary.get("end_line", 0))
+    chunk = next(
+        (c for c in chunks
+         if c.get("relative_path") == path
+         and c.get("symbol_name") == primary.get("symbol_name")),
+        primary,
+    )
+
+    # Require at least a plausible symbol (not just a file)
+    if not primary.get("symbol_name"):
+        return ""
+
+    # Build header
+    lines: list[str] = []
+    signature = str(chunk.get("signature", "")).strip()
+    docstring = str(chunk.get("docstring", "")).strip()
+    summary = str(chunk.get("summary", "") or primary.get("summary", "")).strip()
+
+    if signature:
+        direct = f"`{symbol}` — {path}"
+        lines += [direct, "", f"**Signature:** `{signature}`"]
+    elif summary:
+        direct = summary.rstrip(".") + "."
+        lines += [direct, ""]
+    else:
+        direct = f"`{symbol}` is defined in `{path}` (lines {start}–{end})."
+        lines += [direct, ""]
+
+    if docstring:
+        lines.append(f"**Docstring:** {docstring}")
+        lines.append("")
+
+    # Calls / dependencies
+    calls = list(chunk.get("calls") or [])
+    if calls:
+        call_str = ", ".join(f"`{c}`" for c in calls[:6])
+        lines.append(f"**Calls:** {call_str}")
+
+    # Parameters
+    params = list(chunk.get("parameters") or [])
+    if params:
+        param_str = ", ".join(f"`{p}`" for p in params[:6])
+        lines.append(f"**Parameters:** {param_str}")
+
+    # Short code excerpt (≤20 lines)
+    excerpt = _read_source_excerpt(primary)
+    excerpt_lines = excerpt.splitlines() if excerpt else []
+    if excerpt_lines and len(excerpt_lines) <= 20:
+        lang = _code_fence_language(path)
+        lines.append("")
+        lines.append("**Implementation:**")
+        lines.append(f"```{lang}")
+        lines.extend(excerpt_lines)
+        lines.append("```")
+    elif excerpt_lines:
+        # Too long — show first 10 lines with a truncation note
+        lang = _code_fence_language(path)
+        lines.append("")
+        lines.append("**Implementation (first 10 lines):**")
+        lines.append(f"```{lang}")
+        lines.extend(excerpt_lines[:10])
+        lines.append(f"# … ({len(excerpt_lines) - 10} more lines in {path})")
+        lines.append("```")
+
+    # Supporting import backing
+    support = find_supporting_import_exports(raw_query, selected, chunks, limit=1)
+    if support:
+        sup = support[0]
+        lines.append("")
+        lines.append(f"**Backing data:** `{sup['symbol_name']}` from `{sup['relative_path']}`")
+
+    lines.append("")
+    lines.append("Sources:")
+    all_sources = selected + support
+    lines.extend(_source_reference_lines(all_sources[:4]))
+    return "\n".join(lines)
 
 
 def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
@@ -322,6 +618,34 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
     lines.append("")
     lines.append("Sources:")
     lines.extend(_source_reference_lines(selected_sources[:5]))
+    return "\n".join(lines)
+
+
+def build_architecture_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
+    selected_sources = _preferred_overview_sources(sources)
+    if not selected_sources:
+        return "Insufficient context in retrieved code to describe the architecture confidently."
+
+    purpose = _project_summary(selected_sources, chunks)
+    if not purpose:
+        purpose = "The retrieved evidence only partially describes this repository's architecture."
+
+    runtime_points = _architecture_runtime_points(selected_sources)
+    module_points = _architecture_module_points(selected_sources)
+    boundary_points = _architecture_boundary_points(selected_sources)
+
+    lines = ["Architecture Summary", "", purpose, ""]
+    lines.append("Runtime Shape:")
+    lines.extend(f"- {point}" for point in (runtime_points or ["Runtime/service structure is only partially visible in retrieved evidence."])[:5])
+    lines.append("")
+    lines.append("Code Organization:")
+    lines.extend(f"- {point}" for point in (module_points or ["Module boundaries are only partially visible in retrieved evidence."])[:5])
+    lines.append("")
+    lines.append("Configuration And Deployment Boundaries:")
+    lines.extend(f"- {point}" for point in (boundary_points or ["Configuration/deployment boundaries are only partially visible in retrieved evidence."])[:5])
+    lines.append("")
+    lines.append("Sources:")
+    lines.extend(_source_reference_lines(selected_sources[:6]))
     return "\n".join(lines)
 
 
@@ -357,15 +681,94 @@ def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[d
 
     all_sources = selected_sources + support
     bullets.append(
-        f"- Source coverage: {', '.join(line[2:] for line in _source_reference_lines(all_sources[:5]))}."
-    )
+        f"- Source coverage: {', '.join(line[2:] for line in _source_reference_lines(all_sources[:5]))}.")
 
     lines = [direct, ""]
     lines.extend(bullets)
+    # Add a short code sample when it improves clarity
+    inline_snippet = _add_snippet_to_explanation(primary, snippet)
+    if inline_snippet:
+        lines.append("")
+        lines.append(inline_snippet)
     lines.append("")
     lines.append("Sources:")
     lines.extend(_source_reference_lines(all_sources[:5]))
     return "\n".join(lines)
+
+
+def _select_best_snippet(raw_query: str, sources: list[dict]) -> str | None:
+    """Pick the best single snippet for a code-request answer.
+
+    Scoring rules (higher = better):
+    - +4  symbol_name appears in query (case-insensitive)
+    - +3  each query token that appears in symbol_name or relative_path
+    - +2  source is expansion_type == "primary"
+    - -10 excerpt is < 3 lines (stub/signature-only, not useful)
+    - -5  excerpt is > 80 lines (too large for a snippet response)
+
+    Returns the formatted snippet string of the best-scoring source,
+    or None if no source meets the minimum quality bar.
+    """
+    query_lower = raw_query.lower()
+    query_tokens = set(re.findall(r"[a-z_][a-z0-9_]*", query_lower))
+
+    best_score: int | None = None
+    best_formatted: str | None = None
+
+    for source in sources:
+        symbol = str(source.get("symbol_name", "")).lower()
+        path = str(source.get("relative_path", "")).lower()
+        is_primary = source.get("expansion_type") == "primary"
+
+        formatted = _format_source_snippet(source)
+        if not formatted:
+            continue
+
+        excerpt_lines = len(formatted.splitlines())
+        score = 0
+        if symbol and symbol in query_lower:
+            score += 4
+        for token in query_tokens:
+            if token and len(token) > 2 and (token in symbol or token in path):
+                score += 3
+        if is_primary:
+            score += 2
+        if excerpt_lines < 3:
+            score -= 10
+        if excerpt_lines > 80:
+            score -= 5
+
+        if best_score is None or score > best_score:
+            best_score = score
+            best_formatted = formatted
+
+    # Only return if score is non-negative (avoids returning stubs)
+    if best_score is not None and best_score >= 0:
+        return best_formatted
+    return None
+
+
+def _add_snippet_to_explanation(source: dict, excerpt: str) -> str:
+    """Return a short inline code block to append to an explanation answer.
+
+    Only appended when:
+    - The excerpt is between 3 and 15 lines (concise enough to be inline)
+    - The source is a code file (not markdown/JSON/TOML/YAML)
+
+    Returns an empty string when the conditions are not met.
+    """
+    if not excerpt:
+        return ""
+    path = str(source.get("relative_path", ""))
+    suffix = Path(path).suffix.lower()
+    non_code_suffixes = {".md", ".json", ".toml", ".yaml", ".yml", ".txt", ".env"}
+    if suffix in non_code_suffixes:
+        return ""
+    lines = excerpt.splitlines()
+    if len(lines) < 3 or len(lines) > 15:
+        return ""
+    lang = _code_fence_language(path)
+    return f"```{lang}\n{excerpt}\n```"
 
 
 def _preferred_sources(sources: list[dict]) -> list[dict]:
@@ -415,6 +818,44 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
             score += 10
         if flow_kind == "indexing_session" and symbol in {"create_session", "_index_job", "retry_indexing"}:
             score += 10
+        if flow_kind == "deployment_config" and any(
+            path.endswith(part)
+            for part in (
+                "docker-compose.yml",
+                "docker-compose.yaml",
+                "dockerfile",
+                ".env.example",
+                "docs/deployment_runbook.md",
+                "scripts/run_local_backend.sh",
+            )
+        ):
+            score += 12
+        if flow_kind == "deployment_config" and any(
+            term in text
+            for term in (
+                "codeseek_database_url",
+                "postgres",
+                "qdrant",
+                "uvicorn",
+                "healthcheck",
+                "cors",
+                "https",
+            )
+        ):
+            score += 6
+        if flow_kind == "provider_credentials" and path.endswith(("provider_store.py", "api_service.py")):
+            score += 10
+        if flow_kind == "provider_credentials" and any(
+            term in symbol
+            for term in (
+                "provider_credential",
+                "active_provider",
+                "create_provider",
+                "delete_provider",
+                "set_active_provider",
+            )
+        ):
+            score += 12
         if score > 0:
             scored.append((score, source))
 
@@ -559,23 +1000,59 @@ def _read_imports(relative_path: str) -> list[str]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    return [line.strip() for line in lines if line.strip().startswith("import ")]
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        # JS/TS: import { X } from '...'
+        if stripped.startswith("import ") and "from" in stripped:
+            result.append(stripped)
+        # Python: from module import X, Y
+        elif stripped.startswith("from ") and " import " in stripped:
+            result.append(stripped)
+        # Python bare: import module  (less useful for named lookup, include anyway)
+        elif stripped.startswith("import ") and not "{" in stripped:
+            result.append(stripped)
+    return result
 
 
 def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
-    match = re.search(r'import\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', statement)
-    if not match:
-        return []
+    """Return (imported_name, module_path) pairs from an import statement.
 
-    names = []
-    for part in match.group(1).split(","):
-        cleaned = part.strip()
-        if not cleaned:
-            continue
-        imported_name = cleaned.split(" as ", 1)[0].strip()
-        if imported_name:
-            names.append((imported_name, match.group(2).strip()))
-    return names
+    Handles:
+    - ES6/TS destructuring:  import { X, Y as Z } from 'module'
+    - Python from-import:    from module.path import X, Y as Z
+    """
+    # ES6/TS: import { X, Y as Z } from 'module'
+    match = re.search(r'import\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', statement)
+    if match:
+        names = []
+        for part in match.group(1).split(","):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            imported_name = cleaned.split(" as ", 1)[0].strip()
+            if imported_name:
+                names.append((imported_name, match.group(2).strip()))
+        return names
+
+    # Python: from module.path import X, Y as Z
+    py_match = re.match(r'^from\s+([\w.]+)\s+import\s+(.+)$', statement.strip())
+    if py_match:
+        module_path = py_match.group(1).strip()
+        imports_part = py_match.group(2).strip()
+        # Strip parentheses if present: from x import (A, B)
+        imports_part = imports_part.strip("()")
+        names = []
+        for part in imports_part.split(","):
+            cleaned = part.strip()
+            if not cleaned or cleaned == "*":
+                continue
+            imported_name = cleaned.split(" as ", 1)[0].strip()
+            if imported_name and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', imported_name):
+                names.append((imported_name, module_path))
+        return names
+
+    return []
 
 
 def _query_tokens(raw_query: str) -> set[str]:
@@ -601,6 +1078,14 @@ def _split_identifier(identifier: str) -> list[str]:
 
 
 def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | None:
+    """Resolve an import module path to an absolute filesystem Path.
+
+    Handles:
+    - JS/TS alias:     @/lib/data  → <repo>/src/lib/data.{ts,tsx,js,jsx}
+    - JS/TS relative:  ./utils     → relative to source file
+    - Python dotted:   retrieval.config → <repo>/retrieval/config.py
+    - Python relative: .helpers    → relative package (limited support)
+    """
     repo_root = Path(get_repo_root())
     source_path = repo_root / source_relative_path
 
@@ -608,6 +1093,11 @@ def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | 
         base = repo_root / "src" / module_path[2:]
     elif module_path.startswith("./") or module_path.startswith("../"):
         base = (source_path.parent / module_path).resolve()
+    elif re.match(r'^[A-Za-z_][A-Za-z0-9_.]*$', module_path):
+        # Python dotted module path: convert dots to path separators
+        rel_path = module_path.replace(".", "/")
+        # Try as a plain file first, then as a package (directory with __init__.py)
+        base = repo_root / rel_path
     else:
         return None
 
@@ -617,10 +1107,12 @@ def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | 
         base.with_suffix(".tsx"),
         base.with_suffix(".js"),
         base.with_suffix(".jsx"),
+        base.with_suffix(".py"),
         base / "index.ts",
         base / "index.tsx",
         base / "index.js",
         base / "index.jsx",
+        base / "__init__.py",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -629,11 +1121,26 @@ def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | 
 
 
 def _extract_export_block(path: Path, identifier: str) -> dict | None:
+    """Extract the definition block for `identifier` from `path`.
+
+    Supports:
+    - JS/TS:  export const X = ...   (array / object literal)
+    - Python: X = ...  (module-level constant assignment)
+    - Python: def X(...):  (function definition)
+    - Python: class X:  (class definition)
+    """
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
 
+    suffix = path.suffix.lower()
+    is_python = suffix == ".py"
+
+    if is_python:
+        return _extract_python_symbol(path, lines, identifier)
+
+    # JS/TS: export const X = ...
     pattern = re.compile(rf"^\s*export\s+const\s+{re.escape(identifier)}\s*=")
     for index, line in enumerate(lines):
         if not pattern.search(line):
@@ -658,6 +1165,85 @@ def _extract_export_block(path: Path, identifier: str) -> dict | None:
             ),
         }
     return None
+
+
+def _extract_python_symbol(path: Path, lines: list[str], identifier: str) -> dict | None:
+    """Extract a Python module-level symbol: constant, function, or class."""
+    # Match: X = ...  /  def X(  /  class X(:  /  class X(
+    patterns = [
+        re.compile(rf"^{re.escape(identifier)}\s*="),
+        re.compile(rf"^def\s+{re.escape(identifier)}\s*[\\ (]"),
+        re.compile(rf"^class\s+{re.escape(identifier)}\s*[:(]"),
+    ]
+
+    for index, line in enumerate(lines):
+        stripped = line.rstrip()
+        if not any(pat.match(stripped) for pat in patterns):
+            continue
+
+        # Find end: for functions/classes, collect until next top-level def/class/blank sequence.
+        # For constants, find end of the expression (matching brackets or single line).
+        start = index
+        is_block = stripped.startswith(("def ", "class "))
+        if is_block:
+            end = _find_python_block_end(lines, index)
+        else:
+            end = _find_block_end(lines, index)
+
+        excerpt = "\n".join(lines[start : end + 1]).rstrip()
+        if not excerpt:
+            return None
+
+        relative_path = str(path.relative_to(Path(get_repo_root())))
+        header = f"{relative_path} :: {identifier} (lines {start + 1}-{end + 1})"
+        return {
+            "relative_path": relative_path,
+            "symbol_name": identifier,
+            "start_line": start + 1,
+            "end_line": end + 1,
+            "formatted": f"{header}\n```python\n{excerpt}\n```",
+            "context_block": (
+                f"### {relative_path} — {identifier} (lines {start + 1}-{end + 1})\n\n"
+                f"{excerpt}"
+            ),
+        }
+    return None
+
+
+def _find_python_block_end(lines: list[str], start_index: int) -> int:
+    """Find the end of a Python function or class body using indentation.
+
+    Returns the last line index (0-based) of the block.  Capped at 80 lines
+    from start to avoid runaway extraction on large functions.
+    """
+    cap = min(len(lines), start_index + 80)
+    if start_index + 1 >= len(lines):
+        return start_index
+
+    # Determine the body indentation from the first non-blank line after the def/class
+    body_indent: int | None = None
+    for i in range(start_index + 1, cap):
+        stripped = lines[i]
+        if stripped.strip() == "":
+            continue
+        body_indent = len(stripped) - len(stripped.lstrip())
+        break
+
+    if body_indent is None:
+        return start_index
+
+    last = start_index
+    for i in range(start_index + 1, cap):
+        stripped = lines[i]
+        if stripped.strip() == "":
+            last = i  # blank lines inside the body are included
+            continue
+        current_indent = len(stripped) - len(stripped.lstrip())
+        if current_indent < body_indent:
+            break
+        last = i
+
+    return last
 
 
 def _find_block_end(lines: list[str], start_index: int) -> int:
@@ -801,6 +1387,78 @@ def _overview_architecture_points(sources: list[dict]) -> list[str]:
     return _dedupe(points)
 
 
+def _architecture_runtime_points(sources: list[dict]) -> list[str]:
+    points: list[str] = []
+    for source in sources:
+        relative_path = str(source.get("relative_path", "")).strip()
+        lower = relative_path.lower()
+        summary = _summary_line(source)
+        if _is_repo_summary_source(source):
+            services = list(source.get("services") or [])
+            frameworks = list(source.get("detected_frameworks") or [])
+            if services:
+                points.append(f"Runtime services are summarized as: {', '.join(services[:6])}.")
+            if frameworks:
+                points.append(f"Primary frameworks/technologies surfaced by summary: {', '.join(frameworks[:8])}.")
+        elif lower.endswith(("docker-compose.yml", "docker-compose.yaml")):
+            services = list(source.get("services") or []) or _services_from_text(summary or _read_source_excerpt(source))
+            if services:
+                points.append(f"{relative_path} defines runtime services: {', '.join(services[:6])}.")
+            else:
+                points.append(f"{relative_path} defines service wiring and runtime dependencies.")
+        elif lower.endswith(("requirements.txt", "pyproject.toml", "package.json")):
+            points.append(f"{relative_path} contributes runtime/dependency metadata.")
+    return _dedupe(points)
+
+
+def _architecture_module_points(sources: list[dict]) -> list[str]:
+    points: list[str] = []
+    for source in sources:
+        relative_path = str(source.get("relative_path", "")).strip()
+        lower = relative_path.lower()
+        symbol = str(source.get("symbol_name", "")).strip() or "<file>"
+        if _is_repo_summary_source(source):
+            entrypoints = list(source.get("entrypoints") or [])
+            if entrypoints:
+                points.append(f"Entrypoints surfaced by repo summary: {', '.join(entrypoints[:6])}.")
+            architecture_notes = list(source.get("architecture_notes") or [])
+            points.extend(str(note).rstrip(".") + "." for note in architecture_notes[:4])
+        elif lower.endswith(("api_service.py", "main.py", "app.py")):
+            points.append(f"{relative_path} provides an application/API entrypoint through `{symbol}`.")
+        elif "session_indexer.py" in lower:
+            points.append(f"{relative_path} owns repository session creation and indexing orchestration.")
+        elif "rag_ingestion" in lower:
+            points.append(f"{relative_path} is part of the ingestion pipeline that parses, chunks, embeds, or stores repository evidence.")
+        elif "retrieval/" in lower:
+            points.append(f"{relative_path} contributes retrieval/query answering behavior via `{symbol}`.")
+    return _dedupe(points)
+
+
+def _architecture_boundary_points(sources: list[dict]) -> list[str]:
+    points: list[str] = []
+    for source in sources:
+        relative_path = str(source.get("relative_path", "")).strip()
+        lower = relative_path.lower()
+        summary = _summary_line(source)
+        if _is_repo_summary_source(source):
+            env_keys = list(source.get("env_keys") or [])
+            if env_keys:
+                points.append(f"Configuration boundary includes env keys such as: {', '.join(env_keys[:6])}.")
+        elif lower.endswith(".env.example"):
+            env_keys = list(source.get("env_keys") or []) or _env_keys_from_text(summary or _read_source_excerpt(source))
+            if env_keys:
+                points.append(f"{relative_path} documents environment configuration: {', '.join(env_keys[:6])}.")
+            else:
+                points.append(f"{relative_path} documents required environment configuration.")
+        elif lower.endswith("dockerfile") or lower == "dockerfile":
+            points.append(f"{relative_path} defines the container build/runtime boundary.")
+        elif "deployment_runbook" in lower:
+            points.append(f"{relative_path} documents deployment operations, smoke tests, backups, and rollback.")
+        elif lower.endswith(("docker-compose.yml", "docker-compose.yaml")):
+            points.append(f"{relative_path} defines service dependencies, ports, volumes, and health checks.")
+    return _dedupe(points)
+
+
 def _extract_tech_stack(sources: list[dict]) -> list[str]:
     found: list[str] = []
     for source in sources:
@@ -901,15 +1559,33 @@ def _flow_steps(flow_kind: str, sources: list[dict]) -> list[str]:
     ]
 
 
+def _flow_step_lines(flow_kind: str, sources: list[dict]) -> list[str]:
+    model = FLOW_EVIDENCE_MODEL.get(flow_kind, FLOW_EVIDENCE_MODEL["orchestration"])
+    role_matches = _flow_role_matches(flow_kind, sources)
+    steps: list[str] = []
+    for role in model["roles"]:
+        role_name = str(role["name"])
+        source = role_matches.get(role_name)
+        if not source:
+            continue
+        evidence = _inline_source_reference(source)
+        steps.append(f"**{role_name}** - {role['step']} Evidence: {evidence}.")
+    if steps:
+        return steps
+    return _flow_steps(flow_kind, sources)
+
+
 def _flow_role_matches(flow_kind: str, sources: list[dict]) -> dict[str, dict]:
     model = FLOW_EVIDENCE_MODEL.get(flow_kind, FLOW_EVIDENCE_MODEL["orchestration"])
     matches: dict[str, dict] = {}
     for role in model["roles"]:
         role_name = str(role["name"])
         role_symbols = set(role.get("symbols") or [])
+        role_paths = {str(path).lower() for path in role.get("paths") or []}
         for source in sources:
             symbol = str(source.get("symbol_name", "")).strip()
-            if symbol in role_symbols:
+            path = str(source.get("relative_path", "")).strip().lower()
+            if symbol in role_symbols or path in role_paths or any(path.endswith(f"/{role_path}") for role_path in role_paths):
                 matches[role_name] = source
                 break
     return matches
@@ -935,6 +1611,16 @@ def _flow_evidence_lines(sources: list[dict]) -> list[str]:
             f"- `{relative_path} :: {symbol}` lines {source.get('start_line', 0)}-{source.get('end_line', 0)}{suffix}"
         )
     return lines
+
+
+def _inline_source_reference(source: dict) -> str:
+    relative_path = str(source.get("relative_path", "")).strip()
+    symbol = str(source.get("symbol_name", "")).strip() or "<file>"
+    start_line = int(source.get("start_line", 0) or 0)
+    end_line = int(source.get("end_line", 0) or 0)
+    if start_line and end_line:
+        return f"`{relative_path} :: {symbol}` lines {start_line}-{end_line}"
+    return f"`{relative_path} :: {symbol}`"
 
 
 def _map_dependency_names(names: list[str]) -> list[str]:

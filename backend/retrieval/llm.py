@@ -45,7 +45,7 @@ SYSTEM_PROMPT = (
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
 OPENROUTER_MODEL = os.getenv("RETRIEVAL_OPENROUTER_MODEL", "openai/gpt-4o-mini")
-GEMINI_MODEL = os.getenv("RETRIEVAL_GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("RETRIEVAL_GEMINI_MODEL", "gemini-1.5-flash")
 
 _llm_failures = 0
 _llm_circuit_open_until = 0.0

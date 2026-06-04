@@ -1,8 +1,24 @@
-"""Display-time source filtering helpers."""
+"""Display-time source filtering helpers.
+
+Two-layer source model
+----------------------
+display_sources   — strict citation set, max DISPLAY_SOURCES_CAP (6).
+                    Shown to the user as source cards.
+                    Injected into the LLM prompt as the ALLOWED SOURCES list.
+reasoning_sources — broader synthesis set, max REASONING_SOURCES_CAP (12).
+                    Must be a superset of display_sources.
+                    Used to assemble the CODE CONTEXT block passed to the LLM.
+                    Never cited directly unless promoted into display_sources.
+
+When RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=0 (or the flag is absent and disabled),
+both lists collapse to the same single-list behaviour as before.
+"""
 
 from __future__ import annotations
 
 import re
+
+from retrieval.config import DISPLAY_SOURCES_CAP, REASONING_SOURCES_CAP
 
 
 def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict]:
@@ -35,7 +51,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
 
     strong_threshold = 1 if (wants_compound or wants_overview) else 2
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
-    primary_cap = 7 if (wants_auth_trace or wants_phase1_flow) else (6 if (wants_compound or wants_overview) else 5)
+    primary_cap = _primary_source_cap(raw_query, wants_auth_trace, wants_phase1_flow, wants_compound, wants_overview)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
     chosen_primary = (
         strong_primary[:primary_cap]
@@ -64,6 +80,118 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     return unique
 
 
+def split_sources_two_layer(
+    raw_query: str,
+    assembled_sources: list[dict],
+    enabled: bool = True,
+) -> tuple[list[dict], list[dict]]:
+    """Return (display_sources, reasoning_sources) implementing the two-layer model.
+
+    display_sources
+        Strict citation set capped at DISPLAY_SOURCES_CAP (default 6).
+        Derived from select_sources_for_display().
+        Used for user-facing source cards and the LLM ALLOWED SOURCES list.
+
+    reasoning_sources
+        Broader synthesis set capped at REASONING_SOURCES_CAP (default 12).
+        Always a superset of display_sources.
+        Provides extra context for LLM synthesis without relaxing citation safety.
+
+    When enabled=False both lists are identical to display_sources (legacy behaviour).
+    """
+    display = select_sources_for_display(raw_query, assembled_sources)
+    display = display[:DISPLAY_SOURCES_CAP]
+
+    if not enabled:
+        return display, list(display)
+
+    display_keys: set[tuple] = {_source_key(s) for s in display}
+    reasoning: list[dict] = list(display)
+
+    remaining = [s for s in assembled_sources if _source_key(s) not in display_keys]
+    primary_remaining = [s for s in remaining if s.get("expansion_type") == "primary"]
+    expanded_remaining = [s for s in remaining if s.get("expansion_type") != "primary"]
+
+    for candidate in primary_remaining + expanded_remaining:
+        if len(reasoning) >= REASONING_SOURCES_CAP:
+            break
+        key = _source_key(candidate)
+        if key in display_keys:
+            continue
+        reasoning.append(candidate)
+        display_keys.add(key)
+
+    return display, reasoning
+
+
+def _source_key(src: dict) -> tuple:
+    return (
+        src.get("relative_path", ""),
+        src.get("symbol_name", ""),
+        int(src.get("start_line", 0)),
+        int(src.get("end_line", 0)),
+        src.get("expansion_type", ""),
+    )
+
+
+def score_evidence_confidence(
+    raw_query: str,
+    display_sources: list[dict],
+) -> dict:
+    """Classify the quality of the assembled evidence for this query.
+
+    Returns a dict with:
+        level   — "strong" | "partial" | "weak"
+        reason  — short human-readable explanation (for observability / logging)
+        count   — number of display sources considered
+
+    Classification rules (in priority order):
+    1. No sources at all → "weak"
+    2. No primary sources → "weak"  (all sources are expansion-only, low confidence)
+    3. Top source has zero lexical overlap with the query → "weak"
+    4. Fewer than 2 display sources → "partial"
+    5. Top overlap score is 1 (single weak token hit) and fewer than 3 sources → "partial"
+    6. Otherwise → "strong"
+    """
+    count = len(display_sources)
+    if count == 0:
+        return {"level": "weak", "reason": "no sources assembled", "count": 0}
+
+    has_primary = any(s.get("expansion_type") == "primary" for s in display_sources)
+    if not has_primary:
+        return {
+            "level": "weak",
+            "reason": "no primary sources; only expansion results",
+            "count": count,
+        }
+
+    query_tokens = query_tokens_from_text(raw_query)
+    top_score = max(source_relevance_score(s, query_tokens) for s in display_sources)
+
+    if top_score == 0:
+        return {
+            "level": "weak",
+            "reason": "top source has zero lexical overlap with query",
+            "count": count,
+        }
+
+    if count < 2:
+        return {
+            "level": "partial",
+            "reason": f"only {count} display source(s) assembled",
+            "count": count,
+        }
+
+    if top_score == 1 and count < 3:
+        return {
+            "level": "partial",
+            "reason": "low relevance score with limited source coverage",
+            "count": count,
+        }
+
+    return {"level": "strong", "reason": "adequate sources with lexical overlap", "count": count}
+
+
 def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
     """Return compact decision metadata for observability."""
     query_tokens = query_tokens_from_text(raw_query)
@@ -88,11 +216,12 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         if expanded_non_tests:
             expanded = expanded_non_tests
 
-    primary_cap = 7 if (wants_auth_trace or wants_phase1_flow) else (6 if (wants_compound or wants_overview) else 5)
+    primary_cap = _primary_source_cap(raw_query, wants_auth_trace, wants_phase1_flow, wants_compound, wants_overview)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
     selected = select_sources_for_display(raw_query, sources)
     selected_primary = sum(1 for s in selected if s.get("expansion_type") == "primary")
     selected_expanded = len(selected) - selected_primary
+    display, reasoning = split_sources_two_layer(raw_query, sources)
     return {
         "query_tokens": sorted(query_tokens),
         "wants_tests": wants_tests,
@@ -107,6 +236,8 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         "selected_expanded": selected_expanded,
         "primary_cap": primary_cap,
         "expanded_cap": expanded_cap,
+        "display_count": len(display),
+        "reasoning_count": len(reasoning),
     }
 
 
@@ -158,6 +289,23 @@ def _inject_trace_anchors(
     return result
 
 
+def _primary_source_cap(
+    raw_query: str,
+    wants_auth_trace: bool,
+    wants_phase1_flow: bool,
+    wants_compound: bool,
+    wants_overview: bool,
+) -> int:
+    q = raw_query.lower()
+    if wants_phase1_flow and any(term in q for term in ("provider", "credential", "credentials", "api key", "llm", "model")):
+        return 9
+    if wants_auth_trace or wants_phase1_flow:
+        return 7
+    if wants_compound or wants_overview:
+        return 6
+    return 5
+
+
 def _inject_phase1_flow_anchors(
     raw_query: str,
     all_primary: list[dict],
@@ -181,7 +329,8 @@ def _inject_phase1_flow_anchors(
     for anchor in anchors:
         for src in all_primary:
             symbol = str(src.get("symbol_name", ""))
-            if symbol != anchor:
+            path = str(src.get("relative_path", ""))
+            if symbol != anchor and path != anchor and not path.endswith(f"/{anchor}"):
                 continue
             key = (
                 src.get("relative_path", ""),
@@ -243,6 +392,17 @@ def _phase1_flow_anchors(raw_query: str) -> list[str]:
         ]
     if any(term in q for term in ("index", "indexing", "ingestion", "repo session", "session creation", "clone")):
         return ["create_session", "_index_job", "run_pipeline"]
+    if any(term in q for term in ("deploy", "deployment", "docker", "compose", "container", "environment", "configuration", "config")):
+        return ["docker-compose.yml", "Dockerfile", ".env.example", "deployment_runbook", "run_local_backend"]
+    if any(term in q for term in ("provider", "credential", "credentials", "api key", "llm", "model")):
+        return [
+            "list_provider_credentials_v1",
+            "create_provider_credential_v1",
+            "create_provider_credential",
+            "set_active_provider_credential",
+            "delete_provider_credential",
+            "get_active_provider_credential",
+        ]
     if any(term in q for term in ("backend", "request", "query", "orchestration", "api")):
         return ["_query_impl", "run_query"]
     return []
@@ -309,7 +469,26 @@ def query_is_auth_flow_trace(raw_query: str) -> bool:
 
 def query_is_phase1_flow(raw_query: str) -> bool:
     q = raw_query.lower()
-    if not any(marker in q for marker in ("flow", "lifecycle", "orchestration", "trace", "walk me through", "step")):
+    if not any(
+        marker in q
+        for marker in (
+            "flow",
+            "lifecycle",
+            "orchestration",
+            "trace",
+            "walk me through",
+            "step",
+            "deployment",
+            "configuration",
+            "config",
+            "provider",
+            "credential",
+            "credentials",
+            "api key",
+            "llm",
+            "model",
+        )
+    ):
         return False
     return any(
         term in q
@@ -329,6 +508,20 @@ def query_is_phase1_flow(raw_query: str) -> bool:
             "repo session",
             "session creation",
             "clone",
+            "deploy",
+            "deployment",
+            "docker",
+            "compose",
+            "container",
+            "environment",
+            "configuration",
+            "config",
+            "provider",
+            "credential",
+            "credentials",
+            "api key",
+            "llm",
+            "model",
         )
     )
 
@@ -346,6 +539,12 @@ def query_is_overview_summary(raw_query: str) -> bool:
             "what does this app do",
             "tech stack",
             "architecture overview",
+            "architecture",
+            "system design",
+            "project structure",
+            "how is this project structured",
+            "module layout",
+            "runtime shape",
         )
     )
 

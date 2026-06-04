@@ -157,6 +157,7 @@ def _metadata_search(raw_query: str, entities: dict):
     files = entities.get("files", [])
 
     for file_hint in files:
+        found_file_hint = False
         response = _qdrant_call(lambda: client.scroll(
             collection_name=collection,
             scroll_filter=Filter(
@@ -165,10 +166,14 @@ def _metadata_search(raw_query: str, entities: dict):
             limit=30,
             with_payload=True,
         ))
-        if response is None:
-            continue
-        hits, _ = response
-        results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+        if response is not None:
+            hits, _ = response
+            found_file_hint = bool(hits)
+            results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+        if not found_file_hint:
+            local_payload = _local_file_hint_payload(file_hint)
+            if local_payload:
+                results.append((local_payload, 0.0, "filter"))
 
         for symbol in symbols:
             qualified = f"{file_hint}::{symbol}"
@@ -186,6 +191,7 @@ def _metadata_search(raw_query: str, entities: dict):
             results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
 
     for symbol in symbols:
+        found_symbol = False
         response = _qdrant_call(lambda: client.scroll(
             collection_name=collection,
             scroll_filter=Filter(
@@ -195,9 +201,15 @@ def _metadata_search(raw_query: str, entities: dict):
             with_payload=True,
         ))
         if response is None:
-            continue
-        hits, _ = response
-        results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+            hits = []
+        else:
+            hits, _ = response
+            found_symbol = bool(hits)
+            results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+        if not found_symbol:
+            local_payload = _local_symbol_hint_payload(symbol)
+            if local_payload:
+                results.append((local_payload, 0.0, "filter"))
 
     # Query-aware file pattern boosts for hard disambiguation (tests/websocket/ws).
     for symbol in symbols:
@@ -247,6 +259,133 @@ def _metadata_search(raw_query: str, entities: dict):
                 results.append((payload, 0.0, "metadata"))
 
     return results
+
+
+def _local_file_hint_payload(file_hint: str) -> dict | None:
+    """Return grounded local-file evidence when Qdrant lacks an exact file hit."""
+    clean_hint = str(file_hint).strip().lstrip("/")
+    if not clean_hint or ".." in Path(clean_hint).parts:
+        return None
+    repo_root = Path(get_repo_root()).resolve()
+    resolved = _resolve_local_file_hint(repo_root, clean_hint)
+    if not resolved:
+        return None
+    relative_path, path = resolved
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    summary = f"File: {relative_path}"
+    return {
+        "chunk_id": f"local-file::{relative_path}",
+        "relative_path": relative_path,
+        "symbol_name": path.name,
+        "qualified_symbol": f"{relative_path}::<file>",
+        "chunk_type": "file_summary",
+        "file_type": path.name.lower(),
+        "language": "text",
+        "start_line": 1,
+        "end_line": max(1, len(lines)),
+        "summary": summary,
+        "content": text,
+        "content_excerpt": text[:4000],
+    }
+
+
+def _resolve_local_file_hint(repo_root: Path, clean_hint: str) -> tuple[str, Path] | None:
+    exact_path = (repo_root / clean_hint).resolve()
+    try:
+        exact_path.relative_to(repo_root)
+    except ValueError:
+        return None
+    if exact_path.is_file():
+        return clean_hint, exact_path
+
+    matches: list[tuple[int, str, Path]] = []
+    hint_name = Path(clean_hint).name
+    for candidate in repo_root.rglob(hint_name):
+        if not candidate.is_file():
+            continue
+        try:
+            relative = candidate.resolve().relative_to(repo_root).as_posix()
+        except ValueError:
+            continue
+        if relative == clean_hint or relative.endswith(f"/{clean_hint}") or candidate.name == hint_name:
+            matches.append((_local_file_hint_priority(relative), relative, candidate.resolve()))
+    if not matches:
+        return None
+    _priority, relative, path = sorted(matches, key=lambda item: (item[0], item[1]))[0]
+    return relative, path
+
+
+def _local_file_hint_priority(relative_path: str) -> int:
+    lower = relative_path.lower()
+    if lower.startswith("backend/"):
+        return 0
+    if lower.startswith("deploy/"):
+        return 1
+    if lower.startswith("frontend/"):
+        return 2
+    return 3
+
+
+def _local_symbol_hint_payload(symbol: str) -> dict | None:
+    clean_symbol = str(symbol).strip()
+    if not clean_symbol or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean_symbol):
+        return None
+    repo_root = Path(get_repo_root()).resolve()
+    for path in _iter_local_symbol_files(repo_root):
+        payload = _local_symbol_payload_from_file(repo_root, path, clean_symbol)
+        if payload:
+            return payload
+    return None
+
+
+def _iter_local_symbol_files(repo_root: Path):
+    skip_dirs = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "build"}
+    for path in repo_root.rglob("*.py"):
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        yield path
+
+
+def _local_symbol_payload_from_file(repo_root: Path, path: Path, symbol: str) -> dict | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        relative_path = path.resolve().relative_to(repo_root).as_posix()
+    except (OSError, ValueError):
+        return None
+    pattern = re.compile(rf"^(async\s+def|def|class)\s+{re.escape(symbol)}\b")
+    start_index = None
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            start_index = index
+            break
+    if start_index is None:
+        return None
+    end_index = len(lines) - 1
+    next_symbol_pattern = re.compile(r"^(async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*\b")
+    for index in range(start_index + 1, len(lines)):
+        if next_symbol_pattern.match(lines[index]):
+            end_index = index - 1
+            break
+    content = "\n".join(lines[start_index : end_index + 1])
+    start_line = start_index + 1
+    end_line = end_index + 1
+    return {
+        "chunk_id": f"local-symbol::{relative_path}::{symbol}",
+        "relative_path": relative_path,
+        "symbol_name": symbol,
+        "qualified_symbol": f"{relative_path}::{symbol}",
+        "chunk_type": "function",
+        "language": "python",
+        "start_line": start_line,
+        "end_line": end_line,
+        "summary": f"Function: {symbol}",
+        "content": content,
+        "content_excerpt": content[:4000],
+    }
 
 
 def _dependency_search(entities: dict):

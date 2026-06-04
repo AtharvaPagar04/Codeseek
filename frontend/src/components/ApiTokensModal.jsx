@@ -13,11 +13,39 @@ const PROVIDER_OPTIONS = [
   { value: 'openrouter', label: 'OpenRouter' },
 ];
 
+const PROVIDER_MODELS = {
+  gemini: [
+    { value: 'default', label: 'Default (gemini-2.0-flash)' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+  ],
+  groq: [
+    { value: 'default', label: 'Default (llama-3.3-70b-versatile)' },
+    { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B' },
+    { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B' },
+    { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+  ],
+  openai: [
+    { value: 'default', label: 'Default (gpt-4o-mini)' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+  ],
+  openrouter: [
+    { value: 'default', label: 'Default (openai/gpt-4o-mini)' },
+    { value: 'google/gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { value: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'meta-llama/llama-3-8b-instruct', label: 'Llama 3 8B' },
+  ],
+};
+
 export default function ApiTokensModal({ onClose }) {
   const [tokens, setTokens] = useState([]);
   const [tokenInput, setTokenInput] = useState('');
   const [labelInput, setLabelInput] = useState('');
   const [providerInput, setProviderInput] = useState(PROVIDER_OPTIONS[0].value);
+  const [modelSelect, setModelSelect] = useState('default');
   const [error, setError] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const overlayRef = useRef(null);
@@ -59,6 +87,11 @@ export default function ApiTokensModal({ onClose }) {
       return;
     }
 
+    let finalModel = '';
+    if (modelSelect !== 'default') {
+      finalModel = modelSelect;
+    }
+
     const isDuplicate = tokens.some((t) => t.label === label && t.provider === provider);
     if (isDuplicate) {
       setError('A configuration with this label and provider already exists.');
@@ -71,6 +104,7 @@ export default function ApiTokensModal({ onClose }) {
         provider,
         label,
         apiKey: key,
+        model: finalModel,
         isActive: shouldBeActive,
       });
       setTokens((prev) => {
@@ -82,7 +116,9 @@ export default function ApiTokensModal({ onClose }) {
       setTokenInput('');
       setLabelInput('');
       setProviderInput(PROVIDER_OPTIONS[0].value);
+      setModelSelect('default');
       setShowAddForm(false);
+      window.dispatchEvent(new Event('CODESEEK_PROVIDER_CHANGED'));
     } catch (err) {
       setError(err.message || 'Failed to save configuration.');
     }
@@ -97,6 +133,7 @@ export default function ApiTokensModal({ onClose }) {
           isActive: t.id === id,
         }))
       );
+      window.dispatchEvent(new Event('CODESEEK_PROVIDER_CHANGED'));
     } catch (err) {
       setError(err.message || 'Failed to activate configuration.');
     }
@@ -113,6 +150,7 @@ export default function ApiTokensModal({ onClose }) {
         }
         return next;
       });
+      window.dispatchEvent(new Event('CODESEEK_PROVIDER_CHANGED'));
     } catch (err) {
       setError(err.message || 'Failed to delete configuration.');
     }
@@ -164,8 +202,14 @@ export default function ApiTokensModal({ onClose }) {
                   <div className="font-medium text-sm text-text-primary truncate">
                     {activeToken?.label}
                   </div>
-                  <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide">
-                    {providerLabel(activeToken?.provider)}
+                  <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide flex items-center gap-1.5 flex-wrap">
+                    <span>{providerLabel(activeToken?.provider)}</span>
+                    {activeToken?.model && (
+                      <>
+                        <span className="w-1 h-1 rounded-full bg-border" />
+                        <span className="normal-case font-mono">{activeToken.model}</span>
+                      </>
+                    )}
                   </div>
                 </div>
                 <span className="shrink-0 text-2xs bg-online/15 text-online border border-online/30 px-1.5 py-0.5 rounded-full font-mono font-medium">
@@ -200,8 +244,14 @@ export default function ApiTokensModal({ onClose }) {
                         <div className="font-medium text-sm text-text-primary truncate">
                           {t.label}
                         </div>
-                        <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide">
-                          {providerLabel(t.provider)}
+                        <div className="text-2xs text-text-muted mt-0.5 uppercase tracking-wide flex items-center gap-1.5 flex-wrap">
+                          <span>{providerLabel(t.provider)}</span>
+                          {t.model && (
+                            <>
+                              <span className="w-1 h-1 rounded-full bg-border" />
+                              <span className="normal-case font-mono">{t.model}</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -221,7 +271,25 @@ export default function ApiTokensModal({ onClose }) {
               </div>
             </div>
           )}
+
         </div>
+
+        {/* Error notification banner */}
+        {error && !showAddForm && (
+          <div className="bg-offline/10 border-t border-b border-offline/20 px-4 py-2.5 flex items-center justify-between gap-3 animate-fadeIn">
+            <p className="text-2xs text-offline/90 font-mono leading-relaxed flex-1">
+              ⚠ {error}
+            </p>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-text-muted hover:text-text-primary transition-colors text-sm font-bold leading-none shrink-0"
+              title="Dismiss error"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Add API toggle button / Add new token form */}
         <div className="border-t border-border shrink-0">
@@ -245,7 +313,15 @@ export default function ApiTokensModal({ onClose }) {
                 </h3>
                 <button
                   type="button"
-                  onClick={() => { setShowAddForm(false); setError(null); setTokenInput(''); setLabelInput(''); setProviderInput(PROVIDER_OPTIONS[0].value); }}
+                  onClick={() => {
+                    setShowAddForm(false);
+                    setError(null);
+                    setTokenInput('');
+                    setLabelInput('');
+                    setProviderInput(PROVIDER_OPTIONS[0].value);
+                    setModelSelect('default');
+                    setCustomModelVal('');
+                  }}
                   className="text-text-muted hover:text-text-primary transition-colors text-sm leading-none"
                   title="Cancel"
                 >
@@ -285,23 +361,49 @@ export default function ApiTokensModal({ onClose }) {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1">
-                <label htmlFor="token-provider" className="text-2xs font-mono text-text-muted uppercase">
-                  Provider
-                </label>
-                <select
-                  id="token-provider"
-                  value={providerInput}
-                  onChange={(e) => setProviderInput(e.target.value)}
-                  className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted transition-colors"
-                >
-                  {PROVIDER_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="token-provider" className="text-2xs font-mono text-text-muted uppercase">
+                    Provider
+                  </label>
+                  <select
+                    id="token-provider"
+                    value={providerInput}
+                    onChange={(e) => {
+                      setProviderInput(e.target.value);
+                      setModelSelect('default');
+                      setCustomModelVal('');
+                    }}
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted transition-colors"
+                  >
+                    {PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="token-model" className="text-2xs font-mono text-text-muted uppercase">
+                    Model
+                  </label>
+                  <select
+                    id="token-model"
+                    value={modelSelect}
+                    onChange={(e) => setModelSelect(e.target.value)}
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted transition-colors"
+                  >
+                    {(PROVIDER_MODELS[providerInput] || []).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+
+
 
               {error && <p className="text-2xs text-offline/90 font-mono">⚠ {error}</p>}
 

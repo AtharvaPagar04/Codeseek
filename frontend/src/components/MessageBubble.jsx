@@ -108,6 +108,16 @@ const markdownComponents = {
 export default function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
+  const [copiedUser, setCopiedUser] = useState(false);
+
+  const handleCopyUser = () => {
+    const text = typeof message.content === 'string' ? message.content.trim() : '';
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedUser(true);
+      setTimeout(() => setCopiedUser(false), 1500);
+    });
+  };
 
   const handleCopyResponse = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
@@ -131,13 +141,24 @@ export default function MessageBubble({ message }) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end animate-fadeIn">
+      <div className="flex justify-end animate-fadeIn group">
         <div className="max-w-[75%]">
           <div className="bg-surface-3 border border-border rounded-2xl px-4 py-3 text-text-primary text-sm whitespace-pre-wrap break-words">
             {message.content}
           </div>
-          <div className="text-2xs text-text-muted text-right mt-1 pr-0.5">
-            {formatTimestamp(message.timestamp)}
+          <div className="flex items-center justify-end gap-2 mt-1 pr-0.5">
+            <button
+              onClick={handleCopyUser}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-2xs text-text-secondary opacity-0 group-hover:opacity-100 transition-all duration-150 hover:border-text-muted hover:text-text-primary"
+              title="Copy prompt"
+              aria-label="Copy prompt"
+            >
+              <CopyIcon />
+              {copiedUser ? 'Copied' : 'Copy'}
+            </button>
+            <span className="text-2xs text-text-muted">
+              {formatTimestamp(message.timestamp)}
+            </span>
           </div>
         </div>
       </div>
@@ -216,19 +237,30 @@ export default function MessageBubble({ message }) {
 
           {message.sources && message.sources.length > 0 && (
             <div className="border-t border-border bg-surface-3/30 px-4 py-3">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="text-2xs text-text-muted uppercase tracking-[0.22em]">
-                  Sources
+              <details className="group">
+                <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
+                  <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
+                    <svg
+                      className="h-3 w-3 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={3}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                    Sources
+                  </div>
+                  <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
+                    {message.sources.length}
+                  </div>
+                </summary>
+                <div className="mt-3 flex flex-wrap gap-2 animate-fadeIn">
+                  {message.sources.map((src, i) => (
+                    <SourceCard key={i} source={src} />
+                  ))}
                 </div>
-                <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
-                  {message.sources.length}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {message.sources.map((src, i) => (
-                  <SourceCard key={i} source={src} />
-                ))}
-              </div>
+              </details>
             </div>
           )}
         </div>
