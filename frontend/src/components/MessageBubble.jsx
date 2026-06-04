@@ -23,13 +23,13 @@ const markdownComponents = {
   code({ inline, className, children, ...props }) {
     return inline ? (
       <code
-        className="font-mono text-accent bg-surface-3 px-1.5 py-0.5 rounded-md text-[0.82em] border border-border/80"
+        className="font-mono text-text-primary bg-surface-3 px-1.5 py-0.5 rounded-md text-[0.82em] border border-border"
         {...props}
       >
         {children}
       </code>
     ) : (
-      <pre className="bg-surface-3 border border-border rounded-xl p-3 my-3 overflow-x-auto shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <pre className="bg-surface-3 border border-border rounded-xl p-3 my-3 overflow-x-auto">
         <code className="font-mono text-text-primary text-xs leading-relaxed" {...props}>
           {children}
         </code>
@@ -42,7 +42,7 @@ const markdownComponents = {
         href={href}
         target="_blank"
         rel="noreferrer"
-        className="text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
+        className="text-text-primary underline decoration-text-muted underline-offset-4 hover:decoration-text-secondary"
       >
         {children}
       </a>
@@ -69,7 +69,7 @@ const markdownComponents = {
   li({ children, ordered }) {
     return (
       <li className="flex items-start gap-2.5 text-[0.94rem] leading-7 text-text-primary/92">
-        <span className="mt-[0.72rem] h-1.5 w-1.5 shrink-0 rounded-full bg-accent/80" />
+        <span className="mt-[0.72rem] h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
         <span className="min-w-0">{children}</span>
       </li>
     );
@@ -79,7 +79,7 @@ const markdownComponents = {
   },
   blockquote({ children }) {
     return (
-      <blockquote className="my-3 rounded-r-lg border-l-2 border-accent/50 bg-accent-glow/10 px-3 py-2 text-text-secondary">
+      <blockquote className="my-3 rounded-r-xl border-l-2 border-text-muted bg-surface-3/60 px-3 py-2 text-text-secondary">
         {children}
       </blockquote>
     );
@@ -112,7 +112,18 @@ export default function MessageBubble({ message }) {
   const handleCopyResponse = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
+    const sourceLines = Array.isArray(message.sources)
+      ? message.sources
+          .map((src) => {
+            const file = src.file || src.relative_path || '';
+            const symbol = src.symbol || src.symbol_name || '';
+            const lines = src.lines || formatLines(src.start_line, src.end_line);
+            return `${file}${symbol ? ` :: ${symbol}` : ''}${lines ? ` (lines ${lines})` : ''}`;
+          })
+          .filter(Boolean)
+      : [];
+    const fullText = sourceLines.length > 0 ? `${text}\n\nSources:\n${sourceLines.join('\n')}` : text;
+    navigator.clipboard.writeText(fullText).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -122,7 +133,7 @@ export default function MessageBubble({ message }) {
     return (
       <div className="flex justify-end animate-fadeIn">
         <div className="max-w-[75%]">
-          <div className="bg-user-bg border border-user-border rounded px-3.5 py-2.5 text-text-primary text-sm whitespace-pre-wrap break-words">
+          <div className="bg-surface-3 border border-border rounded-2xl px-4 py-3 text-text-primary text-sm whitespace-pre-wrap break-words">
             {message.content}
           </div>
           <div className="text-2xs text-text-muted text-right mt-1 pr-0.5">
@@ -137,7 +148,7 @@ export default function MessageBubble({ message }) {
   if (message.loading) {
     return (
       <div className="flex justify-start animate-fadeIn">
-        <div className="max-w-[75%] bg-surface-2 border border-border rounded px-3.5 py-2.5">
+        <div className="max-w-[75%] bg-surface-2 border border-border rounded-2xl px-4 py-3">
           <LoadingDots />
         </div>
       </div>
@@ -149,7 +160,7 @@ export default function MessageBubble({ message }) {
     return (
       <div className="flex justify-start animate-fadeIn">
         <div className="max-w-[75%]">
-          <div className="bg-surface-2 border border-offline/30 rounded px-3.5 py-2.5 text-offline/80 text-sm">
+          <div className="bg-surface-2 border border-offline/30 rounded-2xl px-4 py-3 text-offline/80 text-sm">
             ⚠ {message.content}
           </div>
           <div className="text-2xs text-text-muted mt-1 pl-0.5">
@@ -164,10 +175,10 @@ export default function MessageBubble({ message }) {
   return (
     <div className="flex justify-start animate-fadeIn">
       <div className="max-w-[80%] min-w-0">
-        <div className="overflow-hidden rounded-2xl border border-border bg-surface-2/96 shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
-          <div className="flex items-center justify-between gap-3 border-b border-border bg-[linear-gradient(180deg,rgba(0,212,255,0.10),rgba(0,212,255,0.02))] px-4 py-2.5">
+        <div className="overflow-hidden rounded-2xl border border-border bg-surface-2">
+          <div className="flex items-center justify-between gap-3 border-b border-border bg-surface-3/50 px-4 py-2.5">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="inline-flex h-2 w-2 shrink-0 rounded-full bg-accent shadow-[0_0_10px_rgba(0,212,255,0.5)]" />
+              <span className="inline-flex h-2 w-2 shrink-0 rounded-full bg-online" />
               <span className="text-2xs font-mono uppercase tracking-[0.24em] text-text-secondary">
                 Response
               </span>
@@ -176,7 +187,7 @@ export default function MessageBubble({ message }) {
             <div className="flex items-center gap-2 text-2xs text-text-muted shrink-0">
               <button
                 onClick={handleCopyResponse}
-                className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-text-secondary transition-colors hover:border-text-muted hover:text-text-primary"
                 title="Copy response"
                 aria-label="Copy response"
               >
@@ -204,12 +215,12 @@ export default function MessageBubble({ message }) {
           </div>
 
           {message.sources && message.sources.length > 0 && (
-            <div className="border-t border-border bg-surface-3/35 px-4 py-3">
+            <div className="border-t border-border bg-surface-3/30 px-4 py-3">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="text-2xs text-text-muted uppercase tracking-[0.22em]">
                   Sources
                 </div>
-                <div className="rounded-full border border-border bg-surface px-2 py-0.5 text-2xs font-mono text-text-muted">
+                <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
                   {message.sources.length}
                 </div>
               </div>

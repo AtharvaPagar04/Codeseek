@@ -100,6 +100,41 @@ class SourceFilteringTests(unittest.TestCase):
         selected = select_sources_for_display(query, sources)
         self.assertEqual(len(selected), 6)
 
+    def test_phase1_flow_query_keeps_core_flow_anchors(self) -> None:
+        query = "walk me through backend request orchestration flow"
+        sources = [
+            {
+                "relative_path": "retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 501,
+                "end_line": 650,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 55,
+                "end_line": 310,
+                "expansion_type": "primary",
+            },
+        ] + [
+            {
+                "relative_path": f"retrieval/noisy_{index}.py",
+                "symbol_name": f"backend_request_helper_{index}",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            for index in range(8)
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        symbols = {source["symbol_name"] for source in selected}
+
+        self.assertIn("_query_impl", symbols)
+        self.assertIn("run_query", symbols)
+        self.assertLessEqual(len(selected), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

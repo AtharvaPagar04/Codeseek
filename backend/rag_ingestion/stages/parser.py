@@ -12,12 +12,17 @@ def parse_file(file: FileRecord, counters: PipelineCounters) -> ParsedFile:
     """Parse a source file and extract imports and symbols."""
     try:
         source = Path(file.path).read_bytes()
-        parser, language = _build_parser(file.extension)
-        tree = parser.parse(source)
-        root = tree.root_node
+        if file.language in {"python", "javascript", "typescript"}:
+            parser, language = _build_parser(file.extension)
+            tree = parser.parse(source)
+            root = tree.root_node
 
-        imports = _extract_imports(root, source, file.language)
-        symbols = _extract_symbols(root, source, file.language)
+            imports = _extract_imports(root, source, file.language)
+            symbols = _extract_symbols(root, source, file.language)
+        else:
+            language = file.language
+            imports = []
+            symbols = []
         counters.files_parsed_ok += 1
         return ParsedFile(
             relative_path=file.relative_path,

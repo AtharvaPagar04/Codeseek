@@ -10,6 +10,8 @@ from rag_ingestion.config import (
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
 
+CONTENT_EXCERPT_CHARS = 12000
+
 
 def store_chunks(
     chunks: list[Chunk], counters: PipelineCounters, collection_name: str | None = None
@@ -112,4 +114,28 @@ def _payload(chunk: Chunk) -> dict:
         "file_symbols": chunk.file_symbols,
         "docstring": chunk.docstring,
         "summary": chunk.summary,
+        "file_type": chunk.file_type,
+        "summary_facts": chunk.summary_facts,
+        "detected_frameworks": chunk.detected_frameworks,
+        "dependencies": chunk.dependencies,
+        "dev_dependencies": chunk.dev_dependencies,
+        "scripts": chunk.scripts,
+        "services": chunk.services,
+        "ports": chunk.ports,
+        "env_keys": chunk.env_keys,
+        "entrypoints": chunk.entrypoints,
+        "config_tools": chunk.config_tools,
+        "build_system": chunk.build_system,
+        "volumes": chunk.volumes,
+        "service_dependencies": chunk.service_dependencies,
+        "base_image": chunk.base_image,
+        "workdir": chunk.workdir,
+        "package_manager": chunk.package_manager,
+        "feature_flags": chunk.feature_flags,
+        "provider_keys": chunk.provider_keys,
+        "purpose": chunk.purpose,
+        "setup_steps": chunk.setup_steps,
+        "usage_commands": chunk.usage_commands,
+        "architecture_notes": chunk.architecture_notes,
+        "content_excerpt": chunk.content[:CONTENT_EXCERPT_CHARS],
     }

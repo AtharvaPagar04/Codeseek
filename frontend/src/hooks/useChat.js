@@ -15,6 +15,10 @@ export function useChat({ appendMessage }) {
         throw new Error('Cannot query without a session id.');
       }
 
+      const activeThreadId = session.active_thread_id || session.threads?.[0]?.id || '';
+      if (!activeThreadId) {
+        throw new Error('Conversation thread is still loading. Try again in a moment.');
+      }
       const trimmed = questionText.trim();
       setIsLoading(true);
       pendingSessionId.current = session.id;
@@ -28,7 +32,7 @@ export function useChat({ appendMessage }) {
         timestamp: new Date().toISOString(),
         error: false,
       };
-      appendMessage(session.id, userMessage);
+      appendMessage(session.id, activeThreadId, userMessage);
 
       // 2. Append loading placeholder
       const loadingId = uuidv4();
@@ -41,10 +45,14 @@ export function useChat({ appendMessage }) {
         loading: true,
         error: false,
       };
-      appendMessage(session.id, loadingMessage);
+      appendMessage(session.id, activeThreadId, loadingMessage);
 
       try {
-        const data = await querySession({ question: trimmed, session_id: session.id });
+        const data = await querySession({
+          question: trimmed,
+          session_id: session.id,
+          thread_id: activeThreadId,
+        });
 
         const assistantMessage = {
           id: loadingId, // reuse same id so we can replace in UI
@@ -58,7 +66,7 @@ export function useChat({ appendMessage }) {
         };
 
         // Replace loading placeholder — use a dedicated append that patches by id
-        appendMessage(session.id, { __replaceId: loadingId, ...assistantMessage });
+        appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...assistantMessage });
       } catch (err) {
         console.error('[useChat] Query failed:', err);
 
@@ -72,7 +80,7 @@ export function useChat({ appendMessage }) {
           error: true,
         };
 
-        appendMessage(session.id, { __replaceId: loadingId, ...errorMessage });
+        appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...errorMessage });
       } finally {
         setIsLoading(false);
         pendingSessionId.current = null;

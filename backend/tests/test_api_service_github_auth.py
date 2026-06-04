@@ -1,13 +1,68 @@
 import os
+import sys
+import types
 import unittest
+from importlib.machinery import ModuleSpec
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
+from fastapi import Response
+from starlette.requests import Request
+
+fake_tiktoken = types.ModuleType("tiktoken")
+fake_tiktoken.__spec__ = ModuleSpec("tiktoken", loader=None)
+
+
+class _FakeEncoding:
+    def encode(self, text):
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens):
+        return bytes(tokens).decode("utf-8", errors="ignore")
+
+
+fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
+sys.modules.setdefault("tiktoken", fake_tiktoken)
 
 from retrieval import api_service
 
 
 class ApiServiceGithubAuthTests(unittest.TestCase):
+    def test_plaintext_secret_submission_can_be_disabled(self) -> None:
+        with patch.object(api_service, "ALLOW_PLAINTEXT_SECRET_SUBMISSION", False):
+            with self.assertRaises(HTTPException) as ctx:
+                api_service._resolve_submitted_secret("ghp_secret", None)
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Plaintext secret submission is disabled", ctx.exception.detail)
+
+    def test_https_detection_uses_forwarded_proto(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "scheme": "http",
+                "path": "/auth/me",
+                "headers": [(b"x-forwarded-proto", b"https")],
+            }
+        )
+
+        with patch.object(api_service, "TRUST_X_FORWARDED_PROTO", True):
+            self.assertTrue(api_service._is_https_request(request))
+
+        self.assertFalse(api_service._allow_http_request(request))
+
+    def test_startup_requires_explicit_encryption_key_when_configured(self) -> None:
+        with patch.object(api_service, "REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY", True), \
+             patch("retrieval.api_service.has_explicit_app_encryption_key", return_value=False), \
+             patch("retrieval.api_service.init_db"), \
+             patch("retrieval.api_service.validate_collection_binding"), \
+             patch("retrieval.api_service.dependency_health", return_value={"qdrant": "ok", "embedding_model": "test"}), \
+             patch.dict(os.environ, {"CODESEEK_API_KEY": "backend-key", "RETRIEVAL_REPO_ROOT": os.getcwd()}, clear=False):
+            with self.assertRaises(RuntimeError) as ctx:
+                api_service.startup_checks()
+
+        self.assertIn("CODESEEK_APP_ENCRYPTION_KEY", str(ctx.exception))
+
     def test_github_oauth_config_requires_server_config(self) -> None:
         with patch.dict(os.environ, {"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": ""}, clear=False):
             with self.assertRaises(HTTPException) as ctx:
@@ -51,6 +106,28 @@ class ApiServiceGithubAuthTests(unittest.TestCase):
         self.assertEqual(data["login"], "octocat")
         self.assertEqual(data["avatar_url"], "https://avatars.example/octocat.png")
         http_get.assert_called_once()
+
+    def test_persist_github_login_stores_user_and_credential(self) -> None:
+        github_user = {"id": 12345, "login": "octocat", "avatar_url": "https://avatars.example/octocat.png"}
+        with patch("retrieval.api_service._fetch_github_user", return_value=github_user), \
+             patch("retrieval.api_service.upsert_github_user", return_value={"id": "user-1"}), \
+             patch("retrieval.api_service.upsert_github_credential") as upsert_credential:
+            persisted = api_service._persist_github_login("ghp_secret")
+
+        self.assertEqual(persisted["username"], "octocat")
+        upsert_credential.assert_called_once()
+        _, kwargs = upsert_credential.call_args
+        self.assertEqual(kwargs["token_type"], "bearer")
+
+    def test_auth_me_returns_unauthenticated_without_cookie(self) -> None:
+        response = api_service.auth_me(None)
+        self.assertEqual(response, {"authenticated": False})
+
+    def test_auth_logout_clears_cookie(self) -> None:
+        response = Response()
+        payload = api_service.auth_logout(response, None)
+        self.assertTrue(payload["logged_out"])
+        self.assertFalse(payload["session_cleared"])
 
 
 if __name__ == "__main__":

@@ -17,6 +17,10 @@ from rag_ingestion.stages.loader import load_repository
 from rag_ingestion.stages.metadata import build_metadata
 from rag_ingestion.stages.overflow import handle_overflow
 from rag_ingestion.stages.parser import parse_file
+from rag_ingestion.stages.repo_summary import (
+    build_repo_summary_chunk,
+    is_repo_summary_evidence_path,
+)
 from rag_ingestion.stages.storage import delete_chunks_for_paths, store_chunks
 from rag_ingestion.stages.summary import generate_summary
 from rag_ingestion.utils.counters import PipelineCounters
@@ -64,9 +68,11 @@ def run_pipeline(source: str, collection_name: str | None = None) -> PipelineCou
         if ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
             file.relative_path, signature, previous_state
         ):
-            log_skip(file.relative_path, "unchanged_file", "skipped")
             next_state[file.relative_path] = signature
-            continue
+            if not is_repo_summary_evidence_path(file.relative_path):
+                log_skip(file.relative_path, "unchanged_file", "skipped")
+                continue
+            log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
 
         parsed = parse_file(file, counters)
         chunks = generate_chunks(parsed, file)
@@ -80,6 +86,12 @@ def run_pipeline(source: str, collection_name: str | None = None) -> PipelineCou
         all_chunks.extend(chunks)
         if ENABLE_INCREMENTAL_FILE_SKIP:
             next_state[file.relative_path] = signature
+
+    repo_summary = build_repo_summary_chunk(all_chunks, repository)
+    if repo_summary is not None:
+        build_metadata(repo_summary)
+        all_chunks.append(repo_summary)
+        counters.chunks_generated += 1
 
     if all_chunks:
         embedded_chunks = embed_chunks(all_chunks, counters)

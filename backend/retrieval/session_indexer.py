@@ -16,6 +16,8 @@ from rag_ingestion.main import run_pipeline
 from retrieval.config import QDRANT_HOST, QDRANT_PORT
 from retrieval.db import db_cursor, init_db
 from retrieval.isolation import expected_collection_name
+from retrieval.searcher import invalidate_lexical_index
+from retrieval.thread_store import ensure_default_thread
 
 WORKSPACE_ROOT = Path(
     os.getenv("CODESEEK_REPO_WORKSPACE", "/tmp/codeseek_repo_workspace")
@@ -43,7 +45,7 @@ def _load_state() -> dict:
         rows = cursor.execute(
             """
             SELECT
-                id, tenant_id, repo_full_name, repo_url, repo_root, collection, status, error,
+                id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                 chunks_generated, embeddings_stored, idempotent_reuse
             FROM repo_sessions
@@ -62,10 +64,10 @@ def _save_state(state: dict) -> None:
             cursor.execute(
                 """
                 INSERT INTO repo_sessions (
-                    id, tenant_id, repo_full_name, repo_url, repo_root, collection, status, error,
+                    id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                     created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                     chunks_generated, embeddings_stored, idempotent_reuse
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _session_insert_values(session),
             )
@@ -102,6 +104,7 @@ def create_session(
     tenant_id: str,
     repo_url: str = "",
     github_token: str = "",
+    user_id: str = "",
 ) -> dict:
     owner, _, name = repo_full_name.partition("/")
     if not owner or not name:
@@ -112,6 +115,7 @@ def create_session(
     session = {
         "id": uuid.uuid4().hex,
         "tenant_id": tenant_id,
+        "user_id": user_id,
         "repo_full_name": repo_full_name,
         "repo_url": repo_url or f"https://github.com/{repo_full_name}.git",
         "repo_root": str(repo_root),
@@ -129,12 +133,53 @@ def create_session(
     }
     with _lock:
         state = _load_state()
+        existing = _find_existing_session(
+            state.get("sessions", []),
+            repo_full_name=repo_full_name,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if existing:
+            if github_token.strip():
+                _session_tokens[existing["id"]] = github_token.strip()
+            ensure_default_thread(
+                existing["id"],
+                user_id=user_id,
+                title=repo_full_name,
+            )
+            return existing
         state.setdefault("sessions", []).append(session)
         _save_state(state)
         if github_token.strip():
             _session_tokens[session["id"]] = github_token.strip()
+    ensure_default_thread(
+        session["id"],
+        user_id=user_id,
+        title=repo_full_name,
+    )
     _enqueue_index_job(session["id"])
     return session
+
+
+def _find_existing_session(
+    sessions: list[dict],
+    *,
+    repo_full_name: str,
+    tenant_id: str,
+    user_id: str,
+) -> dict | None:
+    normalized_repo = repo_full_name.strip().lower()
+    normalized_tenant = tenant_id.strip()
+    normalized_user = user_id.strip()
+    for session in sessions:
+        if str(session.get("tenant_id", "")).strip() != normalized_tenant:
+            continue
+        if str(session.get("user_id", "")).strip() != normalized_user:
+            continue
+        if str(session.get("repo_full_name", "")).strip().lower() != normalized_repo:
+            continue
+        return session
+    return None
 
 
 def retry_indexing(session_id: str) -> dict | None:
@@ -170,7 +215,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
             cursor.execute(
                 """
                 UPDATE repo_sessions
-                SET tenant_id = ?, repo_full_name = ?, repo_url = ?, repo_root = ?, collection = ?,
+                SET tenant_id = ?, user_id = ?, repo_full_name = ?, repo_url = ?, repo_root = ?, collection = ?,
                     status = ?, error = ?, created_at = ?, updated_at = ?, job_started_at = ?,
                     job_finished_at = ?, last_indexed_commit = ?, chunks_generated = ?,
                     embeddings_stored = ?, idempotent_reuse = ?
@@ -178,6 +223,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                 """,
                 (
                     session["tenant_id"],
+                    session.get("user_id", ""),
                     session["repo_full_name"],
                     session["repo_url"],
                     session["repo_root"],
@@ -298,6 +344,7 @@ def _index_job(session_id: str) -> None:
             )
             return
         counters = run_pipeline(str(repo_root), collection_name=session["collection"])
+        invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
         if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
             raise RuntimeError("Ingestion completed but no embeddings were stored")
@@ -323,6 +370,7 @@ def _row_to_session(row) -> dict:
     return {
         "id": row["id"],
         "tenant_id": row["tenant_id"],
+        "user_id": row["user_id"],
         "repo_full_name": row["repo_full_name"],
         "repo_url": row["repo_url"],
         "repo_root": row["repo_root"],
@@ -344,6 +392,7 @@ def _session_insert_values(session: dict) -> tuple:
     return (
         session["id"],
         session["tenant_id"],
+        session.get("user_id", ""),
         session["repo_full_name"],
         session["repo_url"],
         session["repo_root"],

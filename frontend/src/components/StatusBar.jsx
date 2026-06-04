@@ -9,11 +9,13 @@ export default function StatusBar({
   isMobile,
   onOpenApiTokens,
   activeSession,
+  githubNotice,
 }) {
   const { status } = useHealth();
 
   return (
-    <header className="flex items-center justify-between h-12 px-4 bg-surface border-b border-border shrink-0 z-20">
+    <header className="flex flex-col shrink-0 z-20 border-b border-border bg-surface/80 backdrop-blur-md">
+      <div className="flex items-center justify-between h-12 px-5">
       {/* Left: hamburger + app name + repo context */}
       <div className="flex items-center gap-3 min-w-0">
         <button
@@ -103,12 +105,18 @@ export default function StatusBar({
         ) : (
           <button
             onClick={onConnectGitHub}
-            className="text-xs text-accent hover:text-accent-dim transition-colors"
+            className="text-xs text-text-primary bg-surface-3 border border-border rounded-full px-3 py-1 hover:bg-surface-2 hover:border-text-muted transition-colors"
           >
             Connect GitHub
           </button>
         )}
       </div>
+      </div>
+      {githubNotice && (
+        <div className="border-t border-border/60 px-5 py-2 text-[11px] font-mono text-warning">
+          {githubNotice}
+        </div>
+      )}
     </header>
   );
 }

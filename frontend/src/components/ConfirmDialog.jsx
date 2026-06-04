@@ -28,22 +28,22 @@ export default function ConfirmDialog({ message, onConfirm, onCancel, confirmLab
       aria-modal="true"
       role="alertdialog"
     >
-      <div className="bg-surface-2 border border-border rounded w-80 p-5 shadow-lg animate-fadeIn">
+      <div className="bg-surface-2 border border-border rounded-2xl w-80 p-5 shadow-lg animate-fadeIn">
         <p className="text-text-primary text-sm leading-relaxed">{message}</p>
         <div className="mt-5 flex justify-end gap-2">
           <button
             ref={cancelRef}
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm text-text-secondary border border-border rounded hover:border-text-muted hover:text-text-primary transition-colors"
+            className="px-3 py-1.5 text-sm text-text-secondary border border-border rounded-lg hover:border-text-muted hover:text-text-primary transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
               danger
                 ? 'bg-offline/10 text-offline border border-offline/30 hover:bg-offline/20'
-                : 'bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20'
+                : 'bg-surface-3 text-text-primary border border-border hover:bg-surface-2'
             }`}
           >
             {confirmLabel}

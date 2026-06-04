@@ -7,7 +7,7 @@ from rag_ingestion.models.chunk import Chunk
 
 def build_metadata(chunk: Chunk) -> Chunk:
     """Populate deterministic chunk ID and token count."""
-    if chunk.chunk_type == "file":
+    if chunk.chunk_type in {"file", "repo_summary"}:
         raw = f"{chunk.relative_path}::__file__::{chunk.chunk_part}"
     else:
         raw = (
@@ -29,7 +29,7 @@ def _count_tokens(content: str) -> int:
 
 
 def _qualified_symbol(chunk: Chunk) -> str:
-    if chunk.chunk_type == "file":
+    if chunk.chunk_type in {"file", "repo_summary"}:
         return f"{chunk.relative_path}::__file__"
     if chunk.chunk_type == "method" and chunk.parent_symbol:
         return f"{chunk.relative_path}::{chunk.parent_symbol}.{chunk.symbol_name}"

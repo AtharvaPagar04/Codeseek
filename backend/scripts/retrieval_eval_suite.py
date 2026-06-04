@@ -14,6 +14,15 @@ from retrieval.isolation import expected_collection_name
 HIT_RE = re.compile(r"^hit@\d+:\s*([0-9.]+)\s*$")
 MRR_RE = re.compile(r"^mrr@\d+:\s*([0-9.]+)\s*$")
 COV_RE = re.compile(r"^citation_coverage:\s*([0-9.]+)\s*$")
+EXPECTED_FILE_RE = re.compile(r"^expected_file_score:\s*([0-9.]+)\s*$")
+EXPECTED_SYMBOL_RE = re.compile(r"^expected_symbol_score:\s*([0-9.]+)\s*$")
+EXPECTED_FRAMEWORK_RE = re.compile(r"^expected_framework_score:\s*([0-9.]+)\s*$")
+EXPECTED_DEPENDENCY_RE = re.compile(r"^expected_dependency_score:\s*([0-9.]+)\s*$")
+EXPECTED_NO_ANSWER_RE = re.compile(r"^expected_no_answer_score:\s*([0-9.]+)\s*$")
+EXPECTED_RESPONSE_MODE_RE = re.compile(r"^expected_response_mode_score:\s*([0-9.]+)\s*$")
+EXPECTED_ANSWER_TERM_RE = re.compile(r"^expected_answer_term_score:\s*([0-9.]+)\s*$")
+LATENCY_P50_RE = re.compile(r"^latency_p50_ms:\s*(\d+)\s*$")
+LATENCY_P95_RE = re.compile(r"^latency_p95_ms:\s*(\d+)\s*$")
 CASES_RE = re.compile(r"^Cases:\s*(\d+)\s*$")
 
 
@@ -27,18 +36,57 @@ def _parse_eval_output(text: str) -> dict[str, float]:
             metrics["mrr"] = float(match.group(1))
         elif match := COV_RE.match(line):
             metrics["cov"] = float(match.group(1))
+        elif match := EXPECTED_FILE_RE.match(line):
+            metrics["expected_file"] = float(match.group(1))
+        elif match := EXPECTED_SYMBOL_RE.match(line):
+            metrics["expected_symbol"] = float(match.group(1))
+        elif match := EXPECTED_FRAMEWORK_RE.match(line):
+            metrics["expected_framework"] = float(match.group(1))
+        elif match := EXPECTED_DEPENDENCY_RE.match(line):
+            metrics["expected_dependency"] = float(match.group(1))
+        elif match := EXPECTED_NO_ANSWER_RE.match(line):
+            metrics["expected_no_answer"] = float(match.group(1))
+        elif match := EXPECTED_RESPONSE_MODE_RE.match(line):
+            metrics["expected_response_mode"] = float(match.group(1))
+        elif match := EXPECTED_ANSWER_TERM_RE.match(line):
+            metrics["expected_answer_term"] = float(match.group(1))
+        elif match := LATENCY_P50_RE.match(line):
+            metrics["latency_p50_ms"] = float(match.group(1))
+        elif match := LATENCY_P95_RE.match(line):
+            metrics["latency_p95_ms"] = float(match.group(1))
         elif match := CASES_RE.match(line):
             metrics["cases"] = float(match.group(1))
-    required = {"hit", "mrr", "cov", "cases"}
+    required = {
+        "hit",
+        "mrr",
+        "cov",
+        "expected_file",
+        "expected_symbol",
+        "expected_framework",
+        "expected_dependency",
+        "expected_no_answer",
+        "expected_response_mode",
+        "expected_answer_term",
+        "latency_p50_ms",
+        "latency_p95_ms",
+        "cases",
+    }
     missing = required - set(metrics)
     if missing:
         raise RuntimeError(f"Missing metrics in eval output: {sorted(missing)}")
     return metrics
 
 
+def _resolve_dataset_path(project_root: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return project_root / path
+
+
 def _run_dataset(project_root: Path, dataset: dict) -> dict:
-    eval_file = str((project_root / dataset["eval_file"]).resolve())
-    repo_root = str(Path(dataset["repo_root"]).resolve())
+    eval_file = str(_resolve_dataset_path(project_root, dataset["eval_file"]).resolve())
+    repo_root = str(_resolve_dataset_path(project_root, dataset["repo_root"]).resolve())
     k = int(dataset.get("k", 10))
 
     env = dict(os.environ)
@@ -49,6 +97,9 @@ def _run_dataset(project_root: Path, dataset: dict) -> dict:
     env["RETRIEVAL_REPO_ROOT"] = repo_root
 
     if dataset.get("ingest_before_eval", False):
+        if dataset.get("recreate_collection", False):
+            env["QDRANT_RECREATE_COLLECTION"] = "1"
+            env["INGESTION_ENABLE_INCREMENTAL_FILE_SKIP"] = "0"
         ingest_cmd = [
             str(project_root / ".venv" / "bin" / "python"),
             "-m",
@@ -122,13 +173,31 @@ def main() -> None:
         print(
             f"{dataset['id']}: cases={int(metrics['cases'])} "
             f"hit@k={metrics['hit']:.3f} mrr@k={metrics['mrr']:.3f} "
-            f"citation_coverage={metrics['cov']:.3f}"
+            f"citation_coverage={metrics['cov']:.3f} "
+            f"expected_file={metrics['expected_file']:.3f} "
+            f"expected_symbol={metrics['expected_symbol']:.3f} "
+            f"expected_framework={metrics['expected_framework']:.3f} "
+            f"expected_dependency={metrics['expected_dependency']:.3f} "
+            f"expected_no_answer={metrics['expected_no_answer']:.3f} "
+            f"expected_response_mode={metrics['expected_response_mode']:.3f} "
+            f"expected_answer_term={metrics['expected_answer_term']:.3f} "
+            f"latency_p50_ms={int(metrics['latency_p50_ms'])} "
+            f"latency_p95_ms={int(metrics['latency_p95_ms'])}"
         )
 
     total_cases = sum(r["cases"] for r in results)
     agg_hit = sum(r["hit"] * r["cases"] for r in results) / total_cases
     agg_mrr = sum(r["mrr"] * r["cases"] for r in results) / total_cases
     agg_cov = sum(r["cov"] * r["cases"] for r in results) / total_cases
+    agg_file = sum(r["expected_file"] * r["cases"] for r in results) / total_cases
+    agg_symbol = sum(r["expected_symbol"] * r["cases"] for r in results) / total_cases
+    agg_framework = sum(r["expected_framework"] * r["cases"] for r in results) / total_cases
+    agg_dependency = sum(r["expected_dependency"] * r["cases"] for r in results) / total_cases
+    agg_no_answer = sum(r["expected_no_answer"] * r["cases"] for r in results) / total_cases
+    agg_response_mode = sum(r["expected_response_mode"] * r["cases"] for r in results) / total_cases
+    agg_answer_term = sum(r["expected_answer_term"] * r["cases"] for r in results) / total_cases
+    max_latency_p50 = max(r["latency_p50_ms"] for r in results)
+    max_latency_p95 = max(r["latency_p95_ms"] for r in results)
 
     print("\nAggregate")
     print("=========")
@@ -137,6 +206,15 @@ def main() -> None:
     print(f"weighted_hit@k: {agg_hit:.3f}")
     print(f"weighted_mrr@k: {agg_mrr:.3f}")
     print(f"weighted_citation_coverage: {agg_cov:.3f}")
+    print(f"weighted_expected_file_score: {agg_file:.3f}")
+    print(f"weighted_expected_symbol_score: {agg_symbol:.3f}")
+    print(f"weighted_expected_framework_score: {agg_framework:.3f}")
+    print(f"weighted_expected_dependency_score: {agg_dependency:.3f}")
+    print(f"weighted_expected_no_answer_score: {agg_no_answer:.3f}")
+    print(f"weighted_expected_response_mode_score: {agg_response_mode:.3f}")
+    print(f"weighted_expected_answer_term_score: {agg_answer_term:.3f}")
+    print(f"max_latency_p50_ms: {int(max_latency_p50)}")
+    print(f"max_latency_p95_ms: {int(max_latency_p95)}")
 
     if args.json_out:
         payload = {
@@ -147,6 +225,15 @@ def main() -> None:
                 "weighted_hit@k": round(agg_hit, 6),
                 "weighted_mrr@k": round(agg_mrr, 6),
                 "weighted_citation_coverage": round(agg_cov, 6),
+                "weighted_expected_file_score": round(agg_file, 6),
+                "weighted_expected_symbol_score": round(agg_symbol, 6),
+                "weighted_expected_framework_score": round(agg_framework, 6),
+                "weighted_expected_dependency_score": round(agg_dependency, 6),
+                "weighted_expected_no_answer_score": round(agg_no_answer, 6),
+                "weighted_expected_response_mode_score": round(agg_response_mode, 6),
+                "weighted_expected_answer_term_score": round(agg_answer_term, 6),
+                "max_latency_p50_ms": int(max_latency_p50),
+                "max_latency_p95_ms": int(max_latency_p95),
             },
         }
         Path(args.json_out).write_text(json.dumps(payload, indent=2), encoding="utf-8")

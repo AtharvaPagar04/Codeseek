@@ -1,106 +1,154 @@
-import {
-  clearRegisteredProviderConfigId,
-  getActiveApiConfig,
-  getBackendApiKey,
-  getRegisteredProviderConfigId,
-  setRegisteredProviderConfigId,
-} from './storage';
+import { getBackendApiKey } from './storage.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
 const authHeaders = () => ({
   'Content-Type': 'application/json',
   Authorization: `Bearer ${getBackendApiKey()}`,
 });
 
-const activeProviderConfig = () => {
-  const active = getActiveApiConfig();
-  if (!active?.provider || !active?.key) {
-    throw new Error('No active LLM provider configuration selected.');
+let submissionKeyPromise = null;
+
+const readErrorDetail = async (res) => {
+  try {
+    const parsed = await res.json();
+    return parsed.detail || parsed.message || '';
+  } catch {
+    return await res.text().catch(() => '');
   }
-  return active;
 };
 
-const registerProviderConfig = async (config) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/provider-configs`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          provider: config.provider,
-          api_key: config.key,
-          label: config.label || '',
-        }),
-      }),
-    'Provider config register'
-  );
-
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
+export const formatApiError = ({ action, status, detail = '' }) => {
+  const normalizedDetail = `${detail}`.trim();
+  if (status === 401) {
+    if (normalizedDetail.toLowerCase().includes('authentication required')) {
+      return `${action} failed (${status}): auth session expired. Sign in to GitHub again.`;
     }
-    throw new Error(`Provider config register failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    return `${action} failed (${status}): authentication failed. Check the backend API key and sign in again.`;
   }
-
-  const data = await res.json();
-  return data.provider_config?.id || '';
+  if (status === 429) {
+    return `${action} failed (${status}): rate limit reached. Wait and retry, or switch provider credentials.`;
+  }
+  if (normalizedDetail.includes('No active provider credential configured')) {
+    return `${action} failed (${status}): no active provider credential. Open API Config and add or activate a provider key.`;
+  }
+  if (normalizedDetail.includes('Session is not ready (status=failed)')) {
+    return `${action} failed (${status}): indexing failed for this repo session. Retry indexing after checking GitHub access and backend logs.`;
+  }
+  if (normalizedDetail.includes('Session is not ready')) {
+    return `${action} failed (${status}): repository indexing is still running. Wait for the session to become ready, then retry.`;
+  }
+  if (normalizedDetail.includes('Plaintext secret submission is disabled')) {
+    return `${action} failed (${status}): secure secret submission requires a refresh. Reload the page and retry.`;
+  }
+  if (normalizedDetail.includes('GitHub token validation failed')) {
+    return `${action} failed (${status}): GitHub rejected the token. Confirm repo scope and retry.`;
+  }
+  if (normalizedDetail.includes('GitHub OAuth')) {
+    return `${action} failed (${status}): GitHub OAuth is misconfigured or unavailable. Check backend OAuth env vars and callback URL.`;
+  }
+  if (normalizedDetail.includes('GitHub repo fetch failed')) {
+    return `${action} failed (${status}): GitHub repository listing failed. Reconnect GitHub and verify token scope.`;
+  }
+  if (normalizedDetail.includes('Provider API key rejected or lacks permission')) {
+    return `${action} failed (${status}): provider rejected the configured API key or model access. Update the provider configuration and retry.`;
+  }
+  if (normalizedDetail.includes('Unsupported LLM provider configuration')) {
+    return `${action} failed (${status}): provider configuration is invalid. Re-save the credential with a supported provider and model.`;
+  }
+  if (normalizedDetail.includes('Provider request timed out')) {
+    return `${action} failed (${status}): provider request timed out. Retry or switch to a faster model.`;
+  }
+  if (normalizedDetail.includes('Provider request failed upstream')) {
+    return `${action} failed (${status}): provider request failed upstream. Retry shortly or switch provider credentials.`;
+  }
+  return `${action} failed (${status})${normalizedDetail ? `: ${normalizedDetail}` : ''}`;
 };
 
-const ensureProviderConfigId = async () => {
-  const active = activeProviderConfig();
-  const cached = getRegisteredProviderConfigId(active.id);
-  if (cached) return cached;
-
-  const providerConfigId = await registerProviderConfig(active);
-  if (!providerConfigId) {
-    throw new Error('Provider config registration did not return an id.');
-  }
-  setRegisteredProviderConfigId(active.id, providerConfigId);
-  return providerConfigId;
+const throwApiError = async (action, res) => {
+  const detail = await readErrorDetail(res);
+  throw new Error(formatApiError({ action, status: res.status, detail }));
 };
 
-const isExpiredProviderConfigError = (message) =>
-  message.includes('provider_config_id is invalid or expired');
+const pemToArrayBuffer = (pem) => {
+  const base64 = pem
+    .replace('-----BEGIN PUBLIC KEY-----', '')
+    .replace('-----END PUBLIC KEY-----', '')
+    .replace(/\s+/g, '');
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+};
+
+const fetchSubmissionPublicKey = async () => {
+  if (!submissionKeyPromise) {
+    submissionKeyPromise = withNetworkError(
+      async () => {
+        const res = await fetch(`${API_BASE}/api/v1/crypto/submission-key`, {
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          throw new Error(`Submission key fetch failed (${res.status})`);
+        }
+        return res.json();
+      },
+      'Submission key fetch'
+    ).catch((err) => {
+      submissionKeyPromise = null;
+      throw err;
+    });
+  }
+  return submissionKeyPromise;
+};
+
+const encryptSecretForSubmission = async (secret) => {
+  const value = `${secret || ''}`.trim();
+  if (!value) {
+    throw new Error('Secret value cannot be empty.');
+  }
+  if (!window.crypto?.subtle) {
+    throw new Error('Browser crypto support is unavailable for secure submission.');
+  }
+  const keyPayload = await fetchSubmissionPublicKey();
+  const importedKey = await window.crypto.subtle.importKey(
+    'spki',
+    pemToArrayBuffer(keyPayload.public_key_pem),
+    { name: 'RSA-OAEP', hash: 'SHA-256' },
+    false,
+    ['encrypt']
+  );
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: 'RSA-OAEP' },
+    importedKey,
+    new TextEncoder().encode(value)
+  );
+  const bytes = new Uint8Array(ciphertext);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return {
+    key_id: keyPayload.key_id,
+    ciphertext: btoa(binary),
+  };
+};
 
 const sendQuery = async (body) => {
-  const active = activeProviderConfig();
-  const doRequest = async (providerConfigId) => {
-    const res = await fetch(`${API_BASE}/api/v1/query`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ ...body, provider_config_id: providerConfigId }),
-    });
+  const res = await fetch(`${API_BASE}/api/v1/query`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
 
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const parsed = await res.json();
-        detail = parsed.detail || parsed.message || '';
-      } catch {
-        detail = await res.text().catch(() => '');
-      }
-      throw new Error(`Query failed (${res.status})${detail ? `: ${detail}` : ''}`);
-    }
-
-    return res.json();
-  };
-
-  let providerConfigId = await ensureProviderConfigId();
-  try {
-    return await doRequest(providerConfigId);
-  } catch (err) {
-    if (!isExpiredProviderConfigError(err.message || '')) {
-      throw err;
-    }
-    clearRegisteredProviderConfigId(active.id);
-    providerConfigId = await ensureProviderConfigId();
-    return doRequest(providerConfigId);
+  if (!res.ok) {
+    await throwApiError('Query', res);
   }
+
+  return res.json();
 };
 
 const withNetworkError = async (fn, label) => {
@@ -122,8 +170,8 @@ export const queryRepo = async ({ question, repo_id }) => {
   return sendQuery({ question, repo_id, tenant_id: 'default' });
 };
 
-export const querySession = async ({ question, session_id }) => {
-  return sendQuery({ question, session_id });
+export const querySession = async ({ question, session_id, thread_id = '' }) => {
+  return sendQuery({ question, session_id, thread_id: thread_id || undefined });
 };
 
 export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local', githubToken = '' }) => {
@@ -131,6 +179,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
         method: 'POST',
+        credentials: 'include',
         headers: authHeaders(),
         body: JSON.stringify({
           repo_full_name: repoFullName,
@@ -143,14 +192,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
   );
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`Session create failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('Session create', res);
   }
 
   const data = await res.json();
@@ -161,11 +203,12 @@ export const listSessions = async () => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'List sessions'
   );
-  if (!res.ok) throw new Error(`List sessions failed (${res.status})`);
+  if (!res.ok) await throwApiError('List sessions', res);
   const data = await res.json();
   return data.sessions || [];
 };
@@ -173,23 +216,97 @@ export const listSessions = async () => {
 export const deleteSessionApi = async (sessionId) => {
   const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}`, {
     method: 'DELETE',
+    credentials: 'include',
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`Delete session failed (${res.status})`);
+  if (!res.ok) await throwApiError('Delete session', res);
   return res.json();
+};
+
+export const retrySessionIndexing = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/retry`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Retry indexing'
+  );
+  if (!res.ok) await throwApiError('Retry indexing', res);
+  const data = await res.json();
+  return data.session;
 };
 
 export const fetchSessionMessages = async (sessionId) => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'Fetch session messages'
   );
-  if (!res.ok) throw new Error(`Fetch session messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Fetch session messages', res);
   const data = await res.json();
   return data.messages || [];
+};
+
+export const listSessionThreads = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'List session threads'
+  );
+  if (!res.ok) await throwApiError('List session threads', res);
+  const data = await res.json();
+  return data.threads || [];
+};
+
+export const createSessionThread = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Create session thread'
+  );
+  if (!res.ok) await throwApiError('Create session thread', res);
+  const data = await res.json();
+  return data.thread;
+};
+
+export const fetchThreadMessages = async (threadId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch thread messages'
+  );
+  if (!res.ok) await throwApiError('Fetch thread messages', res);
+  const data = await res.json();
+  return data.messages || [];
+};
+
+export const clearThreadMessagesApi = async (threadId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Clear thread messages'
+  );
+  if (!res.ok) await throwApiError('Clear thread messages', res);
+  return res.json();
 };
 
 export const clearSessionMessagesApi = async (sessionId) => {
@@ -197,11 +314,12 @@ export const clearSessionMessagesApi = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
         method: 'DELETE',
+        credentials: 'include',
         headers: authHeaders(),
       }),
     'Clear session messages'
   );
-  if (!res.ok) throw new Error(`Clear session messages failed (${res.status})`);
+  if (!res.ok) await throwApiError('Clear session messages', res);
   return res.json();
 };
 
@@ -212,6 +330,7 @@ export const clearSessionMessagesApi = async (sessionId) => {
 export const fetchHealth = async () => {
   try {
     const res = await fetch(`${API_BASE}/api/v1/health`, {
+      credentials: 'include',
       headers: { Authorization: `Bearer ${getBackendApiKey()}` },
     });
     return res.ok;
@@ -222,26 +341,141 @@ export const fetchHealth = async () => {
 
 /**
  * POST /auth/github
- * Exchange GitHub OAuth code for an access token via the backend.
- * Returns { access_token, username }.
+ * Exchange GitHub OAuth code via the backend and create a server-side session.
  */
 export const exchangeGithubCode = async (code) => {
   const res = await fetch(`${API_BASE}/auth/github`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code }),
   });
 
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || '';
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`GitHub auth failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    await throwApiError('GitHub auth', res);
   }
 
+  return res.json();
+};
+
+export const connectGithubToken = async (accessToken) => {
+  const encryptedSecret = await encryptSecretForSubmission(accessToken);
+  const res = await fetch(`${API_BASE}/auth/github/token`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encrypted_secret: encryptedSecret }),
+  });
+
+  if (!res.ok) {
+    await throwApiError('GitHub token connect', res);
+  }
+
+  return res.json();
+};
+
+export const listGithubRepos = async () => {
+  const res = await fetch(`${API_BASE}/api/v1/github/repos`, {
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    await throwApiError('GitHub repo list', res);
+  }
+  const data = await res.json();
+  return data.repos || [];
+};
+
+export const listProviderCredentials = async () => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'List provider credentials'
+  );
+  if (!res.ok) {
+    await throwApiError('List provider credentials', res);
+  }
+  const data = await res.json();
+  return data.provider_credentials || [];
+};
+
+export const createProviderCredential = async ({ provider, label, apiKey, model = '', isActive }) => {
+  const encryptedSecret = await encryptSecretForSubmission(apiKey);
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          provider,
+          label,
+          encrypted_secret: encryptedSecret,
+          model,
+          is_active: isActive,
+        }),
+      }),
+    'Create provider credential'
+  );
+  if (!res.ok) {
+    await throwApiError('Create provider credential', res);
+  }
+  const data = await res.json();
+  return data.provider_credential;
+};
+
+export const activateProviderCredential = async (credentialId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}/activate`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Activate provider credential'
+  );
+  if (!res.ok) {
+    await throwApiError('Activate provider credential', res);
+  }
+  const data = await res.json();
+  return data.provider_credential;
+};
+
+export const deleteProviderCredential = async (credentialId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Delete provider credential'
+  );
+  if (!res.ok) {
+    await throwApiError('Delete provider credential', res);
+  }
+  return res.json();
+};
+
+export const fetchGithubSessionMe = async () => {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    await throwApiError('Auth me', res);
+  }
+  return res.json();
+};
+
+export const logoutGithubSession = async () => {
+  const res = await fetch(`${API_BASE}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    await throwApiError('Auth logout', res);
+  }
   return res.json();
 };

@@ -11,6 +11,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     wants_tests = query_mentions_tests(raw_query)
     wants_compound = query_is_compound_trace(raw_query)
     wants_auth_trace = query_is_auth_flow_trace(raw_query)
+    wants_phase1_flow = query_is_phase1_flow(raw_query)
     wants_overview = query_is_overview_summary(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
@@ -34,7 +35,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
 
     strong_threshold = 1 if (wants_compound or wants_overview) else 2
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
-    primary_cap = 7 if wants_auth_trace else (6 if (wants_compound or wants_overview) else 5)
+    primary_cap = 7 if (wants_auth_trace or wants_phase1_flow) else (6 if (wants_compound or wants_overview) else 5)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
     chosen_primary = (
         strong_primary[:primary_cap]
@@ -42,6 +43,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         else (primary_relevant[:primary_cap] if primary_relevant else primary[:primary_cap])
     )
     chosen_primary = _inject_trace_anchors(raw_query, primary, chosen_primary, primary_cap)
+    chosen_primary = _inject_phase1_flow_anchors(raw_query, primary, chosen_primary, primary_cap)
     chosen_expanded = expanded_relevant[:expanded_cap]
     trimmed = chosen_primary + chosen_expanded
 
@@ -68,6 +70,7 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
     wants_tests = query_mentions_tests(raw_query)
     wants_compound = query_is_compound_trace(raw_query)
     wants_auth_trace = query_is_auth_flow_trace(raw_query)
+    wants_phase1_flow = query_is_phase1_flow(raw_query)
     wants_overview = query_is_overview_summary(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
@@ -85,7 +88,7 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         if expanded_non_tests:
             expanded = expanded_non_tests
 
-    primary_cap = 7 if wants_auth_trace else (6 if (wants_compound or wants_overview) else 5)
+    primary_cap = 7 if (wants_auth_trace or wants_phase1_flow) else (6 if (wants_compound or wants_overview) else 5)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
     selected = select_sources_for_display(raw_query, sources)
     selected_primary = sum(1 for s in selected if s.get("expansion_type") == "primary")
@@ -95,6 +98,7 @@ def explain_source_filter_decision(raw_query: str, sources: list[dict]) -> dict:
         "wants_tests": wants_tests,
         "wants_compound": wants_compound,
         "wants_auth_trace": wants_auth_trace,
+        "wants_phase1_flow": wants_phase1_flow,
         "wants_overview": wants_overview,
         "test_filtered": test_filtered,
         "input_primary": len([s for s in sources if s.get("expansion_type") == "primary"]),
@@ -154,6 +158,96 @@ def _inject_trace_anchors(
     return result
 
 
+def _inject_phase1_flow_anchors(
+    raw_query: str,
+    all_primary: list[dict],
+    chosen_primary: list[dict],
+    cap: int,
+) -> list[dict]:
+    anchors = _phase1_flow_anchors(raw_query)
+    if not anchors:
+        return chosen_primary
+    chosen_ids = {
+        (
+            c.get("relative_path", ""),
+            c.get("symbol_name", ""),
+            int(c.get("start_line", 0)),
+            int(c.get("end_line", 0)),
+            c.get("expansion_type", ""),
+        )
+        for c in chosen_primary
+    }
+    anchor_sources: list[dict] = []
+    for anchor in anchors:
+        for src in all_primary:
+            symbol = str(src.get("symbol_name", ""))
+            if symbol != anchor:
+                continue
+            key = (
+                src.get("relative_path", ""),
+                src.get("symbol_name", ""),
+                int(src.get("start_line", 0)),
+                int(src.get("end_line", 0)),
+                src.get("expansion_type", ""),
+            )
+            if key in chosen_ids:
+                anchor_sources.extend(
+                    chosen
+                    for chosen in chosen_primary
+                    if (
+                        chosen.get("relative_path", ""),
+                        chosen.get("symbol_name", ""),
+                        int(chosen.get("start_line", 0)),
+                        int(chosen.get("end_line", 0)),
+                        chosen.get("expansion_type", ""),
+                    )
+                    == key
+                )
+                break
+            anchor_sources.append(src)
+            chosen_ids.add(key)
+            break
+    result: list[dict] = []
+    result_ids: set[tuple[str, str, int, int, str]] = set()
+    for src in anchor_sources + chosen_primary:
+        key = (
+            src.get("relative_path", ""),
+            src.get("symbol_name", ""),
+            int(src.get("start_line", 0)),
+            int(src.get("end_line", 0)),
+            src.get("expansion_type", ""),
+        )
+        if key in result_ids:
+            continue
+        result.append(src)
+        result_ids.add(key)
+        if len(result) >= cap:
+            break
+    return result
+
+
+def _phase1_flow_anchors(raw_query: str) -> list[str]:
+    q = raw_query.lower()
+    if not query_is_phase1_flow(raw_query):
+        return []
+    if any(term in q for term in ("auth", "oauth", "login", "cookie", "credential")):
+        return [
+            "auth_github",
+            "auth_github_callback",
+            "auth_github_token",
+            "create_auth_session",
+            "get_user_for_session_token",
+            "_require_auth_user",
+            "delete_auth_session",
+            "auth_logout",
+        ]
+    if any(term in q for term in ("index", "indexing", "ingestion", "repo session", "session creation", "clone")):
+        return ["create_session", "_index_job", "run_pipeline"]
+    if any(term in q for term in ("backend", "request", "query", "orchestration", "api")):
+        return ["_query_impl", "run_query"]
+    return []
+
+
 def query_tokens_from_text(raw_query: str) -> set[str]:
     stop = {
         "where",
@@ -210,6 +304,32 @@ def query_is_auth_flow_trace(raw_query: str) -> bool:
     return (
         "trace" in q
         and any(k in q for k in ("account_info", "authenticated", "signature", "api key", "auth header"))
+    )
+
+
+def query_is_phase1_flow(raw_query: str) -> bool:
+    q = raw_query.lower()
+    if not any(marker in q for marker in ("flow", "lifecycle", "orchestration", "trace", "walk me through", "step")):
+        return False
+    return any(
+        term in q
+        for term in (
+            "backend",
+            "request",
+            "query",
+            "api",
+            "auth",
+            "oauth",
+            "login",
+            "cookie",
+            "credential",
+            "index",
+            "indexing",
+            "ingestion",
+            "repo session",
+            "session creation",
+            "clone",
+        )
     )
 
 

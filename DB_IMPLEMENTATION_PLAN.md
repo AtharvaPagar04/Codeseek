@@ -10,17 +10,25 @@ Current status for the migration:
 - [x] Backend repo session persistence moved off `/tmp/codeseek_sessions.json`
 - [x] Backend chat message persistence added for session queries
 - [x] Frontend now hydrates session chat history from backend message APIs
-- [ ] Frontend local chat storage removed as a dependency
-- [ ] GitHub credentials moved server-side
-- [ ] Provider credentials moved server-side
-- [ ] User/auth tables implemented
-- [ ] Rolling thread memory implemented
+- [x] Frontend local chat storage removed as a dependency
+- [x] User/auth tables implemented
+- [x] GitHub credentials moved server-side
+- [x] Provider credentials moved server-side
+- [x] Rolling thread memory implemented
+- [x] First-class `chat_threads` implemented end-to-end
+- [x] Backend persistence layer can now run on SQLite or Postgres
 
 Note:
 
-- The long-term target remains Postgres-backed persistence.
-- The first implementation slice uses Python `sqlite3` so the migration can start immediately without external ORM/package bootstrap.
+- The long-term target remains Postgres-backed persistence for deployed multi-user usage.
+- The app now supports both SQLite and Postgres through the same store layer, with SQLite remaining the default local path.
 - This should be treated as a Phase 1 persistence landing, not the final production database architecture.
+- Frontend session/chat state is now runtime-only UI state; the durable source of truth is the backend message/session APIs.
+- A backend auth foundation now exists: `users`, `auth_sessions`, GitHub OAuth session-cookie issuance, `/auth/me`, and `/auth/logout`.
+- GitHub credentials are now stored server-side and used for backend repo listing + session indexing.
+- Provider credentials are now stored server-side and selected through a backend-owned active configuration per user.
+- Session-level rolling memory is now persisted in the database using a summary + recent-turn history model.
+- Chat data is now modeled through first-class `chat_threads`, with message and memory ownership attached to threads instead of directly to repo sessions.
 
 ## Goal
 
@@ -35,17 +43,11 @@ Replace local-only storage and process-local memory with a backend-managed datab
 
 ## Current Problems
 
-The current architecture still relies on temporary or frontend-local persistence in several places:
+The current architecture still has one main deployment gap:
 
-- chat sessions are stored in frontend `localStorage`
-- GitHub token is stored in frontend `localStorage`
-- provider configs are stored in frontend `localStorage`
-- provider config runtime IDs are stored in frontend `sessionStorage`
-- retrieval sessions are stored in `/tmp/codeseek_sessions.json`
-- conversation memory is process-local in `retrieval/memory.py`
-- GitHub login/logout is not yet backed by a real server session model
+- SQLite remains the default local database, while Postgres should be the deployed default for stronger concurrency and operations
 
-This is not sufficient for deployed multi-user usage.
+The remaining work is now mostly operational migration and deployment choice rather than application data-model redesign.
 
 ## Recommended Stack
 

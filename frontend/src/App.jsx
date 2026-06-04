@@ -5,15 +5,18 @@ import Sidebar from './components/Sidebar';
 import SessionView from './components/SessionView';
 import RepoPickerModal from './components/RepoPickerModal';
 import ApiTokensModal from './components/ApiTokensModal';
-import AuthCallback from './pages/AuthCallback';
+import LiveBackground from './components/LiveBackground';
 import { useSessions } from './hooks/useSessions';
 import { useGitHub } from './hooks/useGitHub';
 import {
   clearSessionMessagesApi,
+  clearThreadMessagesApi,
   createSession,
   deleteSessionApi,
-  fetchSessionMessages,
+  fetchThreadMessages,
   listSessions,
+  listSessionThreads,
+  retrySessionIndexing,
 } from './utils/api';
 
 function Shell() {
@@ -22,16 +25,32 @@ function Shell() {
     addSession,
     deleteSession,
     clearSessionMessages,
-    setSessionMessages,
+    setThreadMessages,
     appendMessage,
     mergeBackendSessions,
+    setSessionThreads,
   } = useSessions();
-  const { isConnected, token, username, avatarUrl, initiateOAuth, storeAuth, disconnect } = useGitHub();
+  const {
+    isConnected,
+    username,
+    avatarUrl,
+    repos,
+    reposLoading,
+    reposError,
+    oauthLoading,
+    oauthError,
+    authStateMessage,
+    initiateOAuth,
+    storeAuth,
+    fetchRepos,
+    disconnect,
+  } = useGitHub();
 
   const [activeSessionId, setActiveSessionId] = useState(() => sessions[0]?.id ?? null);
   const [modalOpen, setModalOpen] = useState(false);
   const [apiModalOpen, setApiModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
+  const [uiNotice, setUiNotice] = useState(null);
   const pollingErrorShownRef = useRef(false);
 
   // Keep active session in sync when sessions change
@@ -68,35 +87,66 @@ function Shell() {
   useEffect(() => {
     if (!activeSessionId) return;
     let cancelled = false;
-    const loadMessages = async () => {
+    const loadThreads = async () => {
       try {
-        const messages = await fetchSessionMessages(activeSessionId);
+        const threads = await listSessionThreads(activeSessionId);
         if (!cancelled) {
-          setSessionMessages(activeSessionId, messages);
+          setSessionThreads(activeSessionId, threads);
         }
       } catch (err) {
-        console.warn('[sessions] fetch messages failed:', err.message);
+        console.warn('[sessions] fetch threads failed:', err.message);
+      }
+    };
+    loadThreads();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, setSessionThreads]);
+
+  useEffect(() => {
+    const activeThreadId = activeSession?.active_thread_id;
+    if (!activeSessionId || !activeThreadId) return;
+    let cancelled = false;
+    const loadMessages = async () => {
+      try {
+        const messages = await fetchThreadMessages(activeThreadId);
+        if (!cancelled) {
+          setThreadMessages(activeSessionId, activeThreadId, messages);
+        }
+      } catch (err) {
+        console.warn('[sessions] fetch thread messages failed:', err.message);
       }
     };
     loadMessages();
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, setSessionMessages]);
+  }, [activeSessionId, activeSession?.active_thread_id, setThreadMessages]);
 
   const handleSelectRepo = async (repo) => {
     try {
+      const existing = sessions.find((session) => session.repo_full_name === repo.full_name);
       const created = await createSession({
         repoFullName: repo.full_name,
         repoUrl: repo.clone_url || `https://github.com/${repo.full_name}.git`,
-        githubToken: token || '',
       });
       const newSession = addSession(created);
       setActiveSessionId(newSession.id);
+      setUiNotice(
+        existing
+          ? {
+              tone: 'info',
+              message: `Opened existing session for ${repo.full_name}.`,
+            }
+          : {
+              tone: 'success',
+              message: `Created session for ${repo.full_name}. Indexing will continue in the background.`,
+            }
+      );
       setModalOpen(false);
       setSidebarOpen(false);
     } catch (err) {
-      alert(err.message || 'Failed to create session.');
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to create session.' });
     }
   };
 
@@ -105,18 +155,35 @@ function Shell() {
       await deleteSessionApi(sessionId);
     } catch (err) {
       console.warn('[sessions] delete api failed:', err.message);
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to delete session.' });
+      return;
     }
     deleteSession(sessionId);
     if (sessionId === activeSessionId) {
       const remaining = sessions.filter((s) => s.id !== sessionId);
       setActiveSessionId(remaining[0]?.id ?? null);
     }
+    setUiNotice({ tone: 'info', message: 'Session deleted.' });
+  };
+
+  const handleRetryIndexing = async (sessionId) => {
+    try {
+      const session = await retrySessionIndexing(sessionId);
+      addSession(session);
+      setUiNotice({
+        tone: 'info',
+        message: `Retrying indexing for ${session.repo_full_name}.`,
+      });
+    } catch (err) {
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to retry indexing.' });
+    }
   };
 
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
   return (
-    <div className="flex flex-col h-screen bg-base text-text-primary overflow-hidden">
+    <div className="flex flex-col h-screen bg-base text-text-primary overflow-hidden relative">
+      <LiveBackground />
       <StatusBar
         ghUser={username}
         ghAvatarUrl={avatarUrl}
@@ -126,7 +193,32 @@ function Shell() {
         isMobile={isMobile}
         onOpenApiTokens={() => setApiModalOpen(true)}
         activeSession={activeSession}
+        githubNotice={authStateMessage}
       />
+      {uiNotice && (
+        <div className="px-4 pt-3">
+          <div
+            className={`mx-auto max-w-4xl rounded-xl border px-4 py-3 text-xs font-mono ${
+              uiNotice.tone === 'error'
+                ? 'border-offline/40 bg-offline/10 text-offline'
+                : uiNotice.tone === 'success'
+                  ? 'border-online/40 bg-online/10 text-online'
+                  : 'border-border bg-surface-3/80 text-text-secondary'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span>{uiNotice.message}</span>
+              <button
+                onClick={() => setUiNotice(null)}
+                className="shrink-0 text-text-muted hover:text-text-primary"
+                aria-label="Dismiss notice"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
         {/* Sidebar — desktop: toggleable, mobile: overlay drawer */}
@@ -138,7 +230,7 @@ function Shell() {
               : `${sidebarOpen ? 'w-64' : 'w-0'}`
             }
           `}
-          style={{ borderRight: (isMobile || sidebarOpen) ? '1px solid var(--border)' : 'none' }}
+          style={{ borderRight: (isMobile || sidebarOpen) ? '1px solid #262626' : 'none' }}
         >
           <div className="w-64 h-full flex flex-col">
             <Sidebar
@@ -169,11 +261,18 @@ function Shell() {
               key={activeSession.id}
               session={activeSession}
               appendMessage={appendMessage}
+              onRetryIndexing={handleRetryIndexing}
               onClearMessages={async (sessionId) => {
                 try {
-                  await clearSessionMessagesApi(sessionId);
+                  const activeThreadId = activeSession.active_thread_id;
+                  if (activeThreadId) {
+                    await clearThreadMessagesApi(activeThreadId);
+                  } else {
+                    await clearSessionMessagesApi(sessionId);
+                  }
                 } catch (err) {
                   console.warn('[sessions] clear messages api failed:', err.message);
+                  setUiNotice({ tone: 'error', message: err.message || 'Failed to clear messages.' });
                 }
                 clearSessionMessages(sessionId);
               }}
@@ -187,11 +286,16 @@ function Shell() {
       {modalOpen && (
         <RepoPickerModal
           isConnected={isConnected}
-          token={token}
+          repos={repos}
+          reposLoading={reposLoading}
+          reposError={reposError}
           onSelect={handleSelectRepo}
           onClose={() => setModalOpen(false)}
           onConnectGitHub={initiateOAuth}
+          onLoadRepos={fetchRepos}
           onSaveToken={storeAuth}
+          oauthLoading={oauthLoading}
+          oauthError={oauthError}
         />
       )}
 
@@ -211,7 +315,7 @@ function NoSessionPlaceholder({ onNewSession }) {
       </p>
       <button
         onClick={onNewSession}
-        className="px-4 py-2 text-sm text-accent border border-accent/40 rounded hover:bg-accent-glow transition-colors"
+        className="px-4 py-2 text-sm text-text-primary bg-surface-3 border border-border rounded-xl hover:bg-surface-2 hover:border-text-muted transition-colors"
       >
         + New Session
       </button>
@@ -224,7 +328,6 @@ export default function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/" element={<Shell />} />
-        <Route path="/auth/callback" element={<AuthCallback />} />
       </Routes>
     </BrowserRouter>
   );
