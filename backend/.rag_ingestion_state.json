@@ -1,7 +1,7 @@
 {
   ".rag_ingestion_state.json": {
-    "mtime_ns": 1780570122485454589,
-    "size_bytes": 15205
+    "mtime_ns": 1780606164561044312,
+    "size_bytes": 16266
   },
   "AGENTS.md": {
     "mtime_ns": 1780431730741031478,
@@ -56,24 +56,24 @@
     "size_bytes": 1271
   },
   "docs/retrieval_docs/README.md": {
-    "mtime_ns": 1780570173748712150,
-    "size_bytes": 1716
+    "mtime_ns": 1780575191094258502,
+    "size_bytes": 2551
   },
   "docs/retrieval_docs/architecture.md": {
     "mtime_ns": 1780431730742393998,
     "size_bytes": 19240
   },
   "docs/retrieval_docs/current_retrieval_strategy.md": {
-    "mtime_ns": 1780570185388547873,
-    "size_bytes": 34228
+    "mtime_ns": 1780594122087102638,
+    "size_bytes": 41914
   },
   "docs/retrieval_docs/eval_codeseek_exact_wording.json": {
-    "mtime_ns": 1780539003431084624,
-    "size_bytes": 2153
+    "mtime_ns": 1780606236323011234,
+    "size_bytes": 3056
   },
   "docs/retrieval_docs/eval_codeseek_flow_phase1.json": {
-    "mtime_ns": 1780570903460170342,
-    "size_bytes": 2602
+    "mtime_ns": 1780574578205804678,
+    "size_bytes": 4136
   },
   "docs/retrieval_docs/eval_codeseek_hard.json": {
     "mtime_ns": 1780431730743706063,
@@ -100,8 +100,8 @@
     "size_bytes": 3334
   },
   "docs/retrieval_docs/eval_results_multi_repo_latest.json": {
-    "mtime_ns": 1780570143597566350,
-    "size_bytes": 3053
+    "mtime_ns": 1780571033201905174,
+    "size_bytes": 3050
   },
   "docs/retrieval_docs/eval_suite_multi_repo.json": {
     "mtime_ns": 1780554376802948071,
@@ -120,8 +120,8 @@
     "size_bytes": 8983
   },
   "docs/retrieval_docs/response_quality_refinement_plan.md": {
-    "mtime_ns": 1780570166672145315,
-    "size_bytes": 46399
+    "mtime_ns": 1780605622031061034,
+    "size_bytes": 59469
   },
   "docs/retrieval_docs/retrieval_pipeline_architecture.md": {
     "mtime_ns": 1780431730743706063,
@@ -248,40 +248,44 @@
     "size_bytes": 0
   },
   "retrieval/api_service.py": {
-    "mtime_ns": 1780501826899142060,
-    "size_bytes": 43428
+    "mtime_ns": 1780585113233603591,
+    "size_bytes": 45798
   },
   "retrieval/assembler.py": {
-    "mtime_ns": 1780431730746537668,
-    "size_bytes": 3925
+    "mtime_ns": 1780604794391989742,
+    "size_bytes": 9483
   },
   "retrieval/auth_store.py": {
     "mtime_ns": 1780440764670512566,
     "size_bytes": 5040
   },
   "retrieval/chat_store.py": {
-    "mtime_ns": 1780444140639004376,
-    "size_bytes": 4631
+    "mtime_ns": 1780604004186959623,
+    "size_bytes": 4709
   },
   "retrieval/code_answers.py": {
-    "mtime_ns": 1780570840888110443,
-    "size_bytes": 41993
+    "mtime_ns": 1780593963972948390,
+    "size_bytes": 82549
   },
   "retrieval/config.py": {
-    "mtime_ns": 1780540225043189435,
-    "size_bytes": 2939
+    "mtime_ns": 1780604642307371443,
+    "size_bytes": 5854
   },
   "retrieval/crypto_store.py": {
-    "mtime_ns": 1780484348322282183,
-    "size_bytes": 2503
+    "mtime_ns": 1780582083061213947,
+    "size_bytes": 2840
   },
   "retrieval/db.py": {
-    "mtime_ns": 1780444754876050286,
-    "size_bytes": 10747
+    "mtime_ns": 1780603945927239684,
+    "size_bytes": 11317
   },
   "retrieval/expander.py": {
-    "mtime_ns": 1780431730746537668,
-    "size_bytes": 3732
+    "mtime_ns": 1780604940644695945,
+    "size_bytes": 11916
+  },
+  "retrieval/follow_up_memory.py": {
+    "mtime_ns": 1780604357749146025,
+    "size_bytes": 11611
   },
   "retrieval/github_store.py": {
     "mtime_ns": 1780441176357217935,
@@ -292,20 +296,20 @@
     "size_bytes": 1190
   },
   "retrieval/llm.py": {
-    "mtime_ns": 1780501819095982841,
-    "size_bytes": 12665
+    "mtime_ns": 1780605420567971888,
+    "size_bytes": 15092
   },
   "retrieval/main.py": {
-    "mtime_ns": 1780569980211428932,
-    "size_bytes": 14979
+    "mtime_ns": 1780605438717654631,
+    "size_bytes": 25885
   },
   "retrieval/memory.py": {
-    "mtime_ns": 1780444157285307002,
-    "size_bytes": 6548
+    "mtime_ns": 1780604330409594865,
+    "size_bytes": 12217
   },
   "retrieval/memory_store.py": {
-    "mtime_ns": 1780444140732335644,
-    "size_bytes": 3240
+    "mtime_ns": 1780603984703742097,
+    "size_bytes": 8124
   },
   "retrieval/observability.py": {
     "mtime_ns": 1780484343539021623,
@@ -316,20 +320,20 @@
     "size_bytes": 6111
   },
   "retrieval/query_processor.py": {
-    "mtime_ns": 1780570846821321470,
-    "size_bytes": 10026
+    "mtime_ns": 1780591720649478804,
+    "size_bytes": 14184
   },
   "retrieval/searcher.py": {
-    "mtime_ns": 1780541726897955063,
-    "size_bytes": 29116
+    "mtime_ns": 1780593938230023197,
+    "size_bytes": 41283
   },
   "retrieval/session_indexer.py": {
-    "mtime_ns": 1780538259978327513,
-    "size_bytes": 13911
+    "mtime_ns": 1780586580511216750,
+    "size_bytes": 14552
   },
   "retrieval/source_filter.py": {
-    "mtime_ns": 1780570854804490771,
-    "size_bytes": 12844
+    "mtime_ns": 1780577077759467049,
+    "size_bytes": 19707
   },
   "retrieval/submission_crypto.py": {
     "mtime_ns": 1780446035492243200,
@@ -376,8 +380,8 @@
     "size_bytes": 3251
   },
   "scripts/retrieval_eval.py": {
-    "mtime_ns": 1780569988394648031,
-    "size_bytes": 13019
+    "mtime_ns": 1780606060716312368,
+    "size_bytes": 13455
   },
   "scripts/retrieval_eval_suite.py": {
     "mtime_ns": 1780554301252063637,
@@ -455,6 +459,10 @@
     "mtime_ns": 1780553331750784427,
     "size_bytes": 55
   },
+  "tests/test_api_service_decryption_gating.py": {
+    "mtime_ns": 1780585152729762639,
+    "size_bytes": 5403
+  },
   "tests/test_api_service_encrypted_submission.py": {
     "mtime_ns": 1780485932054173776,
     "size_bytes": 5130
@@ -480,20 +488,36 @@
     "size_bytes": 5388
   },
   "tests/test_code_answers.py": {
-    "mtime_ns": 1780570870487503601,
-    "size_bytes": 32453
+    "mtime_ns": 1780605495356657627,
+    "size_bytes": 60372
   },
   "tests/test_crypto_store.py": {
-    "mtime_ns": 1780441518444304842,
-    "size_bytes": 1066
+    "mtime_ns": 1780582156173452707,
+    "size_bytes": 2088
   },
   "tests/test_db.py": {
     "mtime_ns": 1780444811325425289,
     "size_bytes": 3235
   },
+  "tests/test_evidence_confidence.py": {
+    "mtime_ns": 1780605504949821110,
+    "size_bytes": 7517
+  },
+  "tests/test_expander.py": {
+    "mtime_ns": 1780594043658349984,
+    "size_bytes": 1648
+  },
+  "tests/test_followup_entity_memory.py": {
+    "mtime_ns": 1780604184338438856,
+    "size_bytes": 23643
+  },
   "tests/test_github_store.py": {
     "mtime_ns": 1780441553333315709,
     "size_bytes": 2036
+  },
+  "tests/test_history_cap.py": {
+    "mtime_ns": 1780576828409257581,
+    "size_bytes": 9355
   },
   "tests/test_ingestion_non_code_files.py": {
     "mtime_ns": 1780552925420995310,
@@ -504,12 +528,16 @@
     "size_bytes": 933
   },
   "tests/test_llm_provider_config.py": {
-    "mtime_ns": 1780431730748534935,
+    "mtime_ns": 1780588081826044569,
     "size_bytes": 2181
   },
   "tests/test_llm_provider_failures.py": {
     "mtime_ns": 1780501819265979036,
     "size_bytes": 2693
+  },
+  "tests/test_phase3_deep_dive.py": {
+    "mtime_ns": 1780579096400405430,
+    "size_bytes": 8786
   },
   "tests/test_postgres_readiness.py": {
     "mtime_ns": 1780484974194241069,
@@ -519,9 +547,13 @@
     "mtime_ns": 1780442109247714901,
     "size_bytes": 2198
   },
+  "tests/test_python_import_backing.py": {
+    "mtime_ns": 1780593207341406114,
+    "size_bytes": 20997
+  },
   "tests/test_query_processor_scored_intent.py": {
-    "mtime_ns": 1780570879383989457,
-    "size_bytes": 3410
+    "mtime_ns": 1780591692036635391,
+    "size_bytes": 5756
   },
   "tests/test_retrieval_eval_scoring.py": {
     "mtime_ns": 1780554334492774618,
@@ -532,39 +564,47 @@
     "size_bytes": 1899
   },
   "tests/test_retrieval_followup_resolution.py": {
-    "mtime_ns": 1780485589564340621,
-    "size_bytes": 7736
+    "mtime_ns": 1780605557015197374,
+    "size_bytes": 7446
   },
   "tests/test_retrieval_no_evidence_guard.py": {
-    "mtime_ns": 1780485582794502391,
-    "size_bytes": 1682
+    "mtime_ns": 1780605557015772643,
+    "size_bytes": 1600
   },
   "tests/test_retrieval_source_filtering.py": {
-    "mtime_ns": 1780569844003320091,
-    "size_bytes": 5119
+    "mtime_ns": 1780574550066253299,
+    "size_bytes": 8244
   },
   "tests/test_retrieval_source_filtering_integration.py": {
     "mtime_ns": 1780431730748534935,
     "size_bytes": 3645
   },
   "tests/test_searcher_lexical.py": {
-    "mtime_ns": 1780540337928274094,
-    "size_bytes": 7150
+    "mtime_ns": 1780574486647264632,
+    "size_bytes": 10549
   },
   "tests/test_searcher_overview.py": {
-    "mtime_ns": 1780541769507322274,
-    "size_bytes": 4914
+    "mtime_ns": 1780594017448766356,
+    "size_bytes": 21056
   },
   "tests/test_session_indexer.py": {
-    "mtime_ns": 1780538790367533438,
-    "size_bytes": 8366
+    "mtime_ns": 1780586614454107354,
+    "size_bytes": 8735
   },
   "tests/test_session_memory.py": {
     "mtime_ns": 1780443480558141998,
     "size_bytes": 5606
   },
+  "tests/test_sibling_expansion.py": {
+    "mtime_ns": 1780604876206710314,
+    "size_bytes": 19701
+  },
   "tests/test_submission_crypto.py": {
     "mtime_ns": 1780446086388376299,
     "size_bytes": 1398
+  },
+  "tests/test_two_layer_source_gating.py": {
+    "mtime_ns": 1780591485976825607,
+    "size_bytes": 13475
   }
 }

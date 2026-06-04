@@ -25,22 +25,31 @@ SYSTEM_PROMPT = (
     "You are a repository-grounded code assistant.\n"
     "Rules:\n"
     "1) Use only the provided CODE CONTEXT; do not use outside knowledge.\n"
-    "2) Do not propose new code, refactors, or hypothetical implementations unless explicitly requested.\n"
+    "2) Do not propose new code, refactors, or hypothetical implementations "
+    "unless the user explicitly asks for them.\n"
     "3) If required evidence is missing, reply with exactly: "
     "'Insufficient context in retrieved code to answer confidently.'\n"
-    "4) Be concise and technical, but complete enough to answer the user's actual question.\n"
-    "   Prefer direct method/file traces over vague summaries.\n"
-    "5) Do not claim behavior that is not visible in the provided context.\n"
-    "5a) Only mention files, symbols, classes, or methods that are present in the provided context blocks.\n"
-    "5b) If uncertain, omit the claim instead of guessing or broadening scope.\n"
-    "6) Response format:\n"
+    "4) Be concise and technical, but complete enough to answer the user's actual question. "
+    "Prefer direct method/file/class traces over vague summaries.\n"
+    "5) Grounding discipline:\n"
+    "   5a) Only mention files, symbols, classes, or methods that are present in the provided context blocks.\n"
+    "   5b) If uncertain, omit the claim instead of guessing or broadening scope.\n"
+    "   5c) Do not claim behavior that is not visible in the provided context.\n"
+    "6) Code and snippet rules:\n"
+    "   - Always use inline references (e.g. `ClassName.method_name`) when naming symbols from context.\n"
+    "   - Include a short fenced code block ONLY when the user explicitly asks to \"show\", \"provide\", "
+    "\"give\", or \"write\" code — or when a snippet is the clearest way to answer a how/where question.\n"
+    "   - When showing a fenced block, use exactly 1-2 blocks maximum; identify the file and symbol above each.\n"
+    "   - Never reproduce entire files or large function bodies verbatim; excerpt only the essential lines.\n"
+    "7) Response format (default path):\n"
     "   - Start with a one-line direct answer.\n"
-    "   - Then provide 3-6 short bullet points with concrete evidence.\n"
-    "   - No markdown code blocks unless user explicitly asks for code.\n"
-    "   - When the user explicitly asks for code, include only short verbatim snippets from the provided context.\n"
-    "   - For explanation or overview questions, explain how the answer is assembled across files instead of repeating generic UI wording.\n"
-    "7) For absence/negative answers, never make absolute repo-wide claims. "
-    "Use wording like: 'Not found in retrieved context.'"
+    "   - Then provide 3-6 short bullet points with concrete evidence from the context.\n"
+    "   - For overview, explanation, or trace questions, explain how behavior is assembled across "
+    "files rather than repeating symbol names without connecting them.\n"
+    "   - For deep-dive / symbol-level questions, give a technical walk-through: purpose, inputs, "
+    "key logic steps, return values, and side effects — referencing exact files and line ranges.\n"
+    "8) For absence/negative answers, never make absolute repo-wide claims. "
+    "Use wording like: 'Not found in the retrieved context.' and suggest a more specific search term."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
@@ -98,33 +107,58 @@ def _build_prompt(
     if history_block:
         parts.append(history_block)
     if is_code_request(raw_query):
-        parts.append("--- RESPONSE MODE ---")
+        parts.append("--- RESPONSE MODE: CODE REQUEST ---")
         parts.append(
-            "The user explicitly asked for code. Return the smallest complete snippet "
-            "that answers the question using only CODE CONTEXT. Include 1-2 fenced code "
-            "blocks at most, and identify the file/symbol before each block. Do not "
-            "paraphrase code when an exact snippet is available."
+            "The user explicitly asked for code. "
+            "Return the smallest complete snippet that directly answers the question, "
+            "using only the CODE CONTEXT provided. "
+            "Include 1-2 fenced code blocks at most; identify the file and symbol name above each block. "
+            "Do not paraphrase or reconstruct code when an exact verbatim excerpt is available. "
+            "Do not add explanatory prose beyond a one-line context sentence per block unless asked."
         )
     elif is_overview_request(raw_query):
-        parts.append("--- RESPONSE MODE ---")
+        parts.append("--- RESPONSE MODE: OVERVIEW ---")
         parts.append(
-            "The user wants a grounded project overview. Explain what the project does, "
-            "which files or sections drive the behavior, the main tech stack or runtime "
-            "shape visible in context, and any important backing data/config sources. "
+            "The user wants a grounded project overview. "
+            "Explain what the project does, which modules or entry points drive core behavior, "
+            "the main tech stack or runtime shape visible in context, and any important "
+            "backing data, config, or service dependencies. "
             "When arrays or objects list concrete technologies, categories, or entities, "
-            "name the most important ones explicitly instead of describing them abstractly. "
-            "Prefer one short overview paragraph followed by 4-6 evidence-backed bullet points."
+            "name the most important ones explicitly rather than describing them abstractly. "
+            "Format: one short overview paragraph followed by 4-6 evidence-backed bullet points. "
+            "Do not include fenced code blocks unless the user asked for code."
         )
     elif is_explanation_request(raw_query):
-        parts.append("--- RESPONSE MODE ---")
+        parts.append("--- RESPONSE MODE: EXPLANATION ---")
         parts.append(
-            "The user asked for an explanation, not a raw code dump. Explain the code "
-            "structure in detail: what the component renders, where its displayed data "
-            "comes from, how any map/loop transforms data into UI, layout/styling choices, "
-            "and any interaction handlers. If backing data arrays or objects are present, "
-            "name important concrete entries, titles, or fields instead of only referring "
-            "to them generically. Reference concrete files and symbols from the allowed "
-            "sources. Prefer a short paragraph followed by 4-7 focused bullet points."
+            "The user asked for an explanation, not a raw code dump. "
+            "Explain the structure and behavior of the referenced code: what it does, "
+            "what it reads and writes, how it transforms or routes data, and any key "
+            "design decisions visible in the context. "
+            "For UI code: explain what is rendered, where data comes from, how loops or maps "
+            "produce output, and any interaction handlers. "
+            "For backend code: explain the request/response flow, key function calls, "
+            "data transformations, and any external dependencies (DB, cache, APIs). "
+            "Reference concrete files and symbols from the allowed sources. "
+            "If backing data arrays or objects are present, name important entries or fields "
+            "rather than referring to them generically. "
+            "Format: one short summary sentence followed by 4-7 focused bullet points. "
+            "Include an inline code reference (e.g. `module.function`) for each bullet point."
+        )
+    else:
+        # TRACE / DEPENDENCY / SYMBOL / deep-dive fallthrough
+        parts.append("--- RESPONSE MODE: TECHNICAL TRACE ---")
+        parts.append(
+            "Answer with a grounded technical walk-through. "
+            "For each step: name the exact file and symbol, state what it does, what it "
+            "reads/writes/calls, and how it connects to the next step. "
+            "Include inputs, return values, and any notable side effects or error handling "
+            "visible in the context. "
+            "Keep the answer concrete and implementation-based — avoid generic descriptions "
+            "that could apply to any codebase. "
+            "Format: one-line answer, then 4-8 numbered steps or bullet points. "
+            "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
+            "code blocks unless the user explicitly asked for code."
         )
     if allowed_sources:
         parts.append("--- ALLOWED SOURCES (STRICT) ---")

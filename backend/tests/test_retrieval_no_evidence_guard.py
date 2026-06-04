@@ -19,7 +19,7 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval.main import run_query
+from retrieval.main import run_query, LOW_CONTEXT_FALLBACK
 from retrieval.memory import ConversationMemory
 
 
@@ -37,7 +37,7 @@ class RetrievalNoEvidenceGuardTests(unittest.TestCase):
 
         self.assertEqual(
             answer,
-            "Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.",
+            LOW_CONTEXT_FALLBACK,
         )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 42)

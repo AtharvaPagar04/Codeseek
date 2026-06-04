@@ -76,6 +76,19 @@ class TestParseNamedImportsJS:
         pairs = _parse_named_imports('import { foo as bar } from "./utils";')
         assert ("foo", "./utils") in pairs
 
+    def test_es6_default_import(self):
+        pairs = _parse_named_imports('import SkillsData from "@/lib/data";')
+        assert ("SkillsData", "@/lib/data") in pairs
+
+    def test_es6_namespace_import(self):
+        pairs = _parse_named_imports('import * as data from "@/lib/data";')
+        assert ("data", "@/lib/data") in pairs
+
+    def test_es6_mixed_default_and_named_import(self):
+        pairs = _parse_named_imports('import SkillsData, { skillCategories } from "@/lib/data";')
+        assert ("SkillsData", "@/lib/data") in pairs
+        assert ("skillCategories", "@/lib/data") in pairs
+
 
 # ---------------------------------------------------------------------------
 # _resolve_import_path — Python dotted modules
@@ -113,6 +126,18 @@ class TestResolveImportPathPython:
             with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(tmp)}, clear=False):
                 result = _resolve_import_path("src/module.py", "nonexistent.module")
             assert result is None
+
+    def test_resolves_json_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "config").mkdir(parents=True)
+            (repo_root / "src" / "config" / "app.json").write_text('{"featureFlag": true}\n')
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                resolved = _resolve_import_path("src/components/App.tsx", "@/config/app.json")
+
+            assert resolved is not None
+            assert resolved.name == "app.json"
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +222,20 @@ class TestExtractExportBlockPython:
 
         assert result is not None
         assert "skillCategories" in result["formatted"]
+
+    def test_extracts_json_import_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "config").mkdir(parents=True)
+            path = repo_root / "src" / "config" / "app.json"
+            path.write_text('{\n  "featureFlag": true,\n  "apiBase": "/v1"\n}\n')
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                result = _extract_export_block(path, "appConfig")
+
+        assert result is not None
+        assert result["relative_path"] == "src/config/app.json"
+        assert "```json" in result["formatted"]
+        assert '"featureFlag": true' in result["formatted"]
 
 
 # ---------------------------------------------------------------------------
@@ -360,3 +399,116 @@ class TestPythonImportSupportIntegration:
 
         assert result is not None
         assert result["symbol_name"] == "skillCategories"
+
+    def test_finds_js_export_through_reexport_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "src" / "lib").mkdir(parents=True)
+            (repo_root / "src" / "components" / "Skills.tsx").write_text(
+                'import { skillCategories } from "@/lib";\n'
+                'export default function Skills() { return null; }\n'
+            )
+            (repo_root / "src" / "lib" / "index.ts").write_text(
+                'export { skillCategories } from "./data";\n'
+            )
+            (repo_root / "src" / "lib" / "data.ts").write_text(
+                "export const skillCategories = [{ title: 'Programming' }];\n"
+            )
+
+            source = {
+                "relative_path": "src/components/Skills.tsx",
+                "symbol_name": "Skills",
+                "start_line": 2,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["imports"] = ['import { skillCategories } from "@/lib";']
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                result = find_supporting_import_export(
+                    "what skills are listed",
+                    [source],
+                    [chunk],
+                )
+
+        assert result is not None
+        assert result["symbol_name"] == "skillCategories"
+        assert result["relative_path"] == "src/lib/data.ts"
+
+    def test_reexport_chain_is_bounded_by_default_depth_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "src" / "lib").mkdir(parents=True)
+            (repo_root / "src" / "components" / "Skills.tsx").write_text(
+                'import { skillCategories } from "@/lib";\n'
+                'export default function Skills() { return null; }\n'
+            )
+            (repo_root / "src" / "lib" / "index.ts").write_text(
+                'export { skillCategories } from "./one";\n'
+            )
+            (repo_root / "src" / "lib" / "one.ts").write_text(
+                'export { skillCategories } from "./two";\n'
+            )
+            (repo_root / "src" / "lib" / "two.ts").write_text(
+                'export { skillCategories } from "./three";\n'
+            )
+            (repo_root / "src" / "lib" / "three.ts").write_text(
+                "export const skillCategories = [{ title: 'Programming' }];\n"
+            )
+
+            source = {
+                "relative_path": "src/components/Skills.tsx",
+                "symbol_name": "Skills",
+                "start_line": 2,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["imports"] = ['import { skillCategories } from "@/lib";']
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                result = find_supporting_import_export(
+                    "what skills are listed",
+                    [source],
+                    [chunk],
+                )
+
+        assert result is None
+
+    def test_finds_json_config_via_default_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "src" / "config").mkdir(parents=True)
+            (repo_root / "src" / "components" / "ConfigView.tsx").write_text(
+                'import appConfig from "@/config/app.json";\n'
+                'export default function ConfigView() { return null; }\n'
+            )
+            (repo_root / "src" / "config" / "app.json").write_text(
+                '{\n  "featureFlag": true,\n  "apiBase": "/v1"\n}\n'
+            )
+
+            source = {
+                "relative_path": "src/components/ConfigView.tsx",
+                "symbol_name": "ConfigView",
+                "start_line": 2,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["imports"] = ['import appConfig from "@/config/app.json";']
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                result = find_supporting_import_export(
+                    "what is in app config",
+                    [source],
+                    [chunk],
+                )
+
+        assert result is not None
+        assert result["symbol_name"] == "appConfig"
+        assert result["relative_path"] == "src/config/app.json"
+        assert "```json" in result["formatted"]

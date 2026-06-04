@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import textwrap
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from retrieval.source_filter import split_sources_two_layer, select_sources_for_display
-from retrieval.assembler import intent_context_budget
+from retrieval.assembler import assemble_for_reasoning, intent_context_budget
 from retrieval.config import (
     DISPLAY_SOURCES_CAP,
     REASONING_SOURCES_CAP,
@@ -164,9 +169,117 @@ class TestIntentContextBudget:
         """Architecture answers need more breadth than config key lookups."""
         assert intent_context_budget("ARCHITECTURE") > intent_context_budget("CONFIG")
 
+    def test_tuned_budget_profile_matches_query_families(self):
+        """Budget tuning should reflect current WS8 priorities."""
+        assert intent_context_budget("EXPLANATION") > intent_context_budget("CODE_REQUEST")
+        assert intent_context_budget("SEMANTIC") > intent_context_budget("TECH_STACK")
+        assert intent_context_budget("LOW_CONTEXT") < intent_context_budget("CONFIG")
+        assert intent_context_budget("TRACE") >= intent_context_budget("ARCHITECTURE")
+        assert intent_context_budget("SYMBOL") < intent_context_budget("EXPLANATION")
+
     def test_all_budgets_within_reasonable_bounds(self):
         for intent, budget in INTENT_CONTEXT_BUDGETS.items():
             assert 1000 <= budget <= 10000, f"Budget for {intent}={budget} is outside [1000, 10000]"
+
+
+# ---------------------------------------------------------------------------
+# assemble_for_reasoning — snippet-aware ordering
+# ---------------------------------------------------------------------------
+
+class TestAssembleForReasoningRanking:
+    def test_code_request_prefers_query_matching_concise_primary_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            code = textwrap.dedent(
+                """
+                def run_query():
+                    token = load_token()
+                    return token
+
+
+                def helper_block():
+                    line_01 = 1
+                    line_02 = 2
+                    line_03 = 3
+                    line_04 = 4
+                    line_05 = 5
+                    line_06 = 6
+                    line_07 = 7
+                    line_08 = 8
+                    line_09 = 9
+                    line_10 = 10
+                    line_11 = 11
+                    line_12 = 12
+                    line_13 = 13
+                    line_14 = 14
+                    line_15 = 15
+                    line_16 = 16
+                    line_17 = 17
+                    line_18 = 18
+                    line_19 = 19
+                    line_20 = 20
+                    line_21 = 21
+                    line_22 = 22
+                    line_23 = 23
+                    line_24 = 24
+                    line_25 = 25
+                    line_26 = 26
+                    line_27 = 27
+                    line_28 = 28
+                    line_29 = 29
+                    line_30 = 30
+                    line_31 = 31
+                    line_32 = 32
+                    line_33 = 33
+                    line_34 = 34
+                    line_35 = 35
+                    line_36 = 36
+                    line_37 = 37
+                    line_38 = 38
+                    line_39 = 39
+                    line_40 = 40
+                    line_41 = 41
+                    return line_41
+                """
+            ).strip() + "\n"
+            (repo_root / "app.py").write_text(code, encoding="utf-8")
+
+            run_query_chunk = {
+                "relative_path": "app.py",
+                "symbol_name": "run_query",
+                "start_line": 1,
+                "end_line": 3,
+                "expansion_type": "primary",
+                "retrieval_score": 0.90,
+                "chunk_type": "function",
+            }
+            helper_chunk = {
+                "relative_path": "app.py",
+                "symbol_name": "helper_block",
+                "start_line": 6,
+                "end_line": 48,
+                "expansion_type": "primary",
+                "retrieval_score": 0.99,
+                "chunk_type": "function",
+            }
+
+            old_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
+            os.environ["RETRIEVAL_REPO_ROOT"] = str(repo_root)
+            try:
+                _context, sources, _used = assemble_for_reasoning(
+                    [helper_chunk, run_query_chunk],
+                    "",
+                    primary_intent="CODE_REQUEST",
+                    raw_query="show me the run_query code",
+                    query_entities={"symbols": ["run_query"], "files": []},
+                )
+            finally:
+                if old_repo_root is None:
+                    os.environ.pop("RETRIEVAL_REPO_ROOT", None)
+                else:
+                    os.environ["RETRIEVAL_REPO_ROOT"] = old_repo_root
+
+            assert sources[0]["symbol_name"] == "run_query"
 
 
 # ---------------------------------------------------------------------------

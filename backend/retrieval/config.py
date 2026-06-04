@@ -46,22 +46,25 @@ ENABLE_TWO_LAYER_SOURCES = _env_bool("RETRIEVAL_ENABLE_TWO_LAYER_SOURCES", True)
 DISPLAY_SOURCES_CAP = _env_int("RETRIEVAL_DISPLAY_SOURCES_CAP", 6)
 REASONING_SOURCES_CAP = _env_int("RETRIEVAL_REASONING_SOURCES_CAP", 12)
 
-# Intent-aware context budgets (plan §Intent-Aware Context Budget Starting Values).
+# Intent-aware context budgets.
+# Tuned to keep broad explanation/synthesis paths deeper, keep explicit code
+# requests concise enough for snippet-first answers, and keep low-context/config
+# questions from consuming the full reasoning window.
 # Keyed by primary_intent string; fallback is MAX_CONTEXT_TOKENS.
 INTENT_CONTEXT_BUDGETS: dict[str, int] = {
-    "OVERVIEW":      5000,
-    "TECH_STACK":    4500,
-    "ARCHITECTURE":  6000,
-    "SYMBOL":        2500,
-    "FILE":          2500,
-    "SEMANTIC":      5000,
+    "OVERVIEW":      5200,
+    "TECH_STACK":    4200,
+    "ARCHITECTURE":  6200,
+    "SYMBOL":        2800,
+    "FILE":          2800,
+    "SEMANTIC":      5400,
     "TRACE":         6500,
     "DEPENDENCY":    6500,
-    "FOLLOWUP":      4500,
-    "EXPLANATION":   4500,
-    "CODE_REQUEST":  5500,
-    "CONFIG":        4000,
-    "LOW_CONTEXT":   2500,
+    "FOLLOWUP":      4200,
+    "EXPLANATION":   5200,
+    "CODE_REQUEST":  4800,
+    "CONFIG":        3600,
+    "LOW_CONTEXT":   1800,
 }
 
 # History token caps — prevent conversation history from starving code context.
@@ -87,9 +90,32 @@ INTENT_HISTORY_CAPS: dict[str, int] = {
 
 EXPAND_CALLS = _env_bool("RETRIEVAL_EXPAND_CALLS", True)
 EXPAND_PARENT = _env_bool("RETRIEVAL_EXPAND_PARENT", True)
+# WS9: Sibling/neighborhood expansion.
+# Disabled by default until latency and precision are measured against evals.
 EXPAND_SIBLINGS = _env_bool("RETRIEVAL_EXPAND_SIBLINGS", False)
 EXPAND_SPLIT_PARTS = _env_bool("RETRIEVAL_EXPAND_SPLIT_PARTS", True)
 CALL_EXPANSION_LIMIT = _env_int("RETRIEVAL_CALL_EXPANSION_LIMIT", 5)
+
+# Sibling expansion tuning (WS9).
+# Siblings use at most this fraction of the *remaining* token budget after primaries.
+SIBLING_BUDGET_FRACTION: float = float(os.getenv("RETRIEVAL_SIBLING_BUDGET_FRACTION", "0.20"))
+# Max sibling chunks included per primary selected chunk.
+SIBLING_MAX_PER_PRIMARY: int = _env_int("RETRIEVAL_SIBLING_MAX_PER_PRIMARY", 2)
+# Minimum number of lexical token overlaps required for a sibling to be included.
+SIBLING_MIN_OVERLAP: int = _env_int("RETRIEVAL_SIBLING_MIN_OVERLAP", 1)
+# Intents that allow sibling expansion; OVERVIEW is explicitly excluded per the plan.
+SIBLING_ENABLED_INTENTS: frozenset[str] = frozenset(
+    {
+        "EXPLANATION",
+        "TRACE",
+        "SYMBOL",
+        "DEPENDENCY",
+        "CODE_REQUEST",
+        "FILE",
+        "FOLLOWUP",
+        "SEMANTIC",
+    }
+)
 
 CONVERSATION_HISTORY_TURNS = 5
 FILE_CACHE_MAX_SIZE = 128

@@ -12,6 +12,8 @@ DEPENDENCY_PATTERNS = [
     r"\bcallers of\b",
     r"\bcalled by\b",
     r"\bwho uses\b",
+    r"\binvalidates\b",
+    r"\binvalidate\b",
 ]
 
 SYMBOL_HINT_PATTERNS = [
@@ -45,6 +47,29 @@ ENV_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 ROUTE_RE = re.compile(r"(?<!\w)/(?:api|auth|v\d|[A-Za-z0-9_.:-]+)[A-Za-z0-9_./{}:-]*")
 PACKAGE_TOKEN_RE = re.compile(r"\b@?[A-Za-z0-9][A-Za-z0-9_.@/-]*(?:[-/.][A-Za-z0-9][A-Za-z0-9_.@/-]*)+\b")
 HYPHENATED_API_TERM_RE = re.compile(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b")
+WORD_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
+
+# Known config/settings files that should be injected as file hints when CONFIG
+# intent fires and env-key or config-key entities are present in the query.
+CONFIG_FILES = [
+    "retrieval/config.py",
+    "rag_ingestion/config.py",
+    ".env.example",
+]
+
+# ---------------------------------------------------------------------------
+# Hard stop: do NOT add new heuristic intent families beyond this list.
+# The scored-intent layer is considered feature-complete for the entity/query
+# families defined in INTENT_FAMILIES.
+#
+# New routing heuristics are only justified when:
+#   (a) an eval case fails with hit@k=0 or wrong response_mode, AND
+#   (b) the failure cannot be fixed by improving entity extraction alone.
+#
+# If both conditions hold, open a new task in the response_quality_refinement_plan
+# before adding code here.
+# ---------------------------------------------------------------------------
+HEURISTIC_COVERAGE_COMPLETE = True  # sentinel — do not remove
 
 KNOWN_DEPENDENCY_TERMS = {
     "fastapi",
@@ -64,6 +89,19 @@ KNOWN_DEPENDENCY_TERMS = {
     "groq",
     "openai",
     "gemini",
+}
+
+KNOWN_SERVICE_TERMS = {
+    "api",
+    "backend",
+    "frontend",
+    "postgres",
+    "postgresql",
+    "qdrant",
+    "nginx",
+    "redis",
+    "worker",
+    "web",
 }
 
 STOPWORDS = {
@@ -90,6 +128,41 @@ STOPWORDS = {
     "find",
     "list",
 }
+
+FOLLOWUP_PHRASES = (
+    "where is it used",
+    "how does that",
+    "what about",
+    "and that",
+    "this function",
+)
+
+FOLLOWUP_TOKENS = {
+    "it",
+    "that",
+    "this",
+}
+
+CODE_REQUEST_PHRASES = (
+    "show code",
+    "show me the code",
+    "code for",
+    "implementation of",
+    "provide code",
+    "code snippet",
+    "show the implementation",
+)
+
+LOOKUP_PHRASES = (
+    "where is",
+    "which file",
+    "defined",
+    "implemented",
+    "used",
+    "open ",
+    "show ",
+    "locate ",
+)
 
 FLOW_SYMBOLS = {
     "orchestration": ["_query_impl", "run_query"],
@@ -170,6 +243,8 @@ def process_query(raw_query: str) -> dict:
         entities.update(_empty_scored_entities())
         intent_scores = _legacy_intent_scores(intent)
 
+    _inject_config_files(query, entities)
+
     primary_intent = max(intent_scores, key=intent_scores.get)
     confidence = float(intent_scores.get(primary_intent, 0.0))
     return {
@@ -216,6 +291,31 @@ def _inject_architecture_files(query: str, entities: dict) -> None:
     entities["files"] = sorted(set(files))
 
 
+def _inject_config_files(query: str, entities: dict) -> None:
+    """When a CONFIG-intent query mentions env-keys, config-keys, or a dependency
+    with the word 'configured', inject the known config file hints so the metadata
+    searcher can hard-scroll them.
+
+    This fixes hit@k=0 for queries like:
+      'Where is RETRIEVAL_ENABLE_LEXICAL configured?'
+      'Where is BAAI/bge-small-en-v1.5 configured?'
+      'what is the purpose of CODESEEK_APP_ENCRYPTION_KEY?'
+    """
+    has_env_keys = bool(entities.get("env_keys"))
+    has_config_keys = bool(entities.get("config_keys"))
+    lower = query.lower()
+    has_config_word = any(w in lower for w in ("configured", "configuration", "config key", "setting"))
+    has_dependency_with_config = has_config_word and bool(entities.get("dependencies"))
+    if not (has_env_keys or has_config_keys or has_dependency_with_config):
+        return
+    files = list(entities.get("files") or [])
+    for f in CONFIG_FILES:
+        if f not in files:
+            files.append(f)
+    entities["files"] = sorted(set(files))
+
+
+
 def _flow_kind(query: str) -> str:
     lower = query.lower()
     if not any(
@@ -228,8 +328,6 @@ def _flow_kind(query: str) -> str:
             "walk me through",
             "step",
             "deployment",
-            "configuration",
-            "config",
             "provider",
             "credential",
             "credentials",
@@ -244,7 +342,7 @@ def _flow_kind(query: str) -> str:
         return "auth_session"
     if any(term in lower for term in ("index", "indexing", "ingestion", "repo session", "session creation", "clone")):
         return "indexing_session"
-    if any(term in lower for term in ("deploy", "deployment", "docker", "compose", "container", "environment", "configuration", "config")):
+    if any(term in lower for term in ("deploy", "deployment", "docker", "compose", "container", "environment")):
         return "deployment_config"
     if any(term in lower for term in ("provider", "credential", "credentials", "api key", "llm provider", "model")):
         return "provider_credentials"
@@ -266,12 +364,14 @@ def _extract_scored_entities(query: str) -> dict[str, list[str]]:
     env_keys = sorted(set(ENV_KEY_RE.findall(query)))
     routes = sorted(set(match.rstrip(".,)") for match in ROUTE_RE.findall(query)))
     dependencies = _extract_dependency_names(query)
+    services = _extract_service_names(query)
     config_keys = sorted(set(env_keys + _extract_config_keys(query)))
     api_terms = sorted(set(routes + _extract_api_terms(query)))
-    exact_terms = sorted(set(env_keys + dependencies + config_keys + api_terms))
+    exact_terms = sorted(set(env_keys + dependencies + services + config_keys + api_terms))
     return {
         "env_keys": env_keys,
         "dependencies": dependencies,
+        "services": services,
         "config_keys": config_keys,
         "routes": routes,
         "api_terms": api_terms,
@@ -283,6 +383,7 @@ def _empty_scored_entities() -> dict[str, list[str]]:
     return {
         "env_keys": [],
         "dependencies": [],
+        "services": [],
         "config_keys": [],
         "routes": [],
         "api_terms": [],
@@ -325,6 +426,29 @@ def _extract_api_terms(query: str) -> list[str]:
     return sorted(set(terms))
 
 
+def _extract_service_names(query: str) -> list[str]:
+    services = set()
+    lower = query.lower()
+
+    for token in re.findall(r"[`'\"]([^`'\"]+)[`'\"]", query):
+        cleaned = token.strip()
+        lowered = cleaned.lower()
+        if lowered in KNOWN_SERVICE_TERMS or "-" in cleaned or "_" in cleaned:
+            services.add(cleaned)
+
+    for match in re.finditer(
+        r"\b([A-Za-z0-9_-]+)\s+(?:service|services|container|containers)\b",
+        lower,
+    ):
+        services.add(match.group(1))
+
+    for token in re.findall(r"\b[a-z][a-z0-9_-]{2,}\b", lower):
+        if token in KNOWN_SERVICE_TERMS:
+            services.add(token)
+
+    return sorted(services, key=str.lower)
+
+
 def _looks_like_dependency(value: str) -> bool:
     lowered = value.lower()
     return (
@@ -345,6 +469,14 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     elif legacy_intent == "DEPENDENCY":
         scores["DEPENDENCY"] = 0.76
 
+    has_files = bool(entities.get("files"))
+    has_symbols = bool(entities.get("symbols"))
+    has_exact_terms = bool(entities.get("exact_terms"))
+    has_followup_markers = _has_followup_markers(lower)
+    explicit_code_request = _has_code_request_markers(lower)
+    explicit_lookup = _has_lookup_markers(lower)
+    short_query = len(lower.split()) <= 3
+
     if any(phrase in lower for phrase in ("what is this project about", "what does this project do", "overview")):
         scores["OVERVIEW"] = 0.86
     if "architecture" in lower or "design" in lower or "how is this project structured" in lower:
@@ -353,21 +485,54 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["TECH_STACK"] = 0.82
     if any(phrase in lower for phrase in ("trace", "flow", "lifecycle", "call path", "step by step")):
         scores["TRACE"] = 0.78
-    if entities.get("env_keys") or any(word in lower for word in ("env", "environment", "config", "configuration")):
+    if entities.get("env_keys") or entities.get("services") or any(word in lower for word in ("env", "environment", "config", "configuration", "service", "container")):
         scores["CONFIG"] = 0.82
-    if entities.get("files"):
-        scores["FILE"] = 0.78
+    if has_files:
+        scores["FILE"] = 0.82
     if any(phrase in lower for phrase in ("explain", "how does", "what does", "walk me through")):
         scores["EXPLANATION"] = 0.72
-    if any(phrase in lower for phrase in ("show code", "show me the code", "code for", "implementation of")):
+    if explicit_code_request:
         scores["CODE_REQUEST"] = 0.83
-    if any(phrase in lower for phrase in ("it", "that", "this function", "where is it used", "how does that")):
-        scores["FOLLOWUP"] = 0.45
-    if len(lower.split()) <= 2 and not any(entities.get(key) for key in ("symbols", "files", "exact_terms")):
+    if has_followup_markers:
+        scores["FOLLOWUP"] = 0.82 if not (has_symbols or has_files or has_exact_terms) else 0.58
+    if short_query and not any(entities.get(key) for key in ("symbols", "files", "exact_terms", "services")):
         scores["LOW_CONTEXT"] = 0.7
-    if entities.get("symbols") or entities.get("files") or entities.get("exact_terms"):
+    if has_symbols or has_files or has_exact_terms:
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.68)
+    if has_files and any(phrase in lower for phrase in ("explain", "what is in", "show", "open")):
+        scores["FILE"] = max(scores["FILE"], 0.86)
+    if has_symbols and any(phrase in lower for phrase in ("where is", "defined", "implemented", "used")):
+        scores["SYMBOL"] = max(scores["SYMBOL"], 0.8)
+    explicit_config_lookup = bool(entities.get("env_keys") or entities.get("config_keys")) or (
+        bool(entities.get("dependencies")) and "configured" in lower
+    )
+    if explicit_lookup and has_files:
+        scores["FILE"] = max(scores["FILE"], 0.9)
+    if explicit_lookup and explicit_config_lookup:
+        scores["CONFIG"] = max(scores["CONFIG"], 0.9)
+    if explicit_lookup and (has_symbols or has_exact_terms) and not explicit_config_lookup:
+        scores["SYMBOL"] = max(scores["SYMBOL"], 0.85)
+    if explicit_code_request and (has_symbols or has_files):
+        scores["CODE_REQUEST"] = max(scores["CODE_REQUEST"], 0.9)
+    if short_query and not (has_symbols or has_files or has_exact_terms):
+        scores["SEMANTIC"] = min(scores["SEMANTIC"], 0.2)
     return scores
+
+
+def _has_followup_markers(lower: str) -> bool:
+    for phrase in FOLLOWUP_PHRASES:
+        if phrase in lower:
+            return True
+    tokens = {match.group(0).lower() for match in WORD_RE.finditer(lower)}
+    return bool(tokens & FOLLOWUP_TOKENS)
+
+
+def _has_code_request_markers(lower: str) -> bool:
+    return any(phrase in lower for phrase in CODE_REQUEST_PHRASES)
+
+
+def _has_lookup_markers(lower: str) -> bool:
+    return any(phrase in lower for phrase in LOOKUP_PHRASES)
 
 
 def _legacy_intent_scores(legacy_intent: str) -> dict[str, float]:

@@ -68,6 +68,22 @@ Current default runtime knobs from `retrieval/config.py`:
 - call expansion limit: `5`
 - conversation history turns: `5`
 
+Current tuned intent-aware context budgets:
+
+- `OVERVIEW`: `5200`
+- `TECH_STACK`: `4200`
+- `ARCHITECTURE`: `6200`
+- `SYMBOL`: `2800`
+- `FILE`: `2800`
+- `SEMANTIC`: `5400`
+- `TRACE`: `6500`
+- `DEPENDENCY`: `6500`
+- `FOLLOWUP`: `4200`
+- `EXPLANATION`: `5200`
+- `CODE_REQUEST`: `4800`
+- `CONFIG`: `3600`
+- `LOW_CONTEXT`: `1800`
+
 ## 2. High-Level Pipeline
 
 At a high level, a query currently goes through this sequence:
@@ -282,6 +298,14 @@ Current entity extraction pulls:
 - route/API terms such as `submission-key`
 - dependency/model/library tokens such as `qdrant-client` and `BAAI/bge-small-en-v1.5`
 - known bare dependency names such as `fastapi`, `uvicorn`, `qdrant`, and `pytest`
+- service/container names such as `qdrant`, `postgres`, `redis`, `api`, and quoted or hyphenated service labels when the query uses words like `service` or `container`
+
+Routing is also more explicit than the earlier starting version:
+
+- explicit file questions such as `Explain retrieval/api_service.py` boost `FILE`
+- pronoun-led vague turns such as `where is it used` boost `FOLLOWUP`
+- very short underspecified queries such as `auth?` boost `LOW_CONTEXT`
+- generic deployment/config wording no longer injects deployment-flow file hints unless the query also carries deployment/runtime markers such as `docker`, `compose`, `container`, or `deployment`
 
 This stage is still rule-based. There is no learned intent classifier and no structural parser for the query itself. The important change is that the rules are now bounded by a documented output contract instead of being open-ended one-off routing checks.
 
@@ -340,6 +364,7 @@ Current exact entity categories:
 
 - `env_keys`
 - `dependencies`
+- `services`
 - `config_keys`
 - `routes`
 - `api_terms`
@@ -416,25 +441,38 @@ The ranking logic can now surface the synthetic repo-summary chunk and represent
 
 Current behavior:
 
-- only named JS/TS-style imports are parsed
-- supports relative imports and `@/` aliases
-- resolves `.ts`, `.tsx`, `.js`, `.jsx`, and `index.*`
+- parses named JS/TS-style imports
+- parses JS/TS default imports such as `import SkillsData from "@/lib/data"`
+- parses JS/TS namespace imports such as `import * as data from "@/lib/data"`
+- parses JS/TS mixed default + named imports such as `import SkillsData, { skillCategories } from "@/lib/data"`
+- parses Python `from module import name` statements
+- supports JS/TS relative imports and `@/` aliases
+- resolves JS/TS `.ts`, `.tsx`, `.js`, `.jsx`, `.json`, and `index.*`
+- resolves Python dotted-module imports to `.py` files or package `__init__.py`
 - fetches matching exported symbol chunks from the imported file
+- tags retrieved import-backed chunks so deterministic answer builders can reuse them directly instead of always re-reading backing files
+- reuses retrieved callee/dependency support chunks in deterministic answer builders when the selected symbol already carries those dependencies in retrieved evidence
+- adds explicit handler -> store -> database trace lines for backend auth/provider flows when the selected evidence shows direct calls and SQL-bearing store helpers
 
 This is useful for questions like:
 
 - explain the skills section
 - where does this rendered data come from
 
-Important limitation:
+Current limitation boundary:
 
-This mechanism does not currently handle:
+This mechanism now handles:
 
-- Python imports
 - default imports
 - namespace imports
-- re-export chains
-- JSON/YAML/config imports
+- simple re-export chains (`export { X } from "./mod"` and `export * from "./mod"`)
+- direct JSON config/data imports, surfaced as imported backing data when the imported alias overlaps the query
+- a default import/re-export trace depth limit of `3`
+- an explicit per-query trace-support cap of `6` chunks, with visited-set dedupe on import edges and dependency call targets
+
+It still does not currently handle:
+
+- YAML imports and broader runtime config-loading patterns
 
 ## 8. Reranking
 
@@ -1004,7 +1042,6 @@ Extend the current support-following logic to handle:
 - Python imports
 - default imports
 - namespace imports
-- re-exports
 - config/data files
 - service wiring patterns
 

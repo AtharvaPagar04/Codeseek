@@ -93,6 +93,24 @@
         "Runtime Shape",
         "Configuration And Deployment Boundaries"
       ]
+    },
+    {
+      "id": "cs-exact-010",
+      "query": "does this repository use COBOL or Fortran language?",
+      "expected_response_mode": "llm",
+      "expected_answer_terms": []
+    },
+    {
+      "id": "cs-exact-011",
+      "query": "what is the purpose of CODESEEK_APP_ENCRYPTION_KEY?",
+      "expected_files": [
+        "retrieval/config.py",
+        ".env.example"
+      ],
+      "expected_response_mode": "llm",
+      "expected_answer_terms": [
+        "No LLM provider API key configured"
+      ]
     }
   ]
 }

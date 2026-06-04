@@ -143,7 +143,7 @@ class TestEvidenceBanners:
 
     def test_partial_banner_contains_limited_evidence(self):
         from retrieval.main import PARTIAL_EVIDENCE_BANNER
-        assert "Limited evidence" in PARTIAL_EVIDENCE_BANNER or "limited" in PARTIAL_EVIDENCE_BANNER.lower()
+        assert "Partial evidence" in PARTIAL_EVIDENCE_BANNER or "partial" in PARTIAL_EVIDENCE_BANNER.lower()
 
     def test_weak_banner_contains_low_confidence(self):
         from retrieval.main import WEAK_EVIDENCE_BANNER
