@@ -2,10 +2,21 @@ import { getBackendApiKey } from './storage.js';
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
-const authHeaders = () => ({
-  'Content-Type': 'application/json',
-  Authorization: `Bearer ${getBackendApiKey()}`,
-});
+const authHeaders = () => {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${getBackendApiKey()}`,
+  };
+  const customKey = localStorage.getItem('CODESEEK_CUSTOM_ENCRYPTION_KEY');
+  if (customKey) {
+    headers['X-App-Encryption-Key'] = customKey.trim();
+  }
+  const modelOverride = localStorage.getItem('CODESEEK_ACTIVE_MODEL_OVERRIDE');
+  if (modelOverride) {
+    headers['X-App-Model-Override'] = modelOverride.trim();
+  }
+  return headers;
+};
 
 let submissionKeyPromise = null;
 
@@ -398,7 +409,11 @@ export const listProviderCredentials = async () => {
     await throwApiError('List provider credentials', res);
   }
   const data = await res.json();
-  return data.provider_credentials || [];
+  const list = data.provider_credentials || [];
+  return list.map((c) => ({
+    ...c,
+    isActive: !!c.is_active,
+  }));
 };
 
 export const createProviderCredential = async ({ provider, label, apiKey, model = '', isActive }) => {
@@ -423,7 +438,11 @@ export const createProviderCredential = async ({ provider, label, apiKey, model 
     await throwApiError('Create provider credential', res);
   }
   const data = await res.json();
-  return data.provider_credential;
+  const cred = data.provider_credential;
+  return {
+    ...cred,
+    isActive: !!cred.is_active,
+  };
 };
 
 export const activateProviderCredential = async (credentialId) => {
@@ -440,7 +459,11 @@ export const activateProviderCredential = async (credentialId) => {
     await throwApiError('Activate provider credential', res);
   }
   const data = await res.json();
-  return data.provider_credential;
+  const cred = data.provider_credential;
+  return {
+    ...cred,
+    isActive: !!cred.is_active,
+  };
 };
 
 export const deleteProviderCredential = async (credentialId) => {

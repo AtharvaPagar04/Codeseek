@@ -3,6 +3,14 @@ import MessageBubble from './MessageBubble';
 import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
 import { useChat } from '../hooks/useChat';
+import { listProviderCredentials } from '../utils/api';
+
+function getProviderFallbackModel(provider) {
+  if (provider === 'groq') return 'llama-3.3-70b-versatile';
+  if (provider === 'openai') return 'gpt-4o-mini';
+  if (provider === 'openrouter') return 'openai/gpt-4o-mini';
+  return 'gemini-2.0-flash';
+}
 
 export default function SessionView({
   session,
@@ -12,8 +20,52 @@ export default function SessionView({
 }) {
   const [input, setInput] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [activeProvider, setActiveProvider] = useState(null);
+  const [selectedModel, setSelectedModel] = useState('');
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+
+  const fetchActiveProvider = async () => {
+    try {
+      const creds = await listProviderCredentials();
+      const active = creds.find((c) => c.isActive) || null;
+      setActiveProvider(active);
+    } catch (err) {
+      console.warn('Failed to fetch active provider:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchActiveProvider();
+    window.addEventListener('CODESEEK_PROVIDER_CHANGED', fetchActiveProvider);
+    return () => {
+      window.removeEventListener('CODESEEK_PROVIDER_CHANGED', fetchActiveProvider);
+    };
+  }, [session.id]);
+
+  useEffect(() => {
+    if (!activeProvider) {
+      localStorage.removeItem('CODESEEK_ACTIVE_MODEL_OVERRIDE');
+      setSelectedModel('');
+      return;
+    }
+    const provider = activeProvider.provider;
+    const providerOverride = localStorage.getItem(`CODESEEK_MODEL_OVERRIDE_${provider}`);
+    const credentialDefault = activeProvider.model;
+    const fallbackDefault = getProviderFallbackModel(provider);
+
+    const resolved = providerOverride || credentialDefault || fallbackDefault;
+    setSelectedModel(resolved);
+    localStorage.setItem('CODESEEK_ACTIVE_MODEL_OVERRIDE', resolved);
+  }, [activeProvider]);
+
+  const handleModelChange = (model) => {
+    setSelectedModel(model);
+    localStorage.setItem('CODESEEK_ACTIVE_MODEL_OVERRIDE', model);
+    if (activeProvider) {
+      localStorage.setItem(`CODESEEK_MODEL_OVERRIDE_${activeProvider.provider}`, model);
+    }
+  };
 
   const { isLoading, sendMessage } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
@@ -87,6 +139,7 @@ export default function SessionView({
               className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
               style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
             >
+              <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -135,6 +188,7 @@ export default function SessionView({
                 className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
                 style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
               >
+                <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -241,5 +295,204 @@ function SpinnerIcon() {
     >
       <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
     </svg>
+  );
+}
+
+const PROVIDER_MODEL_PRESETS = {
+  gemini: [
+    {
+      value: 'gemini-2.0-flash',
+      name: 'Gemini 2.0 Flash',
+      label: 'Default / Fast load',
+      short: '⚡ Flash',
+      tooltip: 'Free tier limits: 15 Requests Per Minute (RPM) & 1,000,000 Tokens Per Minute (TPM). High capacity, extremely fast.',
+    },
+    {
+      value: 'gemini-1.5-pro',
+      name: 'Gemini 1.5 Pro',
+      label: 'Complex queries',
+      short: '💎 Pro',
+      tooltip: 'Free tier limits: 2 Requests Per Minute (RPM) & 32,000 Tokens Per Minute (TPM). Highly rate-limited; easily triggered on large repositories.',
+    },
+    {
+      value: 'gemini-1.5-flash',
+      name: 'Gemini 1.5 Flash',
+      label: 'Flash 1.5',
+      short: '⚡ Flash (1.5)',
+      tooltip: 'Free tier limits: 15 Requests Per Minute (RPM) & 1,000,000 Tokens Per Minute (TPM). Fast and reliable.',
+    }
+  ],
+  groq: [
+    {
+      value: 'llama-3.3-70b-versatile',
+      name: 'Llama 3.3 70B',
+      label: 'Default / High quality',
+      short: '🦙 Llama 3.3',
+      tooltip: 'Versatile 70B model with high rate limits and speed.',
+    },
+    {
+      value: 'llama-3.1-8b-instant',
+      name: 'Llama 3.1 8B',
+      label: 'Instant replies',
+      short: '🦙 Llama 8B',
+      tooltip: 'Super fast lightweight model.',
+    },
+    {
+      value: 'mixtral-8x7b-32768',
+      name: 'Mixtral 8x7B',
+      label: 'Mixtral Mixture of Experts',
+      short: '🌀 Mixtral',
+      tooltip: 'Good general reasoning model.',
+    }
+  ],
+  openai: [
+    {
+      value: 'gpt-4o-mini',
+      name: 'GPT-4o Mini',
+      label: 'Default / Fast & cheap',
+      short: '✨ 4o Mini',
+      tooltip: 'Very fast, cost-effective model.',
+    },
+    {
+      value: 'gpt-4o',
+      name: 'GPT-4o',
+      label: 'Advanced intelligence',
+      short: '🧠 GPT-4o',
+      tooltip: 'High intelligence, premium general model.',
+    },
+    {
+      value: 'gpt-3.5-turbo',
+      name: 'GPT-3.5 Turbo',
+      label: 'Legacy Fast',
+      short: '⚡ GPT-3.5',
+      tooltip: 'Standard fast model.',
+    }
+  ],
+  openrouter: [
+    {
+      value: 'google/gemini-2.0-flash',
+      name: 'Gemini 2.0 Flash',
+      label: 'Gemini 2.0 Flash via OpenRouter',
+      short: '⚡ Gemini',
+      tooltip: 'Fast and efficient Gemini 2.0 Flash.',
+    },
+    {
+      value: 'openai/gpt-4o-mini',
+      name: 'GPT-4o Mini',
+      label: 'GPT-4o Mini via OpenRouter',
+      short: '✨ 4o Mini',
+      tooltip: 'High-speed, low-cost intelligence.',
+    },
+    {
+      value: 'meta-llama/llama-3-8b-instruct',
+      name: 'Llama 3 8B',
+      label: 'Llama 3 8B Instruct via OpenRouter',
+      short: '🦙 Llama 3',
+      tooltip: 'Open-source instruction-tuned model.',
+    }
+  ]
+};
+
+function ModelSelector({ activeModel, onChange, activeProvider }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
+
+  if (!activeProvider) {
+    return (
+      <div className="relative shrink-0 flex items-center">
+        <button
+          type="button"
+          title="No active LLM provider configured. Click to configure API tokens."
+          onClick={() => {
+            window.dispatchEvent(new Event('CODESEEK_OPEN_API_MODAL'));
+          }}
+          className="flex items-center gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2 py-1 text-2xs font-mono font-medium text-warning hover:bg-warning/20 transition-colors select-none animate-pulse"
+        >
+          <span>⚠️ Setup API</span>
+        </button>
+      </div>
+    );
+  }
+
+  const provider = activeProvider.provider;
+  const presets = PROVIDER_MODEL_PRESETS[provider] || [];
+
+  const isPreset = presets.some((p) => p.value === activeModel);
+  const current = isPreset
+    ? presets.find((p) => p.value === activeModel)
+    : {
+        value: activeModel,
+        name: activeModel || 'Default Model',
+        label: 'Active Model',
+        short: activeModel
+          ? activeModel.length > 12
+            ? activeModel.substring(0, 10) + '…'
+            : activeModel
+          : 'Default',
+        tooltip: `Active model: ${activeModel || 'Default model'}`,
+      };
+
+  return (
+    <div className="relative shrink-0 flex items-center" ref={dropdownRef}>
+      <button
+        type="button"
+        title={`Active model: ${current.name}. Click to switch.`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className="flex items-center gap-1.5 rounded-lg border border-border bg-surface-3 px-2 py-1 text-2xs font-mono font-medium text-text-secondary hover:text-text-primary hover:border-text-muted transition-colors select-none"
+      >
+        <span>{current.short}</span>
+        <svg
+          className={`h-2.5 w-2.5 transform text-text-muted transition-transform duration-150 ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={3}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div
+          className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border border-border bg-surface-2 p-1 shadow-xl animate-fadeIn z-30 flex flex-col"
+          style={{ boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)' }}
+        >
+          <div className="max-h-48 overflow-y-auto">
+            {presets.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                title={opt.tooltip}
+                onClick={() => {
+                  onChange(opt.value);
+                  setIsOpen(false);
+                }}
+                className={`w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 transition-colors flex flex-col ${
+                  opt.value === activeModel ? 'bg-surface-3/50' : ''
+                }`}
+              >
+                <span className="text-2xs font-medium text-text-primary">{opt.name}</span>
+                <span className="text-[10px] text-text-muted">{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

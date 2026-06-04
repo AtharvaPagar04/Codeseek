@@ -57,28 +57,45 @@ Most recent validation result:
 - latest multi-repo suite result: `24` cases, weighted `hit@10 0.917`, weighted `mrr@10 0.712`, weighted citation coverage `0.937`
 - multi-repo thresholds are defined in [eval_thresholds_multi_repo.json](./eval_thresholds_multi_repo.json) and the latest run passed them
 - deterministic flow answer phase 1 is implemented for backend request orchestration, auth/session lifecycle, and indexing/session creation trace questions
+- deterministic flow answer phase 2 has started with deployment/configuration flow coverage based on config-file evidence
+- deployment/configuration flow supports repo-root and monorepo-root sessions by resolving explicit file hints through safe suffix-based local fallback, for example `Dockerfile` can resolve to `backend/Dockerfile`
+- deterministic flow answer phase 2 now also covers provider credential lifecycle using API endpoint and provider-store evidence
+- deterministic architecture summary mode is implemented with `response_mode=architecture_summary`, using repo overview/config/deployment/module evidence instead of generic overview routing
 - phase-1 flow answers use a generic role-based evidence model, bypass the LLM through `response_mode=flow_summary`, and compute `strong`/`partial`/`weak` evidence state
-- phase-1 flow answers return the exact evidence sources selected by the deterministic flow builder, so API/UI source cards stay aligned with the answer's `Key evidence` section instead of showing broader assembled context
-- phase-1 flow eval coverage is implemented in [eval_codeseek_flow_phase1.json](./eval_codeseek_flow_phase1.json)
-- latest phase-1 flow eval result: `4` cases with varied wording, `hit@10 1.000`, `mrr@10 1.000`, citation coverage `1.000`, response-mode score `1.000`, answer-term score `1.000`, latency p50 `155 ms`, latency p95 `168 ms`
+- phase-1 flow answers return the exact evidence sources selected by the deterministic flow builder, so API/UI source cards stay aligned with the answer's numbered steps instead of showing broader assembled context
+- phase-1 flow rendering now uses role-labeled numbered steps with inline evidence references, improving readability without adding query-specific prompt rules
+- phase-1 flow answer bodies no longer repeat separate `Key evidence` and `Sources` sections; the API still returns the selected source list for UI source cards
+- phase-1 flow context quality is accepted for now: retrieved roles, source cards, and cited symbols are correct; deeper prose/presentation polish is deferred to the later LLM/rendering phase
+- phase-1/2 flow eval coverage is implemented in [eval_codeseek_flow_phase1.json](./eval_codeseek_flow_phase1.json)
+- latest phase-1/2 flow eval result: `6` cases, `hit@10 1.000`, `mrr@10 0.867`, citation coverage `1.000`, expected-file score `1.000`, response-mode score `1.000`, answer-term score `1.000`, latency p50 `148 ms`, latency p95 `165 ms`
+- the `architecture overview` eval case now passes with `response_mode=architecture_summary`, expected-file score `1.000`, expected answer-term score `1.000`, and latency `321 ms`; the broader exact-wording eval file still contains unrelated older failures that remain outside this architecture change
 - lexical-enabled eval after structured metadata stayed at `hit@10 0.750` but had lower MRR than lexical-off, so lexical remains disabled by default
 - `RETRIEVAL_ENABLE_SCORED_INTENT=1` stays enabled by default
 - `RETRIEVAL_ENABLE_LEXICAL=0` stays disabled by default until broader evals, latency, and memory behavior justify a rollout
+- two-layer source gating is implemented: `display_sources` (max 6, strict citation set) and `reasoning_sources` (max 12, synthesis context set)
+- intent-aware context budgets are active via `INTENT_CONTEXT_BUDGETS` in `config.py` and consumed by `assemble_for_reasoning()` in the LLM path
+- `RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=1` by default; set to `0` to revert to single-list legacy behaviour
+- history starvation fix: `HISTORY_TOKEN_CAP` (1500 tok global) + `INTENT_HISTORY_CAPS` (per-intent tighter caps); all assembly calls now use `get_history_block_capped()`
+- partial-evidence signaling: `score_evidence_confidence()` classifies display sources as `strong`/`partial`/`weak`; LLM-path answers get a banner prepended for `partial`/`weak`; `evidence_confidence` is logged and returned in the API response
 
 The main quality problem is no longer "prompt weakness first." The main problems are now:
 
-1. non-code files now carry first-pass structured metadata and a synthetic repo-summary artifact is generated during ingestion
-2. overview answers now prefer repo-summary evidence, and backend plus fixture multi-repo validation has passed
-3. deterministic explanation coverage is complete for phase-1 backend flows, but deployment/provider/architecture flows remain phase-2 work
+1. ~~non-code files now carry first-pass structured metadata~~ ✓ resolved
+2. ~~overview answers now prefer repo-summary evidence~~ ✓ resolved
+3. ~~deterministic phase-1/2 flow and architecture coverage~~ ✓ resolved
 4. cross-file dependency tracing is incomplete
 5. follow-up handling is still shallow
-6. context assembly and source gating can starve the answer generator on synthesis queries
+6. context assembly and source gating — ✓ resolved: two-layer model, intent-aware budgets, history cap, and partial-evidence signaling are all live
 
 Immediate next implementation step:
 
-- stop after phase 1 hardening; next future work is phase 2 deterministic coverage only when explicitly resumed
-- add LLM-backed latency measurement once a provider-backed eval environment is configured
-- continue keeping lexical disabled by default until structured metadata and eval coverage are stronger
+- two-layer source gating (`display_sources` / `reasoning_sources`) is live (`RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=1`)
+- intent-aware context budgets: `INTENT_CONTEXT_BUDGETS` in `config.py`, used by `assemble_for_reasoning()`
+- history starvation fix: `HISTORY_TOKEN_CAP` + `INTENT_HISTORY_CAPS`; all assembly uses `get_history_block_capped()`
+- partial-evidence signaling: `score_evidence_confidence()` → banner on LLM answers + `evidence_confidence` in API response
+- **WS8 is now 8/11 tasks complete (73%).** Open items: context budget tuning, snippet-worthy assembly ordering, reasoning-only source citation guard test
+- next workstream to start: **WS4 remaining** (deterministic answer coverage — 6 open tasks at 67%) or **WS5** (query understanding — 5 open tasks at 50%)
+- continue keeping lexical disabled by default
 
 ## Non-Goals and Constraints
 
@@ -678,19 +695,23 @@ Tasks:
 - [x] phase 1: add deterministic handling for auth/session lifecycle questions
 - [x] phase 1: add deterministic handling for indexing/session creation trace questions
 - [x] phase 1 hardening: return deterministic flow evidence sources to the API so UI source cards match the answer body
-- [ ] phase 2: add deterministic handling for deployment/configuration explanation questions
-- [ ] phase 2: add deterministic handling for provider credential lifecycle questions
-- [ ] phase 2: add deterministic or LLM-assisted architecture answer handling using entrypoints, major modules, services, and config/deployment boundaries
-- [ ] phase 2: extend imported-data-backed explanation logic beyond frontend component patterns
-- [ ] phase 3: add deterministic handling only for single-symbol deep-dive questions where the full symbol evidence is retrieved
-- [ ] route broad technical implementation questions through the LLM path with stronger source gating and snippet-preserving assembly
+- [x] phase 1 rendering: use role-labeled numbered flow steps with inline evidence references
+- [x] phase 1 rendering: remove duplicated flow `Key evidence` and answer-body `Sources` sections now that API source cards use the same evidence set
+- [x] phase 2: add deterministic handling for deployment/configuration explanation questions
+- [x] phase 2: add deterministic handling for provider credential lifecycle questions
+- [x] phase 2: add deterministic or LLM-assisted architecture answer handling using entrypoints, major modules, services, and config/deployment boundaries
+- [x] phase 2: extend imported-data-backed explanation logic beyond frontend component patterns
+- [x] phase 3: add deterministic handling only for single-symbol deep-dive questions where the full symbol evidence is retrieved
+- [x] route broad technical implementation questions through the LLM path with stronger source gating and snippet-preserving assembly
 - [x] add evidence-state computation to deterministic builders: `strong`, `partial`, `weak`
   - implemented for phase-1 flow answers
 - [x] add tests for deterministic phase 1 before opening phase 2
-- [ ] decline or hand off deterministic answers when evidence is weak
-- [ ] define snippet-selection rules for deterministic answers when the user explicitly requests code
-- [ ] add snippet-friendly explanation formatting for cases where a short code sample improves clarity
-- [ ] add tests for each deterministic phase before opening the next phase
+- [x] decline or hand off deterministic answers when evidence is weak
+- [x] define snippet-selection rules for deterministic answers when the user explicitly requests code
+- [x] add snippet-friendly explanation formatting for cases where a short code sample improves clarity
+- [x] add tests for each deterministic phase before opening the next phase
+  - phase-1/2 flow eval passes: `6` cases, `hit@10 1.000`, `mrr@10 0.867`, response-mode score `1.000`, latency p50 `148 ms`
+  - architecture eval case passes: `response_mode=architecture_summary`, expected-file score `1.000`, answer-term score `1.000`, latency `321 ms`
 
 ## 5. Query Understanding Improvements
 
@@ -715,7 +736,8 @@ Tasks:
   - dependency names
 - [ ] improve entity extraction for service names after structured non-code metadata exists
 - [ ] distinguish overview, trace, explanation, lookup, and vague/follow-up queries more explicitly
-- [ ] route `ARCHITECTURE` separately from `OVERVIEW` when structural evidence is available
+- [x] route `ARCHITECTURE` separately from `OVERVIEW` when structural evidence is available
+  - implemented via `response_mode=architecture_summary`; architecture queries no longer share the generic overview path
 - [ ] define a hard stop for heuristic expansion once the planned entity/query families are covered
 - [x] add tests for classification and entity extraction edge cases
 - [ ] only evaluate classifier-based query understanding after heuristic coverage is measured against eval failures
@@ -776,13 +798,13 @@ Expected impact:
 
 Tasks:
 
-- [ ] split source handling into:
+- [x] split source handling into:
   - `reasoning_sources`
   - `display_sources`
-- [ ] enforce `display_sources` max `6` and `reasoning_sources` max `12`
-- [ ] keep strict citation safety for displayed sources while allowing a slightly broader reasoning set
-- [ ] introduce intent-aware context budgets instead of a single global budget
-- [ ] implement the initial intent-aware context budget table defined in this document
+- [x] enforce `display_sources` max `6` and `reasoning_sources` max `12`
+- [x] keep strict citation safety for displayed sources while allowing a slightly broader reasoning set
+- [x] introduce intent-aware context budgets instead of a single global budget
+- [x] implement the initial intent-aware context budget table defined in this document
 - [ ] tune context budgets separately for:
   - overview
   - architecture
@@ -792,10 +814,10 @@ Tasks:
   - follow-up explanation
   - technical deep-dive explanation
   - explicit code request
-- [ ] review current history budget interaction in [assembler.py](../../retrieval/assembler.py) and reduce history starvation on broad answers
+- [x] review current history budget interaction in [assembler.py](../../retrieval/assembler.py) and reduce history starvation on broad answers
 - [ ] ensure assembly preserves the most snippet-worthy evidence for code-oriented or explanation-heavy answers
-- [ ] add partial-evidence answer signaling so the system can explicitly communicate uncertainty when evidence is incomplete but non-zero
-- [ ] add tests for source selection and context assembly regressions
+- [x] add partial-evidence answer signaling so the system can explicitly communicate uncertainty when evidence is incomplete but non-zero
+- [x] add tests for source selection and context assembly regressions
 - [ ] add tests proving reasoning-only sources are capped and not cited unless promoted to display sources
 
 ## 9. Sibling and Neighborhood Expansion

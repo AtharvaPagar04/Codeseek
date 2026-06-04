@@ -38,6 +38,52 @@ MAX_RESPONSE_TOKENS = _env_int("RETRIEVAL_MAX_RESPONSE_TOKENS", 1024)
 ENABLE_LEXICAL_RETRIEVAL = _env_bool("RETRIEVAL_ENABLE_LEXICAL", False)
 ENABLE_DENSE_RETRIEVAL = _env_bool("RETRIEVAL_ENABLE_DENSE", True)
 ENABLE_SCORED_INTENT = _env_bool("RETRIEVAL_ENABLE_SCORED_INTENT", True)
+# Two-layer source gating: display_sources (strict, cited) vs reasoning_sources (broader, synthesis-only).
+# Disable to fall back to single-list behaviour where all assembled sources are both cited and reasoned from.
+ENABLE_TWO_LAYER_SOURCES = _env_bool("RETRIEVAL_ENABLE_TWO_LAYER_SOURCES", True)
+
+# Display and reasoning source caps (plan §Source Set Size Decision).
+DISPLAY_SOURCES_CAP = _env_int("RETRIEVAL_DISPLAY_SOURCES_CAP", 6)
+REASONING_SOURCES_CAP = _env_int("RETRIEVAL_REASONING_SOURCES_CAP", 12)
+
+# Intent-aware context budgets (plan §Intent-Aware Context Budget Starting Values).
+# Keyed by primary_intent string; fallback is MAX_CONTEXT_TOKENS.
+INTENT_CONTEXT_BUDGETS: dict[str, int] = {
+    "OVERVIEW":      5000,
+    "TECH_STACK":    4500,
+    "ARCHITECTURE":  6000,
+    "SYMBOL":        2500,
+    "FILE":          2500,
+    "SEMANTIC":      5000,
+    "TRACE":         6500,
+    "DEPENDENCY":    6500,
+    "FOLLOWUP":      4500,
+    "EXPLANATION":   4500,
+    "CODE_REQUEST":  5500,
+    "CONFIG":        4000,
+    "LOW_CONTEXT":   2500,
+}
+
+# History token caps — prevent conversation history from starving code context.
+# HISTORY_TOKEN_CAP is a global hard ceiling regardless of intent.
+# INTENT_HISTORY_CAPS further reduce the cap for broad/synthesis intents that
+# need the most code context and are least dependent on exact prior answers.
+HISTORY_TOKEN_CAP = _env_int("RETRIEVAL_HISTORY_TOKEN_CAP", 1500)
+INTENT_HISTORY_CAPS: dict[str, int] = {
+    "OVERVIEW":      800,
+    "TECH_STACK":    800,
+    "ARCHITECTURE":  1000,
+    "TRACE":         1000,
+    "DEPENDENCY":    1000,
+    "SEMANTIC":      1200,
+    "EXPLANATION":   1200,
+    "FOLLOWUP":      1200,
+    "CODE_REQUEST":  1500,
+    "SYMBOL":        1500,
+    "FILE":          1500,
+    "CONFIG":        1500,
+    "LOW_CONTEXT":   600,
+}
 
 EXPAND_CALLS = _env_bool("RETRIEVAL_EXPAND_CALLS", True)
 EXPAND_PARENT = _env_bool("RETRIEVAL_EXPAND_PARENT", True)

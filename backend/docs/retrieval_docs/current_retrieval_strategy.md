@@ -92,6 +92,7 @@ At a high level, a query currently goes through this sequence:
 8. Display-time source filtering reduces the visible evidence set.
 9. Response mode is selected:
    - deterministic code answer
+   - deterministic architecture answer
    - deterministic overview answer
    - deterministic phase-1 flow answer
    - deterministic explanation answer
@@ -378,6 +379,8 @@ Properties of the current merge:
 
 This keeps graph/entity-backed evidence ahead of probabilistic dense or lexical matches while still allowing lexical retrieval to improve recall for exact wording, config keys, dependency names, and doc-heavy queries.
 
+For explicit file hints, metadata search also has a grounded local-file fallback. If Qdrant does not return an exact file payload, the searcher checks the selected repo root for the requested path and then for safe suffix matches. This lets deployment/configuration answers work when the selected session is a monorepo and backend config files are stored under paths such as `backend/Dockerfile`, `backend/docker-compose.yml`, or `backend/.env.example`.
+
 ## 7. Search Augmentations
 
 After the base merge, the current system applies two important augmentations.
@@ -527,44 +530,62 @@ Primary chunks can be truncated to fit the remaining budget. Non-primary chunks 
 
 ## 11. Source Filtering and Evidence Gating
 
-`retrieval/source_filter.py` decides which sources are shown to the user and which sources are allowed to be mentioned by the LLM.
+`retrieval/source_filter.py` and `retrieval/assembler.py` together control which sources reach the user and how much context the LLM receives.
 
-### 11.1 Query-sensitive filtering
+### 11.1 Two-layer source model
 
-The filter detects:
+The current system splits assembled sources into two distinct sets:
 
-- test queries
-- compound trace queries
-- auth-flow trace queries
-- overview queries
+**display_sources** (max `DISPLAY_SOURCES_CAP = 6`)
+- Strict citation set shown to the user as source cards.
+- Injected into the LLM prompt as the `ALLOWED SOURCES` list.
+- The LLM is explicitly forbidden from referencing anything outside this set.
+- Derived by `select_sources_for_display()` with an additional hard cap.
 
-It then:
+**reasoning_sources** (max `REASONING_SOURCES_CAP = 12`)
+- Broader synthesis set always a superset of `display_sources`.
+- Extra slots filled with remaining assembled chunks (primaries first, then expanded).
+- Used to build the `CODE CONTEXT` block via `assemble_for_reasoning()`.
+- Never injected into `ALLOWED SOURCES`; provides synthesis breadth without relaxing citation safety.
+
+Controlled by `RETRIEVAL_ENABLE_TWO_LAYER_SOURCES` (default `1`). Set to `0` to revert to the legacy single-list behaviour where both lists are identical.
+
+### 11.2 Query-sensitive display filtering
+
+`select_sources_for_display()` applies per-query heuristics before the cap:
 
 - separates primary vs expanded sources
-- prefers non-test sources unless the query asks for tests
 - scores sources by lexical overlap with the query
-- applies caps to reduce noise
+- removes test sources unless the query mentions tests
+- applies a query-type-aware primary cap (5 default, up to 9 for provider/credential flows)
+- injects phase-1 flow anchors (specific symbol names for auth/indexing/deployment/provider traces)
+- injects trace anchors for auth-flow questions
 
-Current caps:
+### 11.3 Intent-aware context budget
 
-- primary: typically `5`, `6`, or `7`
-- expanded: typically `2` or `3`
+`assemble_for_reasoning()` uses `intent_context_budget()` instead of the global `MAX_CONTEXT_TOKENS`:
 
-### 11.2 Trace-anchor injection
+| Intent | Budget (tokens) |
+|---|---|
+| `TRACE` / `DEPENDENCY` | 6500 |
+| `ARCHITECTURE` | 6000 |
+| `SEMANTIC` / `OVERVIEW` | 5000 |
+| `CODE_REQUEST` | 5500 |
+| `TECH_STACK` / `FOLLOWUP` / `EXPLANATION` | 4500 |
+| `CONFIG` | 4000 |
+| `SYMBOL` / `FILE` / `LOW_CONTEXT` | 2500 |
 
-For certain auth or request-flow questions, the filter can force specific symbols into the displayed evidence set, such as:
+History tokens are subtracted from the intent budget before filling chunks, same as the existing `assemble()` logic.
 
-- `account_info`
-- `authenticated_get`
-- `signed_params`
-- `sign_query`
-- `auth_headers`
+### 11.4 Why this matters
 
-This is a targeted heuristic for trace-style questions.
+The split fixes the original over-constraint problem: broad synthesis queries were starved because the strict display cap (6 sources) was also limiting the evidence available to the LLM. Now:
 
-### 11.3 Why this matters
+- The LLM reasons from up to 12 sources under an intent-appropriate token budget.
+- The citation safety guarantee (ALLOWED SOURCES) still only exposes the tight display set.
+- Users see a clean source card list (≤6); the LLM has more breadth for synthesis.
 
-The filtered sources are not just display hints. They directly constrain later answer generation because the LLM prompt includes a strict allowed-source list.
+
 
 ## 12. Response Mode Routing
 
@@ -587,7 +608,34 @@ Behavior:
 - returns snippets directly
 - bypasses the LLM
 
-### 12.2 Overview mode
+### 12.2 Architecture mode
+
+Triggered by `is_architecture_request()`.
+
+Signals include:
+
+- `architecture`
+- `architecture overview`
+- `system design`
+- `project structure`
+- `how is this project structured`
+- `module layout`
+- `runtime shape`
+
+Behavior:
+
+- routes through `build_architecture_answer()`
+- emits `response_mode=architecture_summary`
+- uses repo-summary/README/config/deployment/module evidence selected by overview-style retrieval
+- injects architecture file hints such as README, Docker Compose, Dockerfile, env template, deployment runbook, retrieval entrypoints, and ingestion entrypoints
+- renders separate sections for runtime shape, code organization, and configuration/deployment boundaries
+- bypasses the LLM
+
+Important limitation:
+
+This is a deterministic architecture summary, not a deep cross-file architecture synthesis. It is strongest when repo-summary/config evidence is available and weaker when a repo lacks overview/config files.
+
+### 12.3 Overview mode
 
 Triggered by `is_overview_request()`.
 
@@ -615,9 +663,9 @@ Behavior:
 
 Important limitation:
 
-This logic can now prefer the synthetic `__repo_summary__.md` artifact and first-pass structured metadata from README, dependency manifests, Docker Compose, Dockerfile, and env examples. It is still not a deep semantic architecture model, so broad architecture answers need more dedicated assembly work.
+This logic can now prefer the synthetic `__repo_summary__.md` artifact and first-pass structured metadata from README, dependency manifests, Docker Compose, Dockerfile, and env examples. Broad architecture questions now have a bounded deterministic architecture mode, but deep architecture synthesis still needs later reasoning-source and LLM-assisted work.
 
-### 12.3 Flow mode
+### 12.4 Flow mode
 
 Triggered by `is_flow_explanation_request()`.
 
@@ -635,21 +683,24 @@ Behavior:
   - backend request orchestration
   - auth/session lifecycle
   - indexing/session creation trace
+- covers the first phase-2 deterministic family:
+  - deployment/configuration flow
+  - provider credential lifecycle
 - maps each flow family to reusable evidence roles instead of tuning for exact user wording
-- selects up to seven flow-relevant sources with required roles first
+- selects up to seven flow-relevant sources with required roles first, including file-level role matches for deployment/config files
 - returns those selected flow evidence sources to the API, keeping UI source cards aligned with the deterministic answer body
 - computes evidence state as `strong`, `partial`, or `weak`
-- renders ordered implementation steps from matched roles such as auth entrypoint, session creation, session lookup, logout/session deletion, indexing job, and retrieval pipeline
+- renders role-labeled numbered implementation steps with inline evidence references for matched roles such as auth entrypoint, session creation, session lookup, logout/session deletion, indexing job, and retrieval pipeline
 - reports missing required evidence roles when the selected source set is partial or weak
-- includes a key-evidence section and source list
+- does not repeat separate `Key evidence` or answer-body `Sources` sections because the API source cards already use the same selected evidence set
 - emits `response_mode=flow_summary`
 - bypasses the LLM
 
 Important limitation:
 
-This is intentionally bounded to phase-1 flow families. Deployment/configuration, provider credential lifecycle, and broad architecture implementation answers still need later deterministic or LLM-assisted handling.
+This is intentionally bounded to the implemented flow families. Current phase-1 flow context/source correctness is accepted for now, while deeper prose and presentation polish is deferred to the later LLM/rendering phase. Deployment/configuration now has first-pass deterministic coverage from `docker-compose.yml`, `Dockerfile`, `.env.example`, deployment runbook, and local runner evidence. Provider credential lifecycle now has deterministic coverage from provider API endpoint and `provider_store.py` evidence. Broad architecture implementation answers are handled by the separate deterministic architecture mode.
 
-### 12.4 Explanation mode
+### 12.5 Explanation mode
 
 Triggered by `is_explanation_request()`.
 
@@ -674,11 +725,32 @@ Behavior:
 
 This mode is currently strongest for frontend component explanation where named exported data arrays are nearby and JS/TS imports are conventional.
 
-### 12.4 Low-context fallback
+### 12.6 Evidence confidence and low-context fallback
 
-If source filtering yields no shown sources, the answer is:
+After `display_sources` are determined, `score_evidence_confidence()` (in `source_filter.py`) classifies the quality of the assembled evidence set:
 
-`Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.`
+| Level | Trigger |
+|---|---|
+| `weak` | No sources; no primary source; or top source has zero lexical overlap |
+| `partial` | Fewer than 2 display sources; or single weak-token hit with < 3 sources |
+| `strong` | At least 2 sources with adequate lexical overlap |
+
+For LLM-path answers:
+
+- **weak** → prepends `⚠ Low confidence:` banner before the answer text
+- **partial** → prepends `⚠ Limited evidence:` banner before the answer text
+- **strong** → answer returned as-is, no banner
+
+For zero-source (hard low-context) cases the answer is the static fallback:
+
+> `Insufficient context in retrieved code to answer confidently. Try naming a file, symbol, component, route, or config file.`
+
+`evidence_confidence` (the level string) is:
+- included in `meta` returned by `run_query()`
+- logged in the `retrieval.request.end` observability event
+- returned as a top-level field in the API JSON response
+
+Deterministic answer paths (code/overview/flow/architecture/explanation) are **not** affected — they have their own internal evidence-state tracking and never call `score_evidence_confidence()`.
 
 ## 13. LLM Prompting Strategy
 
@@ -816,7 +888,7 @@ Remaining predictable failure modes:
 
 - broad semantic questions can be misread as symbol-level questions
 - service names are not reliable until structured non-code metadata exists
-- architecture intent is detected but not yet routed through a dedicated architecture assembly path
+- architecture intent now routes through deterministic architecture summary mode, but deep multi-hop architecture synthesis is still future work
 - follow-up rewriting is based on shallow markers, not discourse understanding
 - topic-shift behavior is specified in the plan but not implemented as an entity-memory flow yet
 
@@ -904,7 +976,7 @@ The refreshed collection now includes the synthetic `__repo_summary__.md` chunk.
 
 The multi-repo eval suite now uses committed fixture repos for frontend-heavy, backend-heavy, infra-heavy, and mixed/monorepo shapes, plus CodeSeek exact-wording and phase-1 flow regressions. The latest lexical-off run passed thresholds with `24` cases, weighted `hit@10 0.917`, weighted `mrr@10 0.712`, weighted citation coverage `0.937`, expected response-mode score `1.000`, and expected framework/dependency scores of `1.000`.
 
-The phase-1 flow eval verifies `flow_summary` routing, citations, answer terms, varied auth wording, and deterministic latency. Latest flow-only metrics are `4` cases, `hit@10 1.000`, `mrr@10 1.000`, citation coverage `1.000`, response-mode score `1.000`, answer-term score `1.000`, latency p50 `155 ms`, and latency p95 `168 ms`.
+The phase-1/2 flow eval verifies `flow_summary` routing, citations, answer terms, varied auth wording, deployment/configuration coverage, provider credential lifecycle coverage, and deterministic latency. Latest flow-only metrics are `6` cases, `hit@10 1.000`, `mrr@10 0.867`, citation coverage `1.000`, expected-file score `1.000`, response-mode score `1.000`, answer-term score `1.000`, latency p50 `148 ms`, and latency p95 `165 ms`.
 
 This will materially improve:
 

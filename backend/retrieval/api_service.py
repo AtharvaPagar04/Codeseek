@@ -172,6 +172,20 @@ app.add_middleware(
 )
 
 
+from retrieval.crypto_store import master_key_override_var
+
+@app.middleware("http")
+async def app_encryption_key_middleware(request: Request, call_next):
+    key = request.headers.get("x-app-encryption-key", "").strip()
+    if key:
+        token = master_key_override_var.set(key)
+        try:
+            return await call_next(request)
+        finally:
+            master_key_override_var.reset(token)
+    return await call_next(request)
+
+
 class QueryRequest(BaseModel):
     query: str | None = None
     question: str | None = None
@@ -517,12 +531,25 @@ def _query_impl(
     auth_user = _current_auth_user(session_token)
     if not auth_user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    provider_config = get_active_provider_credential(auth_user["id"])
+    try:
+        provider_config = get_active_provider_credential(auth_user["id"])
+    except ValueError as e:
+        if "authentication failed" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="Your active provider API key cannot be decrypted. This happens when the server encryption key changes. Please delete and re-add your provider API key, or switch/provide a valid encryption key in settings.",
+            )
+        raise
     if not provider_config:
         raise HTTPException(
             status_code=400,
             detail="No active provider credential configured for this user",
         )
+    
+    # Check for client-side model override header
+    model_override = request.headers.get("x-app-model-override", "").strip()
+    if model_override:
+        provider_config["model"] = model_override
     session = _resolve_query_session(body.session_id, auth_user)
     thread = None
     if body.thread_id:
@@ -603,6 +630,7 @@ def _query_impl(
             "answer": answer,
             "sources": sources,
             "context_tokens": token_count,
+            "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
             "metrics": {
                 "total_latency_ms": total_ms,
                 "stage_latency_ms": meta.get("stage_latency_ms", {}),
@@ -734,7 +762,15 @@ def activate_provider_credential_v1(
 ) -> dict:
     _require_auth(authorization)
     user = _require_auth_user(session_token)
-    record = set_active_provider_credential(user["id"], credential_id)
+    try:
+        record = set_active_provider_credential(user["id"], credential_id)
+    except ValueError as e:
+        if "authentication failed" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="The selected provider API key cannot be decrypted. This happens when the server encryption key changes. Please delete and re-add this credential, or switch/provide a valid encryption key in settings.",
+            )
+        raise
     if not record:
         raise HTTPException(status_code=404, detail="Provider credential not found")
     record.pop("api_key", None)
@@ -766,9 +802,17 @@ def create_session_v1(
     auth_user = _current_auth_user(session_token)
     github_token = (body.github_token or "").strip()
     if not github_token and auth_user:
-        stored_github = get_github_credential(auth_user["id"])
-        if stored_github:
-            github_token = stored_github["access_token"]
+        try:
+            stored_github = get_github_credential(auth_user["id"])
+            if stored_github:
+                github_token = stored_github["access_token"]
+        except ValueError as e:
+            if "authentication failed" in str(e):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Your stored GitHub token cannot be decrypted (encryption key changed). Please reconnect your GitHub account in settings.",
+                )
+            raise
     try:
         session = create_session(
             repo_full_name=body.repo_full_name.strip(),
@@ -795,7 +839,15 @@ def list_github_repos_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     user = _require_auth_user(session_token)
-    credential = get_github_credential(user["id"])
+    try:
+        credential = get_github_credential(user["id"])
+    except ValueError as e:
+        if "authentication failed" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="Your stored GitHub token cannot be decrypted (encryption key changed). Please reconnect your GitHub account in settings.",
+                )
+        raise
     if not credential:
         raise HTTPException(status_code=404, detail="No GitHub credential connected for this user")
     try:
@@ -1166,10 +1218,14 @@ def auth_me(session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_
     user = _current_auth_user(session_token)
     if not user:
         return {"authenticated": False}
+    try:
+        github_connected = bool(get_github_credential(user["id"]))
+    except ValueError:
+        github_connected = False
     return {
         "authenticated": True,
         "user": user,
-        "github_connected": bool(get_github_credential(user["id"])),
+        "github_connected": github_connected,
     }
 
 

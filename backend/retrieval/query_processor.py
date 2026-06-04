@@ -105,7 +105,41 @@ FLOW_SYMBOLS = {
         "_require_auth_user",
     ],
     "indexing_session": ["create_session", "_index_job", "run_pipeline"],
+    "deployment_config": [],
+    "provider_credentials": [
+        "list_provider_credentials_v1",
+        "create_provider_credential_v1",
+        "activate_provider_credential_v1",
+        "delete_provider_credential_v1",
+        "list_provider_credentials",
+        "create_provider_credential",
+        "set_active_provider_credential",
+        "delete_provider_credential",
+        "get_active_provider_credential",
+    ],
 }
+
+FLOW_FILES = {
+    "deployment_config": [
+        "docker-compose.yml",
+        "Dockerfile",
+        ".env.example",
+        "docs/deployment_runbook.md",
+        "scripts/run_local_backend.sh",
+    ],
+}
+
+ARCHITECTURE_FILES = [
+    "README.md",
+    "docker-compose.yml",
+    "Dockerfile",
+    ".env.example",
+    "docs/deployment_runbook.md",
+    "retrieval/api_service.py",
+    "retrieval/main.py",
+    "retrieval/session_indexer.py",
+    "rag_ingestion/main.py",
+]
 
 
 def process_query(raw_query: str) -> dict:
@@ -127,6 +161,7 @@ def process_query(raw_query: str) -> dict:
         "files": sorted(set(extracted_files)),
     }
     _inject_flow_symbols(query, entities)
+    _inject_architecture_files(query, entities)
 
     if ENABLE_SCORED_INTENT:
         entities.update(_extract_scored_entities(query))
@@ -156,16 +191,63 @@ def _inject_flow_symbols(query: str, entities: dict) -> None:
     symbols = list(entities.get("symbols") or [])
     symbols.extend(FLOW_SYMBOLS[flow_kind])
     entities["symbols"] = sorted(set(symbols))
+    files = list(entities.get("files") or [])
+    files.extend(FLOW_FILES.get(flow_kind, []))
+    entities["files"] = sorted(set(files))
+
+
+def _inject_architecture_files(query: str, entities: dict) -> None:
+    lower = query.lower()
+    if not any(
+        phrase in lower
+        for phrase in (
+            "architecture",
+            "system design",
+            "project structure",
+            "how is this project structured",
+            "how is the project structured",
+            "module layout",
+            "runtime shape",
+        )
+    ):
+        return
+    files = list(entities.get("files") or [])
+    files.extend(ARCHITECTURE_FILES)
+    entities["files"] = sorted(set(files))
 
 
 def _flow_kind(query: str) -> str:
     lower = query.lower()
-    if not any(marker in lower for marker in ("flow", "lifecycle", "orchestration", "trace", "walk me through", "step")):
+    if not any(
+        marker in lower
+        for marker in (
+            "flow",
+            "lifecycle",
+            "orchestration",
+            "trace",
+            "walk me through",
+            "step",
+            "deployment",
+            "configuration",
+            "config",
+            "provider",
+            "credential",
+            "credentials",
+            "api key",
+            "llm",
+        )
+    ):
         return ""
+    if any(term in lower for term in ("provider", "llm provider", "model")) and any(term in lower for term in ("credential", "credentials", "api key", "key")):
+        return "provider_credentials"
     if any(term in lower for term in ("auth", "oauth", "login", "cookie", "credential")):
         return "auth_session"
     if any(term in lower for term in ("index", "indexing", "ingestion", "repo session", "session creation", "clone")):
         return "indexing_session"
+    if any(term in lower for term in ("deploy", "deployment", "docker", "compose", "container", "environment", "configuration", "config")):
+        return "deployment_config"
+    if any(term in lower for term in ("provider", "credential", "credentials", "api key", "llm provider", "model")):
+        return "provider_credentials"
     if any(term in lower for term in ("backend", "request", "query", "orchestration", "api")):
         return "orchestration"
     return ""

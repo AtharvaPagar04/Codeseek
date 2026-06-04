@@ -1,5 +1,7 @@
 """Conversation memory helpers."""
 
+import tiktoken
+
 from retrieval.chat_store import (
     list_session_messages,
     list_session_turns,
@@ -12,6 +14,74 @@ from retrieval.memory_store import (
     save_session_memory,
     save_thread_memory,
 )
+
+_enc = tiktoken.get_encoding("cl100k_base")
+
+
+def _token_count(text: str) -> int:
+    return len(_enc.encode(text))
+
+
+def _cap_history_block(full_block: str, max_tokens: int) -> str:
+    """Trim history block to max_tokens by dropping the oldest turns first.
+
+    Preserves the header/footer lines and reconstructs a valid block from
+    the most-recent turns that fit within max_tokens.  Returns an empty
+    string when max_tokens <= 0.
+    """
+    if not full_block or max_tokens <= 0:
+        return ""
+    if _token_count(full_block) <= max_tokens:
+        return full_block
+
+    # Split on turn lines.  History block format:
+    #   --- CONVERSATION HISTORY ---
+    #   Q1: ...
+    #   A1: ...
+    #   ...
+    #   --- END HISTORY ---
+    lines = full_block.splitlines()
+    # Collect (Qn, An) pairs from the end, stopping when we exceed the budget.
+    header = "--- CONVERSATION HISTORY ---"
+    footer = "--- END HISTORY ---"
+    overhead = _token_count(header + "\n" + footer)
+    if overhead >= max_tokens:
+        return ""
+
+    # Walk turns from most-recent (last) to oldest.
+    turn_pairs: list[tuple[str, str]] = []
+    i = len(lines) - 1
+    while i >= 0:
+        line = lines[i]
+        if line.startswith("--- END HISTORY") or line.startswith("--- CONVERSATION HISTORY"):
+            i -= 1
+            continue
+        # Expect Qn / An alternating from the bottom
+        if line.startswith("A") and i > 0 and lines[i - 1].startswith("Q"):
+            turn_pairs.insert(0, (lines[i - 1], line))
+            i -= 2
+        else:
+            i -= 1
+
+    # Greedily include most-recent turns that fit.
+    chosen: list[tuple[str, str]] = []
+    used = overhead
+    for q, a in reversed(turn_pairs):
+        pair_tokens = _token_count(q + "\n" + a + "\n")
+        if used + pair_tokens > max_tokens:
+            break
+        chosen.insert(0, (q, a))
+        used += pair_tokens
+
+    if not chosen:
+        return ""
+
+    rebuilt = [header]
+    for q, a in chosen:
+        rebuilt.append(q)
+        rebuilt.append(a)
+    rebuilt.append(footer)
+    return "\n".join(rebuilt)
 
 
 class ConversationMemory:
@@ -51,6 +121,10 @@ class ConversationMemory:
             lines.append(f"A{index}: {turn['answer']}")
         lines.append("--- END HISTORY ---")
         return "\n".join(lines)
+
+    def get_history_block_capped(self, max_tokens: int) -> str:
+        """Return history trimmed so it never exceeds max_tokens tokens."""
+        return _cap_history_block(self.get_history_block(), max_tokens)
 
 
 class SessionConversationMemory:
@@ -114,6 +188,10 @@ class SessionConversationMemory:
             lines.append("--- END HISTORY ---")
         return "\n".join(lines)
 
+    def get_history_block_capped(self, max_tokens: int) -> str:
+        """Return history trimmed so it never exceeds max_tokens tokens."""
+        return _cap_history_block(self.get_history_block(), max_tokens)
+
 
 class ThreadConversationMemory:
     """DB-backed thread memory using rolling summaries + recent turns."""
@@ -176,6 +254,10 @@ class ThreadConversationMemory:
                 lines.append(f"A{index}: {turn['answer']}")
             lines.append("--- END HISTORY ---")
         return "\n".join(lines)
+
+    def get_history_block_capped(self, max_tokens: int) -> str:
+        """Return history trimmed so it never exceeds max_tokens tokens."""
+        return _cap_history_block(self.get_history_block(), max_tokens)
 
 
 def _summarize_turns(turns: list[dict[str, str]]) -> str:

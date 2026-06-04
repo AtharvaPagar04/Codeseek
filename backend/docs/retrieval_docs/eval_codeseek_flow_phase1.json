@@ -62,6 +62,44 @@
         "creates or reuses a session record",
         "runs ingestion"
       ]
+    },
+    {
+      "id": "cs-flow-004",
+      "query": "how does deployment configuration work",
+      "expected_sources": [
+        {"relative_path": "docker-compose.yml"},
+        {"relative_path": "Dockerfile"},
+        {"relative_path": ".env.example"}
+      ],
+      "expected_files": ["docker-compose.yml", "Dockerfile", ".env.example"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Deployment And Configuration Flow",
+        "Docker Compose defines the runtime services",
+        "environment template documents required secrets"
+      ]
+    },
+    {
+      "id": "cs-flow-005",
+      "query": "explain provider credential lifecycle",
+      "expected_sources": [
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "list_provider_credentials_v1"},
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "create_provider_credential_v1"},
+        {"relative_path": "retrieval/provider_store.py", "symbol_name": "create_provider_credential"},
+        {"relative_path": "retrieval/provider_store.py", "symbol_name": "get_active_provider_credential"}
+      ],
+      "expected_symbols": [
+        "list_provider_credentials_v1",
+        "create_provider_credential_v1",
+        "create_provider_credential",
+        "get_active_provider_credential"
+      ],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Provider Credential Lifecycle",
+        "encrypts the API key",
+        "active provider credential"
+      ]
     }
   ]
 }

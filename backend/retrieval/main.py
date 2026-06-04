@@ -5,20 +5,25 @@ import os
 import re
 import time
 
-from retrieval.assembler import assemble
+from retrieval.assembler import assemble, assemble_for_reasoning, intent_history_cap
 from retrieval.code_answers import (
+    build_architecture_answer,
     build_explanation_answer,
     build_code_answer,
     build_flow_answer,
     build_overview_answer,
+    build_symbol_deep_dive_answer,
     find_supporting_import_exports,
     is_code_request,
+    is_architecture_request,
     is_explanation_request,
     is_flow_explanation_request,
     is_overview_request,
+    is_symbol_deep_dive_request,
 )
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
+    ENABLE_TWO_LAYER_SOURCES,
     MAX_CONTEXT_TOKENS,
     get_collection_name,
     get_repo_root,
@@ -32,7 +37,9 @@ from retrieval.isolation import validate_collection_binding
 from retrieval.searcher import search
 from retrieval.source_filter import (
     explain_source_filter_decision,
+    score_evidence_confidence,
     select_sources_for_display,
+    split_sources_two_layer,
 )
 
 
@@ -58,6 +65,16 @@ LOW_CONTEXT_FALLBACK = (
     "Try naming a file, symbol, component, route, or config file."
 )
 
+PARTIAL_EVIDENCE_BANNER = (
+    "⚠ **Limited evidence:** this answer is based on a small or weakly-matched "
+    "source set. Verify the details against the referenced files.\n\n"
+)
+
+WEAK_EVIDENCE_BANNER = (
+    "⚠ **Low confidence:** the retrieved sources have weak relevance to this query. "
+    "The answer may be incomplete or inaccurate. Try a more specific question.\n\n"
+)
+
 
 def run_query(
     raw_query: str,
@@ -73,11 +90,15 @@ def run_query(
     log_event("retrieval.request.start", rid, query=raw_query)
     validate_collection_binding(get_collection_name(), get_repo_root())
     started = time.perf_counter()
-    history_block = memory.get_history_block()
+    history_block = memory.get_history_block()  # full, for search/follow-up rewrite
     metrics.add_stage("history", started)
     started = time.perf_counter()
     query_info = _resolve_query_info(raw_query, memory)
     metrics.add_stage("query_processor", started)
+    # Resolve intent early so the history cap can be applied before assembly.
+    primary_intent = query_info.get("primary_intent") or query_info.get("intent")
+    history_cap = intent_history_cap(primary_intent)
+    history_block_capped = memory.get_history_block_capped(history_cap)
     started = time.perf_counter()
     candidates = search(query_info)
     metrics.add_stage("search", started)
@@ -85,10 +106,15 @@ def run_query(
     expanded = expand(candidates, query_info)
     metrics.add_stage("expand", started)
     started = time.perf_counter()
-    context, sources, token_count = assemble(expanded, history_block)
+    context, sources, token_count = assemble(expanded, history_block_capped)
     metrics.add_stage("assemble", started)
     meta["source_filter"] = explain_source_filter_decision(raw_query, sources)
-    shown_sources = select_sources_for_display(raw_query, sources)
+    # Two-layer source gating: display_sources for citations, reasoning_sources for context.
+    display_sources, reasoning_sources = split_sources_two_layer(
+        raw_query, sources, enabled=ENABLE_TWO_LAYER_SOURCES
+    )
+    shown_sources = display_sources
+    evidence_confidence = score_evidence_confidence(raw_query, shown_sources)
     if is_flow_explanation_request(raw_query):
         flow_sources = select_sources_for_display(raw_query, expanded)
         if flow_sources:
@@ -102,6 +128,7 @@ def run_query(
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
                 "response_mode": "low_context",
+                "evidence_confidence": {"level": "weak", "reason": "no sources assembled", "count": 0},
             }
         )
         log_event(
@@ -123,6 +150,7 @@ def run_query(
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
+    # Build chunk list for deterministic answer paths: filtered to shown (display) sources only.
     allowed_keys = {
         (
             s.get("relative_path", ""),
@@ -146,18 +174,80 @@ def run_query(
         in allowed_keys
     ]
     if llm_chunks:
-        context, _, token_count = assemble(llm_chunks, history_block)
+        context, _, token_count = assemble(llm_chunks, history_block_capped)
+    # For the LLM path: use the broader reasoning_sources for context assembly.
+    reasoning_chunks = [
+        c
+        for c in expanded
+        if (
+            c.get("relative_path", ""),
+            c.get("symbol_name", ""),
+            int(c.get("start_line", 0)),
+            int(c.get("end_line", 0)),
+            c.get("expansion_type", "primary"),
+        )
+        in {
+            (
+                s.get("relative_path", ""),
+                s.get("symbol_name", ""),
+                int(s.get("start_line", 0)),
+                int(s.get("end_line", 0)),
+                s.get("expansion_type", "primary"),
+            )
+            for s in reasoning_sources
+        }
+    ]
+    reasoning_context, _, reasoning_token_count = assemble_for_reasoning(
+        reasoning_chunks or (llm_chunks or expanded),
+        history_block_capped,
+        primary_intent=primary_intent,
+    )
     if is_code_request(raw_query):
         started = time.perf_counter()
-        answer = build_code_answer(raw_query, shown_sources, llm_chunks or expanded)
-        metrics.add_stage("code_answer", started)
+        # Weak evidence: skip deterministic code mode, fall through to LLM
+        if evidence_confidence["level"] == "weak":
+            log_event(
+                "retrieval.code_answer.skipped", rid,
+                reason="weak_evidence", count=evidence_confidence["count"]
+            )
+        else:
+            answer = build_code_answer(raw_query, shown_sources, llm_chunks or expanded)
+            metrics.add_stage("code_answer", started)
+            memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "errors": metrics.errors,
+                    "response_mode": "code_excerpt",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="code_excerpt",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
+    if is_architecture_request(raw_query):
+        answer = build_architecture_answer(raw_query, shown_sources, llm_chunks or expanded)
         memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
-                "response_mode": "code_excerpt",
+                "response_mode": "architecture_summary",
             }
         )
         log_event(
@@ -170,7 +260,7 @@ def run_query(
             expanded=len(expanded),
             shown_sources=len(shown_sources),
             source_filter=meta["source_filter"],
-            response_mode="code_excerpt",
+            response_mode="architecture_summary",
         )
         if return_meta:
             return answer, shown_sources, token_count, meta
@@ -234,32 +324,75 @@ def run_query(
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
+    # Phase 3: single-symbol deep-dive — runs before generic explanation
+    if is_symbol_deep_dive_request(raw_query) and evidence_confidence["level"] != "weak":
+        started = time.perf_counter()
+        deep_dive_answer = build_symbol_deep_dive_answer(
+            raw_query, shown_sources, llm_chunks or expanded
+        )
+        metrics.add_stage("symbol_deep_dive", started)
+        if deep_dive_answer:
+            memory.add(raw_query, deep_dive_answer, resolved_query=_resolved_query_text(query_info, raw_query))
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "errors": metrics.errors,
+                    "response_mode": "symbol_deep_dive",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="symbol_deep_dive",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            if return_meta:
+                return deep_dive_answer, shown_sources, token_count, meta
+            return deep_dive_answer, shown_sources, token_count
+        # Empty result: fall through to explanation or LLM
     if is_explanation_request(raw_query):
-        answer = build_explanation_answer(raw_query, shown_sources, llm_chunks or expanded)
-        memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "errors": metrics.errors,
-                "response_mode": "explanation_summary",
-            }
-        )
+        # Weak evidence: let LLM handle instead of a thin deterministic explanation
+        if evidence_confidence["level"] != "weak":
+            answer = build_explanation_answer(raw_query, shown_sources, llm_chunks or expanded)
+            memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "errors": metrics.errors,
+                    "response_mode": "explanation_summary",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="explanation_summary",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
         log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="explanation_summary",
+            "retrieval.explanation.skipped", rid,
+            reason="weak_evidence", count=evidence_confidence["count"]
         )
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
     response_sources = list(shown_sources)
     extra_context_blocks: list[str] = []
     if not is_code_request(raw_query):
@@ -298,13 +431,20 @@ def run_query(
     started = time.perf_counter()
     answer = generate_answer(
         raw_query,
-        context,
+        reasoning_context,          # broader context for synthesis
         history_block,
-        allowed_sources=response_sources,
+        allowed_sources=response_sources,  # display_sources — strict citation list
         extra_context_blocks=extra_context_blocks,
         provider_config=provider_config,
     )
+    token_count = reasoning_token_count
     metrics.add_stage("llm", started)
+    # Prepend evidence-quality banner when confidence is weak or partial.
+    conf_level = evidence_confidence["level"]
+    if conf_level == "weak":
+        answer = WEAK_EVIDENCE_BANNER + answer
+    elif conf_level == "partial":
+        answer = PARTIAL_EVIDENCE_BANNER + answer
     memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
     meta.update(
         {
@@ -312,6 +452,7 @@ def run_query(
             "total_latency_ms": metrics.total_ms(),
             "errors": metrics.errors,
             "response_mode": "llm",
+            "evidence_confidence": evidence_confidence,
         }
     )
     log_event(
@@ -323,6 +464,9 @@ def run_query(
         candidates=len(candidates),
         expanded=len(expanded),
         shown_sources=len(shown_sources),
+        display_sources=len(display_sources),
+        reasoning_sources=len(reasoning_sources),
+        evidence_confidence=evidence_confidence["level"],
         source_filter=meta["source_filter"],
     )
     if return_meta:

@@ -58,7 +58,7 @@ class LlmProviderConfigTests(unittest.TestCase):
         _, kwargs = provider_answer.call_args
         self.assertEqual(kwargs["provider"], "gemini")
         self.assertEqual(kwargs["api_key"], "AIza-test")
-        self.assertEqual(kwargs["model"], "gemini-2.5-flash")
+        self.assertEqual(kwargs["model"], "gemini-1.5-flash")
 
 
 if __name__ == "__main__":

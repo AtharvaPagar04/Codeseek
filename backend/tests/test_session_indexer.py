@@ -120,6 +120,15 @@ def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
     queued: list[str] = []
     monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda session_id: queued.append(session_id))
 
+    deleted_collections = []
+    class FakeQdrantClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def delete_collection(self, collection_name: str):
+            deleted_collections.append(collection_name)
+
+    monkeypatch.setattr(session_indexer, "QdrantClient", FakeQdrantClient)
+
     session = session_indexer.create_session("octocat/hello-world", "local")
     assert queued == [session["id"]]
 
@@ -130,6 +139,7 @@ def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
 
     assert session_indexer.delete_session(session["id"]) is True
     assert session_indexer.get_session(session["id"]) is None
+    assert deleted_collections == [session["collection"]]
     assert session_indexer.delete_session(session["id"]) is False
 
 

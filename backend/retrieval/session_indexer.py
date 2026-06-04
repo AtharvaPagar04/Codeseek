@@ -90,12 +90,28 @@ def delete_session(session_id: str) -> bool:
     with _lock:
         state = _load_state()
         sessions = state.get("sessions", [])
-        next_sessions = [s for s in sessions if s.get("id") != session_id]
-        if len(next_sessions) == len(sessions):
+        session_to_delete = next((s for s in sessions if s.get("id") == session_id), None)
+        if not session_to_delete:
             return False
+        next_sessions = [s for s in sessions if s.get("id") != session_id]
         state["sessions"] = next_sessions
         _save_state(state)
         _session_tokens.pop(session_id, None)
+
+        collection = session_to_delete.get("collection")
+        if collection:
+            try:
+                client = QdrantClient(
+                    QDRANT_HOST,
+                    port=QDRANT_PORT,
+                    timeout=5.0,
+                    check_compatibility=False,
+                )
+                client.delete_collection(collection_name=collection)
+            except Exception as e:
+                # Log warning but do not crash/block the request
+                print(f"Warning: failed to delete Qdrant collection {collection}: {e}")
+
         return True
 
 

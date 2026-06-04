@@ -93,3 +93,12 @@ button {
   font-size: inherit;
   color: inherit;
 }
+
+/* Hide details marker for custom styled details */
+details summary::-webkit-details-marker {
+  display: none;
+}
+details summary {
+  list-style: none;
+}
+

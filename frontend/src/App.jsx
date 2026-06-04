@@ -53,6 +53,12 @@ function Shell() {
   const [uiNotice, setUiNotice] = useState(null);
   const pollingErrorShownRef = useRef(false);
 
+  useEffect(() => {
+    const handleOpenApi = () => setApiModalOpen(true);
+    window.addEventListener('CODESEEK_OPEN_API_MODAL', handleOpenApi);
+    return () => window.removeEventListener('CODESEEK_OPEN_API_MODAL', handleOpenApi);
+  }, []);
+
   // Keep active session in sync when sessions change
   useEffect(() => {
     if (activeSessionId && sessions.find((s) => s.id === activeSessionId)) return;

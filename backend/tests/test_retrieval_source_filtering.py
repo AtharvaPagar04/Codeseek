@@ -135,6 +135,90 @@ class SourceFilteringTests(unittest.TestCase):
         self.assertIn("run_query", symbols)
         self.assertLessEqual(len(selected), 7)
 
+    def test_deployment_flow_query_keeps_config_file_anchors(self) -> None:
+        query = "how does deployment configuration work"
+        sources = [
+            {
+                "relative_path": "docker-compose.yml",
+                "symbol_name": "docker-compose.yml",
+                "start_line": 1,
+                "end_line": 60,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "Dockerfile",
+                "symbol_name": "Dockerfile",
+                "start_line": 1,
+                "end_line": 20,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": ".env.example",
+                "symbol_name": ".env.example",
+                "start_line": 1,
+                "end_line": 20,
+                "expansion_type": "primary",
+            },
+        ] + [
+            {
+                "relative_path": f"docs/noisy_deployment_{index}.md",
+                "symbol_name": f"deployment_notes_{index}",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            for index in range(8)
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        selected_paths = [source["relative_path"] for source in selected[:3]]
+
+        self.assertEqual(selected_paths, ["docker-compose.yml", "Dockerfile", ".env.example"])
+        self.assertLessEqual(len(selected), 7)
+
+    def test_provider_credential_flow_query_keeps_core_anchors(self) -> None:
+        query = "explain provider credential lifecycle"
+        sources = [
+            {
+                "relative_path": "retrieval/api_service.py",
+                "symbol_name": "create_provider_credential_v1",
+                "start_line": 694,
+                "end_line": 726,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "retrieval/provider_store.py",
+                "symbol_name": "create_provider_credential",
+                "start_line": 62,
+                "end_line": 116,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "retrieval/provider_store.py",
+                "symbol_name": "get_active_provider_credential",
+                "start_line": 45,
+                "end_line": 59,
+                "expansion_type": "primary",
+            },
+        ] + [
+            {
+                "relative_path": f"retrieval/noisy_provider_{index}.py",
+                "symbol_name": f"provider_notes_{index}",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            for index in range(8)
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        symbols = {source["symbol_name"] for source in selected}
+
+        self.assertIn("create_provider_credential_v1", symbols)
+        self.assertIn("create_provider_credential", symbols)
+        self.assertIn("get_active_provider_credential", symbols)
+        self.assertLessEqual(len(selected), 9)
+
 
 if __name__ == "__main__":
     unittest.main()

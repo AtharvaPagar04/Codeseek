@@ -13,13 +13,24 @@ NONCE_SIZE = 16
 TAG_SIZE = 32
 
 
+import contextvars
+
+# ContextVar to store request-scoped encryption key override
+master_key_override_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "master_key_override_var", default=None
+)
+
+
 def has_explicit_app_encryption_key() -> bool:
-    return bool(os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip())
+    override = master_key_override_var.get()
+    return bool(override or os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip())
 
 
 def _master_key() -> bytes:
+    override = master_key_override_var.get()
     raw = (
-        os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip()
+        override
+        or os.getenv("CODESEEK_APP_ENCRYPTION_KEY", "").strip()
         or os.getenv("APP_ENCRYPTION_KEY", "").strip()
         or os.getenv("CODESEEK_API_KEY", "").strip()
     )

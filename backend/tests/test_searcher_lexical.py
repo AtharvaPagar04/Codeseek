@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from retrieval import searcher
@@ -118,6 +120,69 @@ class SearcherLexicalTests(unittest.TestCase):
             "retrieval.searcher._get_model", side_effect=AssertionError("model should not load")
         ):
             self.assertEqual(searcher._dense_search("anything"), [])
+
+    def test_metadata_search_uses_local_file_fallback_for_file_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            dockerfile = repo_root / "Dockerfile"
+            dockerfile.write_text("FROM python:3.11-slim\nEXPOSE 8000\n", encoding="utf-8")
+
+            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+                results = searcher._metadata_search("", {"files": ["Dockerfile"], "symbols": []})
+
+        self.assertEqual(len(results), 1)
+        payload, _score, source = results[0]
+        self.assertEqual(source, "filter")
+        self.assertEqual(payload["relative_path"], "Dockerfile")
+        self.assertEqual(payload["symbol_name"], "Dockerfile")
+        self.assertIn("EXPOSE 8000", payload["content_excerpt"])
+
+    def test_metadata_search_local_file_fallback_resolves_monorepo_suffixes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            backend = repo_root / "backend"
+            frontend = repo_root / "frontend"
+            backend.mkdir()
+            frontend.mkdir()
+            (backend / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+            (frontend / "Dockerfile").write_text("FROM node:22-alpine\n", encoding="utf-8")
+
+            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+                results = searcher._metadata_search("", {"files": ["Dockerfile"], "symbols": []})
+
+        payload, _score, _source = results[0]
+        self.assertEqual(payload["relative_path"], "backend/Dockerfile")
+        self.assertIn("python:3.11-slim", payload["content_excerpt"])
+
+    def test_metadata_search_uses_local_symbol_fallback_for_symbol_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            retrieval_dir = repo_root / "retrieval"
+            retrieval_dir.mkdir()
+            (retrieval_dir / "provider_store.py").write_text(
+                "def create_provider_credential(user_id):\n    return {'id': user_id}\n\n"
+                "def other_symbol():\n    return None\n",
+                encoding="utf-8",
+            )
+
+            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+                results = searcher._metadata_search(
+                    "",
+                    {"files": [], "symbols": ["create_provider_credential"]},
+                )
+
+        self.assertEqual(len(results), 1)
+        payload, _score, source = results[0]
+        self.assertEqual(source, "filter")
+        self.assertEqual(payload["relative_path"], "retrieval/provider_store.py")
+        self.assertEqual(payload["symbol_name"], "create_provider_credential")
+        self.assertNotIn("other_symbol", payload["content_excerpt"])
 
     def test_exact_hits_are_promoted_ahead_of_probabilistic_hits(self) -> None:
         dense_payload = {
