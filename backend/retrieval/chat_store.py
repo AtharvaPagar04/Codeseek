@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 from retrieval.db import db_cursor
-from retrieval.memory_store import clear_session_memory_for_thread
+from retrieval.memory_store import clear_session_memory_for_thread, clear_turn_entities_for_thread
 from retrieval.thread_store import ensure_default_thread
 
 
@@ -116,6 +116,7 @@ def clear_thread_messages(thread_id: str) -> int:
         cursor.execute("DELETE FROM chat_messages WHERE thread_id = ?", (thread_id,))
         deleted = int(cursor.rowcount or 0)
     clear_session_memory_for_thread(thread_id)
+    clear_turn_entities_for_thread(thread_id)
     return deleted
 
 

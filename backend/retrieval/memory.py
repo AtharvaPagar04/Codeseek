@@ -11,8 +11,12 @@ from retrieval.chat_store import (
 from retrieval.memory_store import (
     get_session_memory,
     get_thread_memory,
+    list_session_turn_entities,
+    list_turn_entities,
     save_session_memory,
+    save_session_turn_entities,
     save_thread_memory,
+    save_turn_entities,
 )
 
 _enc = tiktoken.get_encoding("cl100k_base")
@@ -85,13 +89,28 @@ def _cap_history_block(full_block: str, max_tokens: int) -> str:
 
 
 class ConversationMemory:
-    """Store bounded query/answer turns for prompt continuity."""
+    """Store bounded query/answer turns for prompt continuity.
+
+    Extended in WS7 to also hold per-turn cited-entity sets so the follow-up
+    resolver can access recent files, symbols, routes, env_keys, and services
+    without a DB round-trip.
+    """
 
     def __init__(self, max_turns: int):
         self.max_turns = max_turns
         self.turns: list[dict[str, str]] = []
+        # WS7: parallel list of entity dicts, one per turn.
+        self._turn_entities: list[dict] = []
 
-    def add(self, query: str, answer: str, resolved_query: str | None = None) -> None:
+    def add(
+        self,
+        query: str,
+        answer: str,
+        resolved_query: str | None = None,
+        *,
+        entities: dict | None = None,
+        primary_intent: str = "",  # accepted but unused in in-process memory
+    ) -> None:
         self.turns.append(
             {
                 "query": query,
@@ -99,8 +118,20 @@ class ConversationMemory:
                 "resolved_query": resolved_query or query,
             }
         )
+        self._turn_entities.append(entities or {})
         if len(self.turns) > self.max_turns:
             self.turns.pop(0)
+            self._turn_entities.pop(0)
+
+    def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
+        """Return the last *max_turns* per-turn entity dicts, oldest first.
+
+        Each entry is a dict with keys: entities (dict with files/symbols/etc.).
+        """
+        return [
+            {"entities": e}
+            for e in self._turn_entities[-max_turns:]
+        ]
 
     def latest_query(self) -> str:
         if not self.turns:
@@ -138,7 +169,19 @@ class SessionConversationMemory:
     def turns(self) -> list[dict[str, str]]:
         return list_session_turns(self.session_id)
 
-    def add(self, query: str, answer: str, resolved_query: str | None = None) -> None:
+    def add(
+        self,
+        query: str,
+        answer: str,
+        resolved_query: str | None = None,
+        *,
+        entities: dict | None = None,
+        primary_intent: str = "",
+    ) -> None:
+        # Derive turn_index from existing entity rows so it is always monotonically
+        # increasing regardless of whether chat_messages is written by the caller.
+        existing_entity_count = len(list_session_turn_entities(self.session_id, max_turns=10000))
+        turn_index = existing_entity_count
         turns = self.turns + [
             {
                 "query": query,
@@ -155,6 +198,15 @@ class SessionConversationMemory:
             rolling_summary=rolling_summary,
             last_resolved_query=(resolved_query or query).strip(),
         )
+        # WS7: persist per-turn entity set.
+        save_session_turn_entities(
+            self.session_id,
+            turn_index,
+            primary_intent=primary_intent,
+            original_query=query,
+            resolved_query=(resolved_query or query),
+            entities=entities or {},
+        )
 
     def latest_query(self) -> str:
         messages = list_session_messages(self.session_id)
@@ -168,6 +220,10 @@ class SessionConversationMemory:
         if state["last_resolved_query"]:
             return state["last_resolved_query"]
         return self.latest_query()
+
+    def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
+        """Return last *max_turns* per-turn entity rows for this session."""
+        return list_session_turn_entities(self.session_id, max_turns=max_turns)
 
     def get_history_block(self) -> str:
         state = get_session_memory(self.session_id)
@@ -205,7 +261,19 @@ class ThreadConversationMemory:
     def turns(self) -> list[dict[str, str]]:
         return list_thread_turns(self.thread_id)
 
-    def add(self, query: str, answer: str, resolved_query: str | None = None) -> None:
+    def add(
+        self,
+        query: str,
+        answer: str,
+        resolved_query: str | None = None,
+        *,
+        entities: dict | None = None,
+        primary_intent: str = "",
+    ) -> None:
+        # Derive turn_index from existing entity rows so it is always monotonically
+        # increasing regardless of whether chat_messages is written by the caller.
+        existing_entity_count = len(list_turn_entities(self.thread_id, max_turns=10000))
+        turn_index = existing_entity_count
         turns = self.turns + [
             {
                 "query": query,
@@ -222,6 +290,15 @@ class ThreadConversationMemory:
             rolling_summary=rolling_summary,
             last_resolved_query=(resolved_query or query).strip(),
         )
+        # WS7: persist per-turn entity set.
+        save_turn_entities(
+            self.thread_id,
+            turn_index,
+            primary_intent=primary_intent,
+            original_query=query,
+            resolved_query=(resolved_query or query),
+            entities=entities or {},
+        )
 
     def latest_query(self) -> str:
         messages = list_thread_messages(self.thread_id)
@@ -235,6 +312,10 @@ class ThreadConversationMemory:
         if state["last_resolved_query"]:
             return state["last_resolved_query"]
         return self.latest_query()
+
+    def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
+        """Return last *max_turns* per-turn entity rows for this thread."""
+        return list_turn_entities(self.thread_id, max_turns=max_turns)
 
     def get_history_block(self) -> str:
         state = get_thread_memory(self.thread_id)

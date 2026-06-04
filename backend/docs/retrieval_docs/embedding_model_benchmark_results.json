@@ -1,0 +1,109 @@
+{
+  "current_model": "BAAI/bge-small-en-v1.5",
+  "current_dim": 384,
+  "alternative_model": "BAAI/bge-base-en-v1.5",
+  "alternative_dim": 768,
+  "dim_mismatch": true,
+  "dim_mismatch_note": "Alternative requires full re-ingestion (384\u2192768 dims). Recall comparison not valid without re-ingesting the collection.",
+  "k": 10,
+  "total_cases": 6,
+  "current_baseline": {
+    "hit_at_k": 1.0,
+    "mrr_at_k": 0.7556
+  },
+  "alternative_recall": null,
+  "mteb_scores": {
+    "current": 62.17,
+    "alternative": 63.55,
+    "delta": 1.38
+  },
+  "model_characteristics": {
+    "current": {
+      "encode_ms_per_query": 22.55,
+      "memory_peak_mb": 6.7
+    },
+    "alternative": {
+      "encode_ms_per_query": 7.72,
+      "memory_peak_mb": 8.0,
+      "re_ingestion_required": true,
+      "chunks_to_re_embed": 1212
+    }
+  },
+  "verdict": "KEEP CURRENT \u2014 re-ingestion required to compare recall",
+  "per_fixture": {
+    "eval_codeseek_flow_phase1": {
+      "current_hit_at_k": 1.0,
+      "current_mrr_at_k": 0.7556,
+      "alternative_hit_at_k": null,
+      "alternative_mrr_at_k": null
+    }
+  },
+  "per_case": [
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-001",
+      "query": "walk me through backend request orchestration flow",
+      "current_hit": 1,
+      "current_mrr": 0.3333333333333333,
+      "current_search_ms": 4943.1,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    },
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-002",
+      "query": "explain the auth session lifecycle flow",
+      "current_hit": 1,
+      "current_mrr": 1.0,
+      "current_search_ms": 231.8,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    },
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-002b",
+      "query": "how does authentication cookie lifecycle work",
+      "current_hit": 1,
+      "current_mrr": 1.0,
+      "current_search_ms": 197.3,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    },
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-003",
+      "query": "trace the indexing session creation flow",
+      "current_hit": 1,
+      "current_mrr": 1.0,
+      "current_search_ms": 158.6,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    },
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-004",
+      "query": "how does deployment configuration work",
+      "current_hit": 1,
+      "current_mrr": 0.2,
+      "current_search_ms": 86.6,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    },
+    {
+      "fixture": "docs/retrieval_docs/eval_codeseek_flow_phase1.json",
+      "id": "cs-flow-005",
+      "query": "explain provider credential lifecycle",
+      "current_hit": 1,
+      "current_mrr": 1.0,
+      "current_search_ms": 226.8,
+      "alternative_hit": null,
+      "alternative_mrr": null,
+      "dim_mismatch": true
+    }
+  ]
+}

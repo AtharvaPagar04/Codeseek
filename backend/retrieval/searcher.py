@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 import re
@@ -36,6 +37,8 @@ _model_unavailable = False
 _qdrant_failures = 0
 _qdrant_circuit_open_until = 0.0
 _lexical_indexes: dict[str, "_LexicalIndex"] = {}
+IMPORT_TRACE_DEPTH_LIMIT = 3
+TRACE_EXPANDED_CHUNKS_LIMIT = 6
 
 
 @dataclass
@@ -102,6 +105,7 @@ def search(query_info: dict) -> list[dict]:
     """Run dense + metadata + dependency searches and merge results."""
     raw_query = query_info["raw_query"]
     intent = query_info["intent"]
+    primary_intent = query_info.get("primary_intent", intent)
     entities = query_info["entities"]
 
     dense_results = _dense_search(raw_query)
@@ -111,7 +115,10 @@ def search(query_info: dict) -> list[dict]:
     dependency_results = _dependency_search(entities) if intent == "DEPENDENCY" else []
 
     merged = _merge_results(dense_results, lexical_results, filter_results, exact_entity_results, dependency_results)
-    if _is_overview_query(raw_query):
+    # Inject repo-summary and structured overview evidence for any query whose
+    # primary intent is broad/structural.  The phrase-based gate is kept as a
+    # fast-path fallback for cases where intent scoring disagrees.
+    if _is_overview_intent(primary_intent) or _is_overview_query(raw_query):
         merged = _inject_overview_candidates(merged)
     merged = _inject_import_backing_candidates(raw_query, merged)
     merged = _rerank_with_query_tokens(raw_query, merged)
@@ -404,7 +411,11 @@ def _dependency_search(entities: dict):
         if response is None:
             continue
         hits, _ = response
-        results.extend((hit.payload or {}, 0.0, "calls") for hit in hits)
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            payload["expansion_type"] = "callee"
+            payload["support_kind"] = "dependency_edge"
+            results.append((payload, 0.0, "calls"))
     return results
 
 
@@ -712,7 +723,10 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
 
     backing_hits: list[dict] = []
     seen = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
+    visited_edges: set[tuple[str, str, str]] = set()
     for candidate in candidates[: min(len(candidates), 6)]:
+        if len(backing_hits) >= TRACE_EXPANDED_CHUNKS_LIMIT:
+            break
         relative_path = str(candidate.get("relative_path", "")).strip()
         imports = list(candidate.get("imports") or [])
         if not relative_path or not imports:
@@ -725,13 +739,26 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
                 resolved = _resolve_import_relative_path(relative_path, module_path)
                 if not resolved:
                     continue
+                edge = (relative_path, resolved, imported_name)
+                if edge in visited_edges:
+                    continue
+                visited_edges.add(edge)
                 payloads = _fetch_import_symbol_chunks(resolved, imported_name)
                 for payload in payloads:
+                    if len(backing_hits) >= TRACE_EXPANDED_CHUNKS_LIMIT:
+                        break
                     chunk_id = str(payload.get("chunk_id", "")).strip()
                     if not chunk_id or chunk_id in seen:
                         continue
-                    backing_hits.append(payload)
+                    backing_payload = dict(payload)
+                    backing_payload["expansion_type"] = "supporting_import"
+                    backing_payload["support_kind"] = "import_backing"
+                    backing_payload["supporting_from"] = relative_path
+                    backing_payload["supporting_import_name"] = imported_name
+                    backing_hits.append(backing_payload)
                     seen.add(chunk_id)
+                if len(backing_hits) >= TRACE_EXPANDED_CHUNKS_LIMIT:
+                    break
     return candidates + backing_hits
 
 
@@ -763,34 +790,84 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[di
 
 
 def _inject_overview_candidates(candidates: list[dict]) -> list[dict]:
+    """Merge repo-summary and structured overview chunks into the candidate list.
+
+    High-priority overview chunks (repo_summary first, then README/manifests)
+    are PREPENDED so they survive the TOP_K_AFTER_MERGE cutoff at the end of
+    search(). Each injected chunk is assigned a baseline retrieval_score so
+    _rerank_with_query_tokens does not push them below scored dense hits.
+    """
     overview_hits = _repository_overview_candidates()
     if not overview_hits:
         return candidates
 
-    seen = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
-    merged = list(candidates)
+    existing_ids = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
+
+    to_prepend: list[dict] = []
     for payload in overview_hits:
         chunk_id = str(payload.get("chunk_id", "")).strip()
-        if not chunk_id or chunk_id in seen:
+        if not chunk_id or chunk_id in existing_ids:
             continue
-        merged.append(payload)
-        seen.add(chunk_id)
-    return merged
+        injected = dict(payload)
+        # Assign a synthetic retrieval_score so _rerank_with_query_tokens keeps
+        # these items near the top.  repo_summary (priority=100) → 1.0;
+        # other scored overview files get a proportional value.
+        priority = _overview_priority(injected)
+        injected.setdefault("retrieval_score", min(1.0, priority / 100.0))
+        injected.setdefault("fusion_score", 0.0)
+        # Mark as exact_retrieval_hit so the reranker always places overview
+        # chunks above generic dense results (the reranker's primary sort key).
+        injected["exact_retrieval_hit"] = True
+        to_prepend.append(injected)
+        existing_ids.add(chunk_id)
+
+    return to_prepend + list(candidates)
 
 
 def _repository_overview_candidates() -> list[dict]:
+    """Fetch the repo-summary chunk (targeted) plus high-priority structured
+    overview chunks (README, manifests, config files).
+
+    Previously this scrolled only the first 400 Qdrant records (by UUID order),
+    which missed the repo_summary chunk when the collection had >400 points.
+    Now the repo_summary is fetched via a targeted chunk_type filter scroll,
+    and the rest are fetched in a bounded secondary pass.
+    """
     client = _get_client()
     collection = get_collection_name()
+
+    # --- Step 1: targeted fetch of the repo_summary chunk (always 1 per repo)
+    try:
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        repo_summary_response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(must=[
+                FieldCondition(key="chunk_type", match=MatchValue(value="repo_summary"))
+            ]),
+            limit=3,
+            with_payload=True,
+        ))
+    except Exception:
+        repo_summary_response = None
+
+    repo_summary_payloads: list[dict] = []
+    if repo_summary_response is not None:
+        rs_hits, _ = repo_summary_response
+        repo_summary_payloads = [h.payload or {} for h in rs_hits if h.payload]
+
+    # --- Step 2: scroll first 400 chunks for other high-priority overview files
     response = _qdrant_call(lambda: client.scroll(
         collection_name=collection,
         limit=400,
         with_payload=True,
     ))
     if response is None:
-        return []
+        # Fall back to repo_summary only if available
+        return [p for p in repo_summary_payloads if p.get("chunk_id")]
+
     hits, _ = response
     payloads = [hit.payload or {} for hit in hits]
-    payloads = [payload for payload in payloads if payload.get("chunk_id")]
+    payloads = [p for p in payloads if p.get("chunk_id") and p.get("chunk_type") != "repo_summary"]
     payloads.sort(
         key=lambda item: (
             -_overview_priority(item),
@@ -799,8 +876,15 @@ def _repository_overview_candidates() -> list[dict]:
         )
     )
 
-    chosen = []
-    seen_files = set()
+    chosen: list[dict] = []
+    seen_files: set[str] = set()
+
+    # Repo_summary always goes first (priority=100, handled separately)
+    for rs_payload in repo_summary_payloads:
+        if rs_payload.get("chunk_id"):
+            chosen.append(rs_payload)
+            seen_files.add("__repo_summary__.md")
+
     for payload in payloads:
         score = _overview_priority(payload)
         if score <= 0:
@@ -853,17 +937,65 @@ def _identifier_token_overlap(identifier: str, tokens: set[str]) -> int:
 
 
 def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
+    names: list[tuple[str, str]] = []
+
+    # ES6/TS named imports: import { X, Y as Z } from 'module'
     match = re.search(r'import\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', statement)
-    if not match:
-        return []
-    names = []
-    for part in match.group(1).split(","):
+    if match:
+        for part in match.group(1).split(","):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            imported_name = cleaned.split(" as ", 1)[0].strip()
+            if imported_name:
+                names.append((imported_name, match.group(2).strip()))
+        return names
+
+    # ES6/TS mixed default + named imports: import Foo, { bar } from './mod'
+    mixed_match = re.search(
+        r'import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if mixed_match:
+        names.append((mixed_match.group(1).strip(), mixed_match.group(3).strip()))
+        for part in mixed_match.group(2).split(","):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            imported_name = cleaned.split(" as ", 1)[0].strip()
+            if imported_name:
+                names.append((imported_name, mixed_match.group(3).strip()))
+        return names
+
+    # ES6/TS namespace imports: import * as api from './api'
+    ns_match = re.search(
+        r'import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if ns_match:
+        return [(ns_match.group(1).strip(), ns_match.group(2).strip())]
+
+    # ES6/TS default import: import Foo from './foo'
+    default_match = re.search(
+        r'import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if default_match:
+        return [(default_match.group(1).strip(), default_match.group(2).strip())]
+
+    py_match = re.match(r"^from\s+([.\w]+)\s+import\s+(.+)$", statement.strip())
+    if not py_match:
+        return names
+
+    module_path = py_match.group(1).strip()
+    imports_part = py_match.group(2).strip().strip("()")
+    for part in imports_part.split(","):
         cleaned = part.strip()
-        if not cleaned:
+        if not cleaned or cleaned == "*":
             continue
         imported_name = cleaned.split(" as ", 1)[0].strip()
-        if imported_name:
-            names.append((imported_name, match.group(2).strip()))
+        if imported_name and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", imported_name):
+            names.append((imported_name, module_path))
     return names
 
 
@@ -875,19 +1007,31 @@ def _resolve_import_relative_path(source_relative_path: str, module_path: str) -
         base = repo_root / "src" / module_path[2:]
     elif module_path.startswith("./") or module_path.startswith("../"):
         base = (source_path.parent / module_path).resolve()
+    elif module_path.startswith("."):
+        dot_count = len(module_path) - len(module_path.lstrip("."))
+        remainder = module_path[dot_count:]
+        package_root = source_path.parent
+        for _ in range(max(0, dot_count - 1)):
+            package_root = package_root.parent
+        base = package_root / remainder.replace(".", "/") if remainder else package_root
+    elif re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", module_path):
+        base = repo_root / module_path.replace(".", "/")
     else:
         return None
 
     candidates = [
-        base,
         base.with_suffix(".ts"),
         base.with_suffix(".tsx"),
         base.with_suffix(".js"),
         base.with_suffix(".jsx"),
+        base.with_suffix(".py"),
+        base.with_suffix(".json"),
         base / "index.ts",
         base / "index.tsx",
         base / "index.js",
         base / "index.jsx",
+        base / "__init__.py",
+        base,
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -898,7 +1042,19 @@ def _resolve_import_relative_path(source_relative_path: str, module_path: str) -
     return None
 
 
-def _fetch_import_symbol_chunks(relative_path: str, symbol_name: str) -> list[dict]:
+def _fetch_import_symbol_chunks(
+    relative_path: str,
+    symbol_name: str,
+    *,
+    _visited: set[tuple[str, str]] | None = None,
+    _depth: int = 0,
+) -> list[dict]:
+    visited = _visited or set()
+    key = (relative_path, symbol_name)
+    if key in visited or _depth >= IMPORT_TRACE_DEPTH_LIMIT:
+        return []
+    visited.add(key)
+
     client = _get_client()
     collection = get_collection_name()
     response = _qdrant_call(lambda: client.scroll(
@@ -915,7 +1071,103 @@ def _fetch_import_symbol_chunks(relative_path: str, symbol_name: str) -> list[di
     if response is None:
         return []
     hits, _ = response
-    return [hit.payload or {} for hit in hits]
+    payloads = [hit.payload or {} for hit in hits]
+    if payloads:
+        return payloads
+
+    repo_root = Path(get_repo_root())
+    source_path = repo_root / relative_path
+    if source_path.suffix.lower() == ".json":
+        payload = _build_imported_json_payload(source_path, relative_path, symbol_name)
+        return [payload] if payload else []
+
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    for target_symbol, target_module in _parse_re_exports(lines, symbol_name):
+        resolved = _resolve_import_relative_path(relative_path, target_module)
+        if not resolved:
+            continue
+        nested = _fetch_import_symbol_chunks(
+            resolved,
+            target_symbol,
+            _visited=visited,
+            _depth=_depth + 1,
+        )
+        if nested:
+            return nested
+    return []
+
+
+def _parse_re_exports(lines: list[str], identifier: str) -> list[tuple[str, str]]:
+    matches: list[tuple[str, str]] = []
+    target = identifier.strip()
+    if not target:
+        return matches
+
+    for line in lines:
+        stripped = line.strip().rstrip(";")
+
+        named = re.match(r'export\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', stripped)
+        if named:
+            module_path = named.group(2).strip()
+            for part in named.group(1).split(","):
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                if " as " in cleaned:
+                    source_name, exported_name = [item.strip() for item in cleaned.split(" as ", 1)]
+                else:
+                    source_name = exported_name = cleaned
+                if exported_name == target:
+                    matches.append(((target if source_name == "default" else source_name), module_path))
+
+        wildcard = re.match(r'export\s+\*\s+from\s+["\']([^"\']+)["\']', stripped)
+        if wildcard:
+            matches.append((target, wildcard.group(1).strip()))
+
+    return matches
+
+
+def _build_imported_json_payload(path: Path, relative_path: str, imported_name: str) -> dict | None:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    excerpt = raw.strip()
+    if not excerpt:
+        return None
+    preview_lines = excerpt.splitlines()
+    trimmed = "\n".join(preview_lines[:40]).rstrip()
+    if len(preview_lines) > 40:
+        trimmed += "\n..."
+
+    summary = f"Imported JSON data from {relative_path}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        keys = [str(key) for key in list(parsed)[:6]]
+        if keys:
+            summary += f" with keys: {', '.join(keys)}"
+    elif isinstance(parsed, list):
+        summary += f" with {len(parsed)} top-level items"
+
+    return {
+        "chunk_id": f"imported-json::{relative_path}::{imported_name}",
+        "relative_path": relative_path,
+        "symbol_name": imported_name,
+        "start_line": 1,
+        "end_line": min(len(preview_lines), 40),
+        "chunk_type": "file_summary",
+        "file_type": "json",
+        "summary": summary,
+        "content": trimmed,
+        "source": trimmed,
+    }
 
 
 def _overlap_score(tokens: set[str], item: dict) -> int:
@@ -995,6 +1247,15 @@ def _overview_priority(payload: dict) -> int:
     return score
 
 
+# Intents that should always receive repo-summary + structured overview evidence.
+_OVERVIEW_INTENTS: frozenset[str] = frozenset({"OVERVIEW", "TECH_STACK", "ARCHITECTURE"})
+
+
+def _is_overview_intent(primary_intent: str) -> bool:
+    """Return True for intents that always warrant repo-summary injection."""
+    return primary_intent in _OVERVIEW_INTENTS
+
+
 def _is_overview_query(raw_query: str) -> bool:
     q = raw_query.lower()
     return any(
@@ -1004,9 +1265,22 @@ def _is_overview_query(raw_query: str) -> bool:
             "whats this project about",
             "project overview",
             "overview of the project",
+            "overview of this",
             "what does this project do",
             "what does this app do",
+            "what does this codebase do",
+            "what does this repo do",
+            "give me an overview",
+            "repo overview",
             "tech stack",
+            "what framework",
+            "what frameworks",
+            "what stack",
+            "which framework",
+            "what dependencies",
+            "main dependencies",
+            "what services",
+            "which services",
             "architecture overview",
             "architecture",
             "stack used",

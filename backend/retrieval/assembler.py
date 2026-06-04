@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+import re
 
 import tiktoken
 
@@ -101,6 +102,8 @@ def assemble_for_reasoning(
     reasoning_chunks: list[dict],
     history_block: str,
     primary_intent: str | None = None,
+    raw_query: str = "",
+    query_entities: dict | None = None,
 ) -> tuple[str, list[dict], int]:
     """Assemble LLM context from the broader reasoning_sources set.
 
@@ -117,11 +120,11 @@ def assemble_for_reasoning(
     budget_ceiling = intent_context_budget(primary_intent)
     ranked = sorted(
         reasoning_chunks,
-        key=lambda c: (
-            _tier(c.get("expansion_type", "primary")),
-            -float(c.get("retrieval_score", 0.0)),
-            c.get("relative_path", ""),
-            int(c.get("start_line", 0)),
+        key=lambda c: _reasoning_sort_key(
+            c,
+            primary_intent=primary_intent,
+            raw_query=raw_query,
+            query_entities=query_entities,
         ),
     )
 
@@ -161,8 +164,65 @@ def assemble_for_reasoning(
 
 
 def _tier(expansion_type: str) -> int:
-    order = {"primary": 0, "split_part": 1, "parent_class": 2, "callee": 3}
+    order = {"primary": 0, "split_part": 1, "sibling": 2, "parent_class": 3, "callee": 4}
     return order.get(expansion_type, 9)
+
+
+def _reasoning_sort_key(
+    chunk: dict,
+    *,
+    primary_intent: str | None,
+    raw_query: str,
+    query_entities: dict | None,
+) -> tuple:
+    """Prioritize concise, query-aligned chunks for code/explanation-heavy LLM paths."""
+    tier = _tier(chunk.get("expansion_type", "primary"))
+    retrieval_score = -float(chunk.get("retrieval_score", 0.0))
+    path = chunk.get("relative_path", "")
+    start_line = int(chunk.get("start_line", 0))
+
+    intent = (primary_intent or "").upper()
+    if intent not in {"CODE_REQUEST", "EXPLANATION", "SYMBOL", "TRACE", "FOLLOWUP"}:
+        return (tier, retrieval_score, path, start_line)
+
+    overlap = _reasoning_overlap_score(chunk, raw_query, query_entities)
+    snippet_penalty = _snippet_size_penalty(chunk)
+    return (tier, -overlap, snippet_penalty, retrieval_score, path, start_line)
+
+
+def _reasoning_overlap_score(chunk: dict, raw_query: str, query_entities: dict | None) -> int:
+    symbol = str(chunk.get("symbol_name", "")).lower()
+    path = str(chunk.get("relative_path", "")).lower()
+
+    tokens = set(re.findall(r"[a-z_][a-z0-9_]*", raw_query.lower()))
+    overlap = sum(1 for token in tokens if len(token) > 2 and (token in symbol or token in path))
+
+    if symbol and symbol in raw_query.lower():
+        overlap += 4
+
+    entities = query_entities or {}
+    for value in entities.get("symbols", []) or []:
+        token = str(value).strip().lower()
+        if token and token == symbol:
+            overlap += 5
+        elif token and token in symbol:
+            overlap += 3
+
+    for value in entities.get("files", []) or []:
+        token = str(value).strip().lower()
+        if token and (token == path or path.endswith(token)):
+            overlap += 4
+
+    return overlap
+
+
+def _snippet_size_penalty(chunk: dict) -> int:
+    line_span = max(1, int(chunk.get("end_line", 0)) - int(chunk.get("start_line", 0)) + 1)
+    if 3 <= line_span <= 40:
+        return 0
+    if line_span <= 80:
+        return 1
+    return 2
 
 
 def _read_chunk_content(chunk: dict) -> str | None:

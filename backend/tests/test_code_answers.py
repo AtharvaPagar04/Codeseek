@@ -70,7 +70,7 @@ class CodeAnswerTests(unittest.TestCase):
             history_block="",
             allowed_sources=[],
         )
-        self.assertIn("--- RESPONSE MODE ---", prompt)
+        self.assertIn("--- RESPONSE MODE: CODE REQUEST ---", prompt)
         self.assertIn("The user explicitly asked for code.", prompt)
 
     def test_prompt_includes_explanation_mode_when_requested(self) -> None:
@@ -80,7 +80,7 @@ class CodeAnswerTests(unittest.TestCase):
             history_block="",
             allowed_sources=[],
         )
-        self.assertIn("--- RESPONSE MODE ---", prompt)
+        self.assertIn("--- RESPONSE MODE: EXPLANATION ---", prompt)
         self.assertIn("The user asked for an explanation, not a raw code dump.", prompt)
 
     def test_prompt_includes_overview_mode_when_requested(self) -> None:
@@ -90,7 +90,7 @@ class CodeAnswerTests(unittest.TestCase):
             history_block="",
             allowed_sources=[],
         )
-        self.assertIn("--- RESPONSE MODE ---", prompt)
+        self.assertIn("--- RESPONSE MODE: OVERVIEW ---", prompt)
         self.assertIn("The user wants a grounded project overview.", prompt)
 
     def test_build_code_answer_includes_component_and_supporting_data(self) -> None:
@@ -617,6 +617,172 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertIn("**Credential storage** - `create_provider_credential()` encrypts the API key", answer)
         self.assertIn("**Query-time lookup** - Query execution requires an active provider credential", answer)
 
+    def test_build_flow_answer_adds_explicit_provider_credential_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval" / "api_service.py").write_text(
+                textwrap.dedent(
+                    """
+                    @v1.post("/provider-credentials")
+                    def create_provider_credential_v1():
+                        record = create_provider_credential("user", "openai", "main", "secret")
+                        return {"provider_credential": record}
+
+                    @v1.post("/provider-credentials/{credential_id}/activate")
+                    def activate_provider_credential_v1(credential_id: str):
+                        return set_active_provider_credential("user", credential_id)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo_root / "retrieval" / "provider_store.py").write_text(
+                textwrap.dedent(
+                    """
+                    def create_provider_credential():
+                        cursor.execute(
+                            "INSERT INTO user_provider_credentials (id, user_id) VALUES (?, ?)",
+                            ("1", "u"),
+                        )
+
+                    def set_active_provider_credential():
+                        cursor.execute(
+                            "UPDATE user_provider_credentials SET is_active = 1 WHERE id = ?",
+                            ("1",),
+                        )
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            sources = [
+                {
+                    "relative_path": "retrieval/api_service.py",
+                    "symbol_name": "create_provider_credential_v1",
+                    "start_line": 2,
+                    "end_line": 4,
+                    "summary": "Function: create_provider_credential_v1",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/api_service.py",
+                    "symbol_name": "activate_provider_credential_v1",
+                    "start_line": 7,
+                    "end_line": 8,
+                    "summary": "Function: activate_provider_credential_v1",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/provider_store.py",
+                    "symbol_name": "create_provider_credential",
+                    "start_line": 1,
+                    "end_line": 5,
+                    "summary": "Function: create_provider_credential",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/provider_store.py",
+                    "symbol_name": "set_active_provider_credential",
+                    "start_line": 7,
+                    "end_line": 11,
+                    "summary": "Function: set_active_provider_credential",
+                    "expansion_type": "primary",
+                },
+            ]
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                answer = build_flow_answer("explain provider credential lifecycle", sources, sources)
+
+        self.assertIn("Explicit trace:", answer)
+        self.assertIn("POST `/provider-credentials` routes into `create_provider_credential_v1()`", answer)
+        self.assertIn("`user_provider_credentials`", answer)
+        self.assertIn("activate_provider_credential_v1()", answer)
+
+    def test_build_flow_answer_adds_explicit_auth_session_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval" / "api_service.py").write_text(
+                textwrap.dedent(
+                    """
+                    def auth_github_token():
+                        token, session = create_auth_session("user-1")
+                        return {"ok": True}
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo_root / "retrieval" / "auth_store.py").write_text(
+                textwrap.dedent(
+                    """
+                    def create_auth_session():
+                        cursor.execute(
+                            "INSERT INTO auth_sessions (id, user_id) VALUES (?, ?)",
+                            ("1", "u"),
+                        )
+
+                    def get_user_for_session_token():
+                        row = cursor.execute(
+                            "SELECT u.id FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.session_token_hash = ?",
+                            ("hash",),
+                        )
+                        cursor.execute("UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?", ("now", "1"))
+                        return row
+
+                    def delete_auth_session():
+                        cursor.execute("DELETE FROM auth_sessions WHERE session_token_hash = ?", ("hash",))
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            sources = [
+                {
+                    "relative_path": "retrieval/api_service.py",
+                    "symbol_name": "auth_github_token",
+                    "start_line": 1,
+                    "end_line": 3,
+                    "summary": "Function: auth_github_token",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/auth_store.py",
+                    "symbol_name": "create_auth_session",
+                    "start_line": 1,
+                    "end_line": 5,
+                    "summary": "Function: create_auth_session",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/auth_store.py",
+                    "symbol_name": "get_user_for_session_token",
+                    "start_line": 7,
+                    "end_line": 12,
+                    "summary": "Function: get_user_for_session_token",
+                    "expansion_type": "primary",
+                },
+                {
+                    "relative_path": "retrieval/auth_store.py",
+                    "symbol_name": "delete_auth_session",
+                    "start_line": 14,
+                    "end_line": 15,
+                    "summary": "Function: delete_auth_session",
+                    "expansion_type": "primary",
+                },
+            ]
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                answer = build_flow_answer("explain the auth session lifecycle", sources, sources)
+
+        self.assertIn("Explicit trace:", answer)
+        self.assertIn("calls `create_auth_session()` to insert `auth_sessions`", answer)
+        self.assertIn("joins `auth_sessions` and `users`", answer)
+        self.assertIn("delete_auth_session()", answer)
+
     def test_build_explanation_answer_mentions_rendering_and_backing_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
@@ -761,6 +927,104 @@ class CodeAnswerTests(unittest.TestCase):
             self.assertEqual(len(supports), 2)
             self.assertEqual({item["symbol_name"] for item in supports}, {"personal", "projects"})
 
+    def test_supporting_import_export_reuses_retrieved_support_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src/components").mkdir(parents=True)
+            (repo_root / "src/components/Skills.tsx").write_text(
+                'import { skillCategories } from "@/lib/data";\nexport default function Skills() { return null; }\n',
+                encoding="utf-8",
+            )
+
+            source = {
+                "relative_path": "src/components/Skills.tsx",
+                "symbol_name": "Skills",
+                "start_line": 2,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["imports"] = ['import { skillCategories } from "@/lib/data";']
+            retrieved_support = {
+                "chunk_id": "support-1",
+                "relative_path": "src/lib/data.ts",
+                "symbol_name": "skillCategories",
+                "start_line": 1,
+                "end_line": 3,
+                "expansion_type": "supporting_import",
+                "support_kind": "import_backing",
+                "supporting_from": "src/components/Skills.tsx",
+                "formatted": "src/lib/data.ts :: skillCategories (lines 1-3)\n```ts\nexport const skillCategories = [];\n```",
+            }
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                support = find_supporting_import_export(
+                    "give me a detailed explanation of the skills section",
+                    [source],
+                    [chunk, retrieved_support],
+                )
+
+            assert support is not None
+            self.assertEqual(support["relative_path"], "src/lib/data.ts")
+            self.assertEqual(support["symbol_name"], "skillCategories")
+            self.assertIn("export const skillCategories", support["formatted"])
+
+    def test_supporting_import_export_reuses_retrieved_callee_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval" / "auth.py").write_text(
+                textwrap.dedent(
+                    """
+                    def check_auth(token):
+                        return validate_token(token)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo_root / "retrieval" / "token_store.py").write_text(
+                textwrap.dedent(
+                    """
+                    def validate_token(token: str) -> bool:
+                        return bool(token)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            source = {
+                "relative_path": "retrieval/auth.py",
+                "symbol_name": "check_auth",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "primary",
+            }
+            chunk = dict(source)
+            chunk["calls"] = ["validate_token"]
+            retrieved_callee = {
+                "chunk_id": "callee-1",
+                "relative_path": "retrieval/token_store.py",
+                "symbol_name": "validate_token",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "callee",
+                "support_kind": "dependency_edge",
+            }
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                support = find_supporting_import_export(
+                    "how does check_auth work",
+                    [source],
+                    [chunk, retrieved_callee],
+                )
+
+            assert support is not None
+            self.assertEqual(support["relative_path"], "retrieval/token_store.py")
+            self.assertEqual(support["symbol_name"], "validate_token")
+            self.assertIn("validate_token", support["formatted"])
+
     def test_run_query_bypasses_llm_for_code_requests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
@@ -865,6 +1129,75 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(sources, [source])
         self.assertEqual(token_count, 12)
         generate_answer.assert_not_called()
+
+    def test_run_query_does_not_cite_reasoning_only_sources(self) -> None:
+        display_source = {
+            "relative_path": "retrieval/api_service.py",
+            "symbol_name": "_query_impl",
+            "start_line": 1,
+            "end_line": 10,
+            "expansion_type": "primary",
+        }
+        reasoning_only_source = {
+            "relative_path": "retrieval/thread_store.py",
+            "symbol_name": "ensure_default_thread",
+            "start_line": 20,
+            "end_line": 40,
+            "expansion_type": "callee",
+        }
+        chunk = dict(display_source)
+        chunk["chunk_id"] = "llm-1"
+        chunk["retrieval_score"] = 1.0
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval/api_service.py").write_text("def _query_impl():\n    pass\n", encoding="utf-8")
+            (repo_root / "retrieval/thread_store.py").write_text("def ensure_default_thread():\n    pass\n", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": str(repo_root),
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={
+                    "raw_query": "how is request execution handled",
+                    "intent": "SEMANTIC",
+                    "primary_intent": "SEMANTIC",
+                    "entities": {},
+                },
+            ), patch(
+                "retrieval.main.search", return_value=[chunk]
+            ), patch(
+                "retrieval.main.expand", return_value=[chunk]
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", [display_source, reasoning_only_source], 12)
+            ), patch(
+                "retrieval.main.split_sources_two_layer",
+                return_value=([display_source], [display_source, reasoning_only_source]),
+            ), patch(
+                "retrieval.main.assemble_for_reasoning",
+                return_value=("reasoning-context", [display_source, reasoning_only_source], 24),
+            ), patch(
+                "retrieval.main.score_evidence_confidence",
+                return_value={"level": "strong", "reason": "ok", "count": 1},
+            ), patch(
+                "retrieval.main.find_supporting_import_exports", return_value=[]
+            ), patch(
+                "retrieval.main.generate_answer", return_value="answer"
+            ) as generate_answer:
+                answer, sources, token_count = run_query("how is request execution handled", memory)
+
+        self.assertEqual(answer, "answer")
+        self.assertEqual(sources, [display_source])
+        self.assertEqual(token_count, 24)
+        self.assertEqual(generate_answer.call_args.kwargs["allowed_sources"], [display_source])
 
     def test_run_query_bypasses_llm_for_architecture_requests(self) -> None:
         source = {

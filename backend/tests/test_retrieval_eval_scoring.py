@@ -82,6 +82,15 @@ class RetrievalEvalScoringTests(unittest.TestCase):
         self.assertEqual(retrieval_eval._hit_at_k(candidates, [], ["retrieval/config.py"], [], 10), 1)
         self.assertEqual(retrieval_eval._mrr_at_k(candidates, [], ["retrieval/config.py"], [], 10), 0.5)
 
+    def test_latency_profile_defaults_from_response_mode(self) -> None:
+        self.assertEqual(retrieval_eval._latency_profile_for_case({}, ""), "retrieval_only")
+        self.assertEqual(retrieval_eval._latency_profile_for_case({}, "flow_summary"), "deterministic")
+        self.assertEqual(retrieval_eval._latency_profile_for_case({}, "llm"), "llm")
+        self.assertEqual(
+            retrieval_eval._latency_profile_for_case({"latency_profile": "llm"}, "flow_summary"),
+            "llm",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

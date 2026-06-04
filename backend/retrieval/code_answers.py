@@ -44,6 +44,7 @@ _OVERVIEW_PHRASES = (
     "tech stack",
     "architecture overview",
 )
+IMPORT_TRACE_DEPTH_LIMIT = 3
 
 _FLOW_TERMS = {
     "orchestration": {"query", "request", "api", "run_query", "provider", "thread", "source", "response"},
@@ -471,6 +472,11 @@ def build_flow_answer(
     lines.append("Lifecycle:" if flow_kind == "auth_session" else "Flow:")
     steps = _flow_step_lines(flow_kind, selected_sources)
     lines.extend(f"{index}. {step}" for index, step in enumerate(steps, start=1))
+    explicit_traces = _explicit_flow_traces(flow_kind, selected_sources)
+    if explicit_traces:
+        lines.append("")
+        lines.append("Explicit trace:")
+        lines.extend(f"{index}. {step}" for index, step in enumerate(explicit_traces, start=1))
     answer = "\n".join(lines)
     if return_sources:
         return answer, selected_sources[:7]
@@ -951,6 +957,19 @@ def find_supporting_import_exports(
     chunk_by_key = {_source_key(chunk): chunk for chunk in chunks}
     matches: list[tuple[int, dict]] = []
     seen: set[tuple[str, str, int, int]] = set()
+    for score, support in _retrieved_import_supports(selected_sources, chunks, query_tokens):
+        key = _source_key(support)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append((score, support))
+    for score, support in _retrieved_dependency_supports(selected_sources, chunks, chunk_by_key, query_tokens):
+        key = _source_key(support)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append((score, support))
+
     for source in selected_sources:
         source_chunk = chunk_by_key.get(_source_key(source), {})
         relative_path = str(source.get("relative_path", "")).strip()
@@ -983,6 +1002,88 @@ def find_supporting_import_exports(
         )
     )
     return [block for _, block in matches[: max(1, limit)]]
+
+
+def _retrieved_import_supports(
+    selected_sources: list[dict],
+    chunks: list[dict],
+    query_tokens: set[str],
+) -> list[tuple[int, dict]]:
+    selected_paths = {
+        str(source.get("relative_path", "")).strip()
+        for source in selected_sources
+        if source.get("relative_path")
+    }
+    matches: list[tuple[int, dict]] = []
+    for chunk in chunks:
+        if str(chunk.get("support_kind", "")).strip() != "import_backing":
+            continue
+        supporting_from = str(chunk.get("supporting_from", "")).strip()
+        if supporting_from and supporting_from not in selected_paths:
+            continue
+        score = _identifier_score(str(chunk.get("symbol_name", "")).strip(), query_tokens)
+        if score <= 0:
+            continue
+        normalized = _normalize_support_chunk(chunk)
+        if normalized is None:
+            continue
+        matches.append((score + 1, normalized))
+    return matches
+
+
+def _normalize_support_chunk(chunk: dict) -> dict | None:
+    formatted = str(chunk.get("formatted", "")).strip()
+    if not formatted:
+        formatted = _format_source_snippet(chunk) or ""
+    if not formatted:
+        return None
+
+    normalized = dict(chunk)
+    normalized["formatted"] = formatted
+    if not normalized.get("context_block"):
+        relative_path = str(normalized.get("relative_path", "")).strip()
+        symbol = str(normalized.get("symbol_name", "")).strip() or "<file>"
+        start_line = int(normalized.get("start_line", 0) or 0)
+        end_line = int(normalized.get("end_line", 0) or 0)
+        excerpt = _read_source_excerpt(normalized)
+        if excerpt:
+            normalized["context_block"] = (
+                f"### {relative_path} — {symbol} (lines {start_line}-{end_line})\n\n{excerpt}"
+            )
+    return normalized
+
+
+def _retrieved_dependency_supports(
+    selected_sources: list[dict],
+    chunks: list[dict],
+    chunk_by_key: dict[tuple[str, str, int, int], dict],
+    query_tokens: set[str],
+) -> list[tuple[int, dict]]:
+    call_targets: set[str] = set()
+    for source in selected_sources:
+        source_chunk = chunk_by_key.get(_source_key(source), source)
+        for call in list(source_chunk.get("calls") or []):
+            cleaned = str(call).strip()
+            if cleaned:
+                call_targets.add(cleaned)
+    if not call_targets:
+        return []
+
+    matches: list[tuple[int, dict]] = []
+    for chunk in chunks:
+        support_kind = str(chunk.get("support_kind", "")).strip()
+        expansion_type = str(chunk.get("expansion_type", "")).strip()
+        if support_kind != "dependency_edge" and expansion_type != "callee":
+            continue
+        symbol_name = str(chunk.get("symbol_name", "")).strip()
+        if not symbol_name or symbol_name not in call_targets:
+            continue
+        score = max(1, _identifier_score(symbol_name, query_tokens)) + 1
+        normalized = _normalize_support_chunk(chunk)
+        if normalized is None:
+            continue
+        matches.append((score, normalized))
+    return matches
 
 
 def _source_key(item: dict) -> tuple[str, str, int, int]:
@@ -1020,12 +1121,16 @@ def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
 
     Handles:
     - ES6/TS destructuring:  import { X, Y as Z } from 'module'
+    - ES6/TS default import: import Foo from 'module'
+    - ES6/TS namespace:      import * as Foo from 'module'
+    - ES6/TS mixed import:   import Foo, { Bar } from 'module'
     - Python from-import:    from module.path import X, Y as Z
     """
+    names: list[tuple[str, str]] = []
+
     # ES6/TS: import { X, Y as Z } from 'module'
     match = re.search(r'import\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', statement)
     if match:
-        names = []
         for part in match.group(1).split(","):
             cleaned = part.strip()
             if not cleaned:
@@ -1035,6 +1140,38 @@ def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
                 names.append((imported_name, match.group(2).strip()))
         return names
 
+    # ES6/TS: import Foo, { Bar } from 'module'
+    mixed_match = re.search(
+        r'import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if mixed_match:
+        names.append((mixed_match.group(1).strip(), mixed_match.group(3).strip()))
+        for part in mixed_match.group(2).split(","):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            imported_name = cleaned.split(" as ", 1)[0].strip()
+            if imported_name:
+                names.append((imported_name, mixed_match.group(3).strip()))
+        return names
+
+    # ES6/TS: import * as Foo from 'module'
+    ns_match = re.search(
+        r'import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if ns_match:
+        return [(ns_match.group(1).strip(), ns_match.group(2).strip())]
+
+    # ES6/TS: import Foo from 'module'
+    default_match = re.search(
+        r'import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+["\']([^"\']+)["\']',
+        statement,
+    )
+    if default_match:
+        return [(default_match.group(1).strip(), default_match.group(2).strip())]
+
     # Python: from module.path import X, Y as Z
     py_match = re.match(r'^from\s+([\w.]+)\s+import\s+(.+)$', statement.strip())
     if py_match:
@@ -1042,7 +1179,6 @@ def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
         imports_part = py_match.group(2).strip()
         # Strip parentheses if present: from x import (A, B)
         imports_part = imports_part.strip("()")
-        names = []
         for part in imports_part.split(","):
             cleaned = part.strip()
             if not cleaned or cleaned == "*":
@@ -1102,17 +1238,18 @@ def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | 
         return None
 
     candidates = [
-        base,
         base.with_suffix(".ts"),
         base.with_suffix(".tsx"),
         base.with_suffix(".js"),
         base.with_suffix(".jsx"),
         base.with_suffix(".py"),
+        base.with_suffix(".json"),
         base / "index.ts",
         base / "index.tsx",
         base / "index.js",
         base / "index.jsx",
         base / "__init__.py",
+        base,
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -1120,7 +1257,13 @@ def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | 
     return None
 
 
-def _extract_export_block(path: Path, identifier: str) -> dict | None:
+def _extract_export_block(
+    path: Path,
+    identifier: str,
+    *,
+    _visited: set[tuple[str, str]] | None = None,
+    _depth: int = 0,
+) -> dict | None:
     """Extract the definition block for `identifier` from `path`.
 
     Supports:
@@ -1129,6 +1272,17 @@ def _extract_export_block(path: Path, identifier: str) -> dict | None:
     - Python: def X(...):  (function definition)
     - Python: class X:  (class definition)
     """
+    visited = _visited or set()
+    repo_root = Path(get_repo_root())
+    try:
+        relative = str(path.relative_to(repo_root))
+    except ValueError:
+        relative = str(path)
+    key = (relative, identifier)
+    if key in visited or _depth >= IMPORT_TRACE_DEPTH_LIMIT:
+        return None
+    visited.add(key)
+
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -1136,6 +1290,8 @@ def _extract_export_block(path: Path, identifier: str) -> dict | None:
 
     suffix = path.suffix.lower()
     is_python = suffix == ".py"
+    if suffix == ".json":
+        return _extract_json_block(path, identifier)
 
     if is_python:
         return _extract_python_symbol(path, lines, identifier)
@@ -1150,7 +1306,10 @@ def _extract_export_block(path: Path, identifier: str) -> dict | None:
         excerpt = "\n".join(lines[start : end + 1]).rstrip()
         if not excerpt:
             return None
-        relative_path = str(path.relative_to(Path(get_repo_root())))
+        try:
+            relative_path = str(path.relative_to(repo_root))
+        except ValueError:
+            relative_path = str(path)
         header = f"{relative_path} :: {identifier} (lines {start + 1}-{end + 1})"
         language = _code_fence_language(relative_path)
         return {
@@ -1164,7 +1323,79 @@ def _extract_export_block(path: Path, identifier: str) -> dict | None:
                 f"{excerpt}"
             ),
         }
+
+    for target_symbol, module_path in _parse_re_exports(lines, identifier):
+        resolved = _resolve_import_path(relative, module_path)
+        if not resolved:
+            continue
+        block = _extract_export_block(
+            resolved,
+            target_symbol,
+            _visited=visited,
+            _depth=_depth + 1,
+        )
+        if block:
+            return block
     return None
+
+
+def _parse_re_exports(lines: list[str], identifier: str) -> list[tuple[str, str]]:
+    matches: list[tuple[str, str]] = []
+    target = identifier.strip()
+    if not target:
+        return matches
+
+    for line in lines:
+        stripped = line.strip().rstrip(";")
+
+        named = re.match(r'export\s+\{([^}]+)\}\s+from\s+["\']([^"\']+)["\']', stripped)
+        if named:
+            module_path = named.group(2).strip()
+            for part in named.group(1).split(","):
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                if " as " in cleaned:
+                    source_name, exported_name = [item.strip() for item in cleaned.split(" as ", 1)]
+                else:
+                    source_name = exported_name = cleaned
+                if exported_name == target:
+                    matches.append(((target if source_name == "default" else source_name), module_path))
+
+        wildcard = re.match(r'export\s+\*\s+from\s+["\']([^"\']+)["\']', stripped)
+        if wildcard:
+            matches.append((target, wildcard.group(1).strip()))
+
+    return matches
+
+
+def _extract_json_block(path: Path, identifier: str) -> dict | None:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    excerpt = raw.strip()
+    if not excerpt:
+        return None
+
+    lines = excerpt.splitlines()
+    trimmed = "\n".join(lines[:60]).rstrip()
+    if len(lines) > 60:
+        trimmed += "\n..."
+
+    try:
+        relative_path = str(path.relative_to(Path(get_repo_root())))
+    except ValueError:
+        relative_path = str(path)
+    header = f"{relative_path} :: {identifier} (lines 1-{min(len(lines), 60)})"
+    return {
+        "relative_path": relative_path,
+        "symbol_name": identifier,
+        "start_line": 1,
+        "end_line": min(len(lines), 60),
+        "formatted": f"{header}\n```json\n{trimmed}\n```",
+        "context_block": f"### {relative_path} — {identifier} (json data)\n\n{trimmed}",
+    }
 
 
 def _extract_python_symbol(path: Path, lines: list[str], identifier: str) -> dict | None:
@@ -1573,6 +1804,113 @@ def _flow_step_lines(flow_kind: str, sources: list[dict]) -> list[str]:
     if steps:
         return steps
     return _flow_steps(flow_kind, sources)
+
+
+def _explicit_flow_traces(flow_kind: str, sources: list[dict]) -> list[str]:
+    if flow_kind == "provider_credentials":
+        return _provider_credential_traces(sources)
+    if flow_kind == "auth_session":
+        return _auth_session_traces(sources)
+    return []
+
+
+def _provider_credential_traces(sources: list[dict]) -> list[str]:
+    traces: list[str] = []
+    handler_create = _find_source_by_symbol(sources, "create_provider_credential_v1")
+    store_create = _find_source_by_symbol(sources, "create_provider_credential")
+    if handler_create and store_create and _source_calls_symbol(handler_create, "create_provider_credential"):
+        traces.append(
+            "POST `/provider-credentials` routes into `create_provider_credential_v1()`, "
+            "which validates the request and calls `create_provider_credential()` to write "
+            f"{_storage_target_text(store_create)}. Evidence: {_inline_source_reference(handler_create)} -> {_inline_source_reference(store_create)}."
+        )
+
+    handler_activate = _find_source_by_symbol(sources, "activate_provider_credential_v1")
+    store_activate = _find_source_by_symbol(sources, "set_active_provider_credential")
+    if handler_activate and store_activate and _source_calls_symbol(handler_activate, "set_active_provider_credential"):
+        traces.append(
+            "POST `/provider-credentials/{credential_id}/activate` routes into "
+            "`activate_provider_credential_v1()`, which calls `set_active_provider_credential()` "
+            f"to update { _storage_target_text(store_activate)}. Evidence: {_inline_source_reference(handler_activate)} -> {_inline_source_reference(store_activate)}."
+        )
+
+    handler_delete = _find_source_by_symbol(sources, "delete_provider_credential_v1")
+    store_delete = _find_source_by_symbol(sources, "delete_provider_credential")
+    if handler_delete and store_delete and _source_calls_symbol(handler_delete, "delete_provider_credential"):
+        traces.append(
+            "DELETE `/provider-credentials/{credential_id}` routes into `delete_provider_credential_v1()`, "
+            "which calls `delete_provider_credential()` "
+            f"to remove rows from {_storage_target_text(store_delete)}. Evidence: {_inline_source_reference(handler_delete)} -> {_inline_source_reference(store_delete)}."
+        )
+    return traces
+
+
+def _auth_session_traces(sources: list[dict]) -> list[str]:
+    traces: list[str] = []
+    entry = (
+        _find_source_by_symbol(sources, "auth_github_token")
+        or _find_source_by_symbol(sources, "auth_github_callback")
+        or _find_source_by_symbol(sources, "auth_github")
+    )
+    create = _find_source_by_symbol(sources, "create_auth_session")
+    if entry and create and _source_calls_symbol(entry, "create_auth_session"):
+        traces.append(
+            "The auth route handler exchanges GitHub credentials and then calls "
+            f"`create_auth_session()` to insert {_storage_target_text(create)}. "
+            f"Evidence: {_inline_source_reference(entry)} -> {_inline_source_reference(create)}."
+        )
+
+    lookup = _find_source_by_symbol(sources, "get_user_for_session_token")
+    if lookup:
+        traces.append(
+            f"Subsequent protected requests call `get_user_for_session_token()`, which joins "
+            f"{_storage_target_text(lookup)} to resolve the cookie and refresh `last_seen_at`. "
+            f"Evidence: {_inline_source_reference(lookup)}."
+        )
+
+    delete = _find_source_by_symbol(sources, "delete_auth_session")
+    if delete:
+        traces.append(
+            f"Logout deletes the stored auth session row via `delete_auth_session()`. "
+            f"Evidence: {_inline_source_reference(delete)} targeting {_storage_target_text(delete)}."
+        )
+    return traces
+
+
+def _find_source_by_symbol(sources: list[dict], symbol_name: str) -> dict | None:
+    for source in sources:
+        if str(source.get("symbol_name", "")).strip() == symbol_name:
+            return source
+    return None
+
+
+def _source_calls_symbol(source: dict, symbol_name: str) -> bool:
+    excerpt = _read_source_excerpt(source)
+    if not excerpt:
+        return False
+    return bool(re.search(rf"\b{re.escape(symbol_name)}\s*\(", excerpt))
+
+
+def _storage_target_text(source: dict) -> str:
+    excerpt = _read_source_excerpt(source)
+    tables: list[str] = []
+    for pattern in (
+        r"\bINSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bUPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bDELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+        r"\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+    ):
+        for match in re.findall(pattern, excerpt, flags=re.IGNORECASE):
+            if match not in tables:
+                tables.append(match)
+    if not tables:
+        return "the backing database rows"
+    if len(tables) == 1:
+        return f"`{tables[0]}`"
+    if len(tables) == 2:
+        return f"`{tables[0]}` and `{tables[1]}`"
+    return ", ".join(f"`{table}`" for table in tables[:3])
 
 
 def _flow_role_matches(flow_kind: str, sources: list[dict]) -> dict[str, dict]:

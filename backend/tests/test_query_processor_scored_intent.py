@@ -28,6 +28,13 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertIn("submission-key", result["entities"]["api_terms"])
         self.assertIn("submission-key", result["entities"]["exact_terms"])
 
+    def test_extracts_service_names_for_config_queries(self) -> None:
+        result = query_processor.process_query("How is the qdrant service configured in docker compose?")
+
+        self.assertIn("qdrant", result["entities"]["services"])
+        self.assertIn("qdrant", result["entities"]["exact_terms"])
+        self.assertEqual(result["primary_intent"], "CONFIG")
+
     def test_injects_phase1_flow_symbols_for_metadata_search(self) -> None:
         orchestration = query_processor.process_query("walk me through backend request orchestration flow")
         auth = query_processor.process_query("explain the auth session lifecycle flow")
@@ -80,6 +87,36 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertIn("entities", result)
         self.assertEqual(result["entities"]["exact_terms"], [])
         self.assertEqual(result["confidence"], result["intent_scores"]["SYMBOL"])
+
+    def test_prefers_file_intent_for_explicit_file_question(self) -> None:
+        result = query_processor.process_query("Explain retrieval/api_service.py")
+
+        self.assertEqual(result["primary_intent"], "FILE")
+        self.assertIn("retrieval/api_service.py", result["entities"]["files"])
+
+    def test_marks_short_vague_query_as_low_context(self) -> None:
+        result = query_processor.process_query("auth?")
+
+        self.assertEqual(result["primary_intent"], "LOW_CONTEXT")
+        self.assertGreaterEqual(result["intent_scores"]["LOW_CONTEXT"], 0.7)
+
+    def test_marks_pronoun_query_as_followup(self) -> None:
+        result = query_processor.process_query("where is it used")
+
+        self.assertTrue(result["is_followup"])
+        self.assertEqual(result["primary_intent"], "FOLLOWUP")
+
+    def test_does_not_treat_it_substring_inside_other_words_as_followup(self) -> None:
+        result = query_processor.process_query("audit logging flow")
+
+        self.assertFalse(result["is_followup"])
+        self.assertEqual(result["primary_intent"], "TRACE")
+
+    def test_prefers_code_request_for_explicit_code_snippet_ask(self) -> None:
+        result = query_processor.process_query("show the implementation of run_query with a code snippet")
+
+        self.assertEqual(result["primary_intent"], "CODE_REQUEST")
+        self.assertIn("run_query", result["entities"]["symbols"])
 
 
 if __name__ == "__main__":

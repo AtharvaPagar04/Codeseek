@@ -23,6 +23,10 @@ Current response-quality state:
 
 - [Current Retrieval Strategy](./current_retrieval_strategy.md)
 - [Response Quality Refinement Plan](./response_quality_refinement_plan.md)
+- [Manual Response-Review Checklist](./manual_response_review_checklist.md)
+- [Embedding Model Benchmark Results](./embedding_model_benchmark_results.md)
+- [Lexical Layer Benchmark Results](./lexical_layer_benchmark_results.md)
+- [Multi-Language Support Boundaries](./multi_language_support_boundaries.md)
 - [Lexical Retrieval Baseline Results](./eval_results_lexical_baseline.md)
 - [Latest Multi-Repo Eval Results](./eval_results_multi_repo_latest.json)
 - [CodeSeek Flow Phase 1/2 Eval](./eval_codeseek_flow_phase1.json)

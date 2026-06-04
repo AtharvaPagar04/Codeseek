@@ -23,6 +23,16 @@ EXPECTED_RESPONSE_MODE_RE = re.compile(r"^expected_response_mode_score:\s*([0-9.
 EXPECTED_ANSWER_TERM_RE = re.compile(r"^expected_answer_term_score:\s*([0-9.]+)\s*$")
 LATENCY_P50_RE = re.compile(r"^latency_p50_ms:\s*(\d+)\s*$")
 LATENCY_P95_RE = re.compile(r"^latency_p95_ms:\s*(\d+)\s*$")
+RETRIEVAL_ONLY_P50_RE = re.compile(r"^retrieval_only_latency_p50_ms:\s*(\d+)\s*$")
+RETRIEVAL_ONLY_P95_RE = re.compile(r"^retrieval_only_latency_p95_ms:\s*(\d+)\s*$")
+DETERMINISTIC_P50_RE = re.compile(r"^deterministic_latency_p50_ms:\s*(\d+)\s*$")
+DETERMINISTIC_P95_RE = re.compile(r"^deterministic_latency_p95_ms:\s*(\d+)\s*$")
+LLM_BACKEND_P50_RE = re.compile(r"^llm_backend_latency_p50_ms:\s*(\d+)\s*$")
+LLM_BACKEND_P95_RE = re.compile(r"^llm_backend_latency_p95_ms:\s*(\d+)\s*$")
+LLM_PROVIDER_P50_RE = re.compile(r"^llm_provider_latency_p50_ms:\s*(\d+)\s*$")
+LLM_PROVIDER_P95_RE = re.compile(r"^llm_provider_latency_p95_ms:\s*(\d+)\s*$")
+LLM_TOTAL_P50_RE = re.compile(r"^llm_total_latency_p50_ms:\s*(\d+)\s*$")
+LLM_TOTAL_P95_RE = re.compile(r"^llm_total_latency_p95_ms:\s*(\d+)\s*$")
 CASES_RE = re.compile(r"^Cases:\s*(\d+)\s*$")
 
 
@@ -54,6 +64,26 @@ def _parse_eval_output(text: str) -> dict[str, float]:
             metrics["latency_p50_ms"] = float(match.group(1))
         elif match := LATENCY_P95_RE.match(line):
             metrics["latency_p95_ms"] = float(match.group(1))
+        elif match := RETRIEVAL_ONLY_P50_RE.match(line):
+            metrics["retrieval_only_latency_p50_ms"] = float(match.group(1))
+        elif match := RETRIEVAL_ONLY_P95_RE.match(line):
+            metrics["retrieval_only_latency_p95_ms"] = float(match.group(1))
+        elif match := DETERMINISTIC_P50_RE.match(line):
+            metrics["deterministic_latency_p50_ms"] = float(match.group(1))
+        elif match := DETERMINISTIC_P95_RE.match(line):
+            metrics["deterministic_latency_p95_ms"] = float(match.group(1))
+        elif match := LLM_BACKEND_P50_RE.match(line):
+            metrics["llm_backend_latency_p50_ms"] = float(match.group(1))
+        elif match := LLM_BACKEND_P95_RE.match(line):
+            metrics["llm_backend_latency_p95_ms"] = float(match.group(1))
+        elif match := LLM_PROVIDER_P50_RE.match(line):
+            metrics["llm_provider_latency_p50_ms"] = float(match.group(1))
+        elif match := LLM_PROVIDER_P95_RE.match(line):
+            metrics["llm_provider_latency_p95_ms"] = float(match.group(1))
+        elif match := LLM_TOTAL_P50_RE.match(line):
+            metrics["llm_total_latency_p50_ms"] = float(match.group(1))
+        elif match := LLM_TOTAL_P95_RE.match(line):
+            metrics["llm_total_latency_p95_ms"] = float(match.group(1))
         elif match := CASES_RE.match(line):
             metrics["cases"] = float(match.group(1))
     required = {
@@ -69,6 +99,16 @@ def _parse_eval_output(text: str) -> dict[str, float]:
         "expected_answer_term",
         "latency_p50_ms",
         "latency_p95_ms",
+        "retrieval_only_latency_p50_ms",
+        "retrieval_only_latency_p95_ms",
+        "deterministic_latency_p50_ms",
+        "deterministic_latency_p95_ms",
+        "llm_backend_latency_p50_ms",
+        "llm_backend_latency_p95_ms",
+        "llm_provider_latency_p50_ms",
+        "llm_provider_latency_p95_ms",
+        "llm_total_latency_p50_ms",
+        "llm_total_latency_p95_ms",
         "cases",
     }
     missing = required - set(metrics)
@@ -128,6 +168,13 @@ def _run_dataset(project_root: Path, dataset: dict) -> dict:
         "--k",
         str(k),
     ]
+    provider = str(dataset.get("provider", "")).strip()
+    api_key_env = str(dataset.get("api_key_env", "")).strip()
+    model = str(dataset.get("model", "")).strip()
+    if provider and api_key_env:
+        cmd.extend(["--provider", provider, "--api-key-env", api_key_env])
+    if model:
+        cmd.extend(["--model", model])
     proc = subprocess.run(
         cmd,
         cwd=repo_root,
@@ -182,7 +229,10 @@ def main() -> None:
             f"expected_response_mode={metrics['expected_response_mode']:.3f} "
             f"expected_answer_term={metrics['expected_answer_term']:.3f} "
             f"latency_p50_ms={int(metrics['latency_p50_ms'])} "
-            f"latency_p95_ms={int(metrics['latency_p95_ms'])}"
+            f"latency_p95_ms={int(metrics['latency_p95_ms'])} "
+            f"retrieval_only_p50_ms={int(metrics['retrieval_only_latency_p50_ms'])} "
+            f"deterministic_p50_ms={int(metrics['deterministic_latency_p50_ms'])} "
+            f"llm_total_p50_ms={int(metrics['llm_total_latency_p50_ms'])}"
         )
 
     total_cases = sum(r["cases"] for r in results)
@@ -198,6 +248,16 @@ def main() -> None:
     agg_answer_term = sum(r["expected_answer_term"] * r["cases"] for r in results) / total_cases
     max_latency_p50 = max(r["latency_p50_ms"] for r in results)
     max_latency_p95 = max(r["latency_p95_ms"] for r in results)
+    max_retrieval_only_p50 = max(r["retrieval_only_latency_p50_ms"] for r in results)
+    max_retrieval_only_p95 = max(r["retrieval_only_latency_p95_ms"] for r in results)
+    max_deterministic_p50 = max(r["deterministic_latency_p50_ms"] for r in results)
+    max_deterministic_p95 = max(r["deterministic_latency_p95_ms"] for r in results)
+    max_llm_backend_p50 = max(r["llm_backend_latency_p50_ms"] for r in results)
+    max_llm_backend_p95 = max(r["llm_backend_latency_p95_ms"] for r in results)
+    max_llm_provider_p50 = max(r["llm_provider_latency_p50_ms"] for r in results)
+    max_llm_provider_p95 = max(r["llm_provider_latency_p95_ms"] for r in results)
+    max_llm_total_p50 = max(r["llm_total_latency_p50_ms"] for r in results)
+    max_llm_total_p95 = max(r["llm_total_latency_p95_ms"] for r in results)
 
     print("\nAggregate")
     print("=========")
@@ -215,6 +275,16 @@ def main() -> None:
     print(f"weighted_expected_answer_term_score: {agg_answer_term:.3f}")
     print(f"max_latency_p50_ms: {int(max_latency_p50)}")
     print(f"max_latency_p95_ms: {int(max_latency_p95)}")
+    print(f"max_retrieval_only_latency_p50_ms: {int(max_retrieval_only_p50)}")
+    print(f"max_retrieval_only_latency_p95_ms: {int(max_retrieval_only_p95)}")
+    print(f"max_deterministic_latency_p50_ms: {int(max_deterministic_p50)}")
+    print(f"max_deterministic_latency_p95_ms: {int(max_deterministic_p95)}")
+    print(f"max_llm_backend_latency_p50_ms: {int(max_llm_backend_p50)}")
+    print(f"max_llm_backend_latency_p95_ms: {int(max_llm_backend_p95)}")
+    print(f"max_llm_provider_latency_p50_ms: {int(max_llm_provider_p50)}")
+    print(f"max_llm_provider_latency_p95_ms: {int(max_llm_provider_p95)}")
+    print(f"max_llm_total_latency_p50_ms: {int(max_llm_total_p50)}")
+    print(f"max_llm_total_latency_p95_ms: {int(max_llm_total_p95)}")
 
     if args.json_out:
         payload = {
@@ -234,6 +304,16 @@ def main() -> None:
                 "weighted_expected_answer_term_score": round(agg_answer_term, 6),
                 "max_latency_p50_ms": int(max_latency_p50),
                 "max_latency_p95_ms": int(max_latency_p95),
+                "max_retrieval_only_latency_p50_ms": int(max_retrieval_only_p50),
+                "max_retrieval_only_latency_p95_ms": int(max_retrieval_only_p95),
+                "max_deterministic_latency_p50_ms": int(max_deterministic_p50),
+                "max_deterministic_latency_p95_ms": int(max_deterministic_p95),
+                "max_llm_backend_latency_p50_ms": int(max_llm_backend_p50),
+                "max_llm_backend_latency_p95_ms": int(max_llm_backend_p95),
+                "max_llm_provider_latency_p50_ms": int(max_llm_provider_p50),
+                "max_llm_provider_latency_p95_ms": int(max_llm_provider_p95),
+                "max_llm_total_latency_p50_ms": int(max_llm_total_p50),
+                "max_llm_total_latency_p95_ms": int(max_llm_total_p95),
             },
         }
         Path(args.json_out).write_text(json.dumps(payload, indent=2), encoding="utf-8")

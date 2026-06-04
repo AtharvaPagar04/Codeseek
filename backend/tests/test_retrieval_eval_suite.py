@@ -22,6 +22,16 @@ expected_response_mode_score: 1.000
 expected_answer_term_score: 0.750
 latency_p50_ms: 123
 latency_p95_ms: 456
+retrieval_only_latency_p50_ms: 45
+retrieval_only_latency_p95_ms: 60
+deterministic_latency_p50_ms: 120
+deterministic_latency_p95_ms: 160
+llm_backend_latency_p50_ms: 700
+llm_backend_latency_p95_ms: 900
+llm_provider_latency_p50_ms: 1800
+llm_provider_latency_p95_ms: 2400
+llm_total_latency_p50_ms: 2600
+llm_total_latency_p95_ms: 3300
 """
 
         metrics = retrieval_eval_suite._parse_eval_output(output)
@@ -37,6 +47,11 @@ latency_p95_ms: 456
         self.assertEqual(metrics["expected_answer_term"], 0.75)
         self.assertEqual(metrics["latency_p50_ms"], 123.0)
         self.assertEqual(metrics["latency_p95_ms"], 456.0)
+        self.assertEqual(metrics["retrieval_only_latency_p50_ms"], 45.0)
+        self.assertEqual(metrics["deterministic_latency_p50_ms"], 120.0)
+        self.assertEqual(metrics["llm_backend_latency_p95_ms"], 900.0)
+        self.assertEqual(metrics["llm_provider_latency_p50_ms"], 1800.0)
+        self.assertEqual(metrics["llm_total_latency_p95_ms"], 3300.0)
 
     def test_resolve_dataset_path_uses_project_root_for_relative_paths(self) -> None:
         project_root = Path("/repo/backend")
