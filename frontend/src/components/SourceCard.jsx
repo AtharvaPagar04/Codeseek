@@ -10,10 +10,11 @@ export default function SourceCard({ source }) {
   const symbol = source.symbol || source.symbol_name || '';
   const lines = source.lines || formatLines(source.start_line, source.end_line);
   const expansionType = source.expansion_type || '';
+  const copyValue = [file, symbol ? `:: ${symbol}` : '', lines ? ` (lines ${lines})` : ''].join('');
 
   const handleCopy = () => {
     if (!file) return;
-    navigator.clipboard.writeText(file).then(() => {
+    navigator.clipboard.writeText(copyValue).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

@@ -86,7 +86,14 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
     )
 
     monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
-    ready = session_indexer.create_session("octocat/hello-world", "local")
+    user_one = auth_store.upsert_github_user("reuse-user-1-gh", "reuse-user-one", "")
+    user_two = auth_store.upsert_github_user("reuse-user-2-gh", "reuse-user-two", "")
+
+    ready = session_indexer.create_session(
+        "octocat/hello-world",
+        "local",
+        user_id=user_one["id"],
+    )
     session_indexer._update_session(
         ready["id"],
         status="ready",
@@ -94,7 +101,11 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
         collection=ready["collection"],
     )
 
-    pending = session_indexer.create_session("octocat/hello-world", "local")
+    pending = session_indexer.create_session(
+        "octocat/hello-world",
+        "local",
+        user_id=user_two["id"],
+    )
     session_indexer._index_job(pending["id"])
     refreshed = session_indexer.get_session(pending["id"])
     assert refreshed is not None
@@ -171,3 +182,25 @@ def test_index_job_uses_session_github_token(monkeypatch, tmp_path: Path):
 
     assert used["repo_url"] == "https://github.com/octocat/hello-world.git"
     assert used["github_token"] == "ghp_secret"
+
+
+def test_index_job_invalidates_lexical_index_after_ingestion(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+    monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 1)
+    monkeypatch.setattr(
+        session_indexer,
+        "run_pipeline",
+        lambda _root, collection_name: SimpleNamespace(
+            chunks_generated=1, embeddings_stored=1, collection=collection_name
+        ),
+    )
+    invalidated: list[str] = []
+    monkeypatch.setattr(session_indexer, "invalidate_lexical_index", lambda collection: invalidated.append(collection))
+
+    session = session_indexer.create_session("octocat/hello-world", "local")
+    session_indexer._index_job(session["id"])
+
+    assert invalidated == [session["collection"]]

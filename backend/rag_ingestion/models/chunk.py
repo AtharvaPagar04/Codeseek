@@ -28,5 +28,28 @@ class Chunk:
     file_symbols: list[str] = field(default_factory=list)
     docstring: str = ""
     summary: str = ""
+    file_type: str = ""
+    summary_facts: list[str] = field(default_factory=list)
+    detected_frameworks: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    dev_dependencies: list[str] = field(default_factory=list)
+    scripts: dict[str, str] = field(default_factory=dict)
+    services: list[str] = field(default_factory=list)
+    ports: list[str] = field(default_factory=list)
+    env_keys: list[str] = field(default_factory=list)
+    entrypoints: list[str] = field(default_factory=list)
+    config_tools: list[str] = field(default_factory=list)
+    build_system: str = ""
+    volumes: list[str] = field(default_factory=list)
+    service_dependencies: dict[str, list[str]] = field(default_factory=dict)
+    base_image: str = ""
+    workdir: str = ""
+    package_manager: str = ""
+    feature_flags: list[str] = field(default_factory=list)
+    provider_keys: list[str] = field(default_factory=list)
+    purpose: str = ""
+    setup_steps: list[str] = field(default_factory=list)
+    usage_commands: list[str] = field(default_factory=list)
+    architecture_notes: list[str] = field(default_factory=list)
     content: str = ""
     embedding: list[float] = field(default_factory=list)

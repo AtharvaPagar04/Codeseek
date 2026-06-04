@@ -1,6 +1,6 @@
-import { getBackendApiKey } from './storage';
+import { getBackendApiKey } from './storage.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
 const authHeaders = () => ({
   'Content-Type': 'application/json',
@@ -18,7 +18,7 @@ const readErrorDetail = async (res) => {
   }
 };
 
-const formatApiError = ({ action, status, detail = '' }) => {
+export const formatApiError = ({ action, status, detail = '' }) => {
   const normalizedDetail = `${detail}`.trim();
   if (status === 401) {
     if (normalizedDetail.toLowerCase().includes('authentication required')) {
@@ -49,6 +49,18 @@ const formatApiError = ({ action, status, detail = '' }) => {
   }
   if (normalizedDetail.includes('GitHub repo fetch failed')) {
     return `${action} failed (${status}): GitHub repository listing failed. Reconnect GitHub and verify token scope.`;
+  }
+  if (normalizedDetail.includes('Provider API key rejected or lacks permission')) {
+    return `${action} failed (${status}): provider rejected the configured API key or model access. Update the provider configuration and retry.`;
+  }
+  if (normalizedDetail.includes('Unsupported LLM provider configuration')) {
+    return `${action} failed (${status}): provider configuration is invalid. Re-save the credential with a supported provider and model.`;
+  }
+  if (normalizedDetail.includes('Provider request timed out')) {
+    return `${action} failed (${status}): provider request timed out. Retry or switch to a faster model.`;
+  }
+  if (normalizedDetail.includes('Provider request failed upstream')) {
+    return `${action} failed (${status}): provider request failed upstream. Retry shortly or switch provider credentials.`;
   }
   return `${action} failed (${status})${normalizedDetail ? `: ${normalizedDetail}` : ''}`;
 };
@@ -209,6 +221,21 @@ export const deleteSessionApi = async (sessionId) => {
   });
   if (!res.ok) await throwApiError('Delete session', res);
   return res.json();
+};
+
+export const retrySessionIndexing = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/retry`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Retry indexing'
+  );
+  if (!res.ok) await throwApiError('Retry indexing', res);
+  const data = await res.json();
+  return data.session;
 };
 
 export const fetchSessionMessages = async (sessionId) => {

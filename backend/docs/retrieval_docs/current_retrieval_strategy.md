@@ -54,9 +54,13 @@ Current LLM provider defaults:
 Current default runtime knobs from `retrieval/config.py`:
 
 - dense top-k: `15`
+- lexical top-k: `15`
 - merged top-k returned: `10`
 - max context tokens: `7000`
 - max response tokens: `1024`
+- dense retrieval enabled by default: `true`
+- lexical retrieval enabled by default: `false`
+- scored intent enabled by default: `true`
 - call expansion enabled: `true`
 - parent expansion enabled: `true`
 - split-part expansion enabled: `true`
@@ -70,13 +74,15 @@ At a high level, a query currently goes through this sequence:
 
 1. API receives the query and resolves session/thread/provider context.
 2. Retrieval memory is loaded and may be used to rewrite short follow-up queries.
-3. Query intent and entities are extracted with regex heuristics.
+3. Query intent and entities are extracted with a bounded scored-intent/entity layer.
 4. Search runs across:
    - dense vector search
    - metadata symbol/path search
+   - exact entity search for extracted env keys, dependency names, route/API terms, and config keys
+   - optional lexical/BM25-style search when enabled
    - dependency search over `calls`
 5. Search results are merged, then augmented with:
-   - overview candidates for broad repo-summary questions
+   - repo-summary and overview candidates for broad repository questions
    - import-backed candidates for section/data questions
 6. Expansion pulls in related chunks:
    - split parts
@@ -87,6 +93,7 @@ At a high level, a query currently goes through this sequence:
 9. Response mode is selected:
    - deterministic code answer
    - deterministic overview answer
+   - deterministic phase-1 flow answer
    - deterministic explanation answer
    - LLM answer
 10. Memory is updated with the final answer.
@@ -99,26 +106,40 @@ The current retrieval quality is strongly constrained by ingestion.
 
 ### 3.1 Supported source file types
 
-`rag_ingestion/stages/language.py` currently supports only:
+`rag_ingestion/stages/language.py` currently supports:
 
 - `.py`
 - `.js`
 - `.jsx`
 - `.ts`
 - `.tsx`
+- `.md`
+- `.json`
+- `.toml`
+- `.yml`
+- `.yaml`
+- `.txt`
+- `Dockerfile`
+- `.env.example`
 
-Everything else is marked `unsupported_language` and skipped from normal parsing/indexing.
+Code files still receive the richest AST extraction. Non-code overview/config files are currently ingested as file-level chunks without AST symbols, but selected repo-level files now also receive structured metadata during summary generation.
 
-This means the current system does not natively ingest many files that are often the best evidence for overview questions:
+This still leaves gaps, but the current system can now ingest several files that are often the best evidence for overview questions:
 
 - `README.md`
+- `package.json`
 - `requirements.txt`
 - `pyproject.toml`
 - `docker-compose.yml`
 - `.env.example`
-- `tailwind.config.*`
-- `vite.config.*`
-- JSON config not already included through some other path
+- many JSON/YAML/TOML files
+
+Important remaining limitation:
+
+- files like lockfiles and ignored secret files are still excluded
+- non-code files do not currently contribute imports, calls, or symbols
+- config formats are parsed with deterministic lightweight extractors, not full ecosystem-specific parsers
+- repo-summary generation and deterministic overview answers consume the first-pass structured metadata fields, but source gating and deeper deterministic answer paths do not yet fully use every field
 
 ### 3.2 Chunking behavior
 
@@ -143,6 +164,7 @@ Stored chunk metadata can include:
 - `methods`
 - `docstring`
 - `content`
+- structured non-code fields such as `file_type`, `summary_facts`, `detected_frameworks`, `dependencies`, `dev_dependencies`, `scripts`, `services`, `ports`, `env_keys`, `entrypoints`, `config_tools`, `build_system`, `volumes`, `service_dependencies`, `base_image`, `workdir`, `package_manager`, `feature_flags`, `provider_keys`, `purpose`, `setup_steps`, `usage_commands`, and `architecture_notes`
 
 This is important because most retrieval behavior depends on symbol names, import lists, and call graphs extracted here.
 
@@ -195,11 +217,11 @@ When rewriting is triggered, the previous resolved query is prepended to the cur
 
 ## 5. Query Understanding
 
-`retrieval/query_processor.py` classifies the query and extracts entities using regexes.
+`retrieval/query_processor.py` classifies the query and extracts entities using bounded heuristics. It still preserves the legacy `intent` field for compatibility, but now also emits a scored intent contract for downstream retrieval and source-gating work.
 
-### 5.1 Intent classes
+### 5.1 Legacy intent classes
 
-Current intents:
+Legacy intents still emitted:
 
 - `SEMANTIC`
 - `DEPENDENCY`
@@ -211,7 +233,36 @@ Classification rules:
 - `SYMBOL` if the query mentions likely symbols, files, or phrases like `where is`, `show me`, `defined`
 - otherwise `SEMANTIC`
 
-### 5.2 Entity extraction
+### 5.2 Scored intent output
+
+The current scored output includes:
+
+- `primary_intent`
+- `intent_scores`
+- `entities`
+- `is_followup`
+- `topic_shift`
+- `confidence`
+
+The scored intent families currently emitted are:
+
+- `OVERVIEW`
+- `ARCHITECTURE`
+- `TECH_STACK`
+- `EXPLANATION`
+- `SYMBOL`
+- `FILE`
+- `TRACE`
+- `DEPENDENCY`
+- `CONFIG`
+- `CODE_REQUEST`
+- `FOLLOWUP`
+- `LOW_CONTEXT`
+- `SEMANTIC`
+
+`RETRIEVAL_ENABLE_SCORED_INTENT=0` disables the richer scoring and exact-entity extraction logic, but the processor still emits the same output shape populated from the legacy intent and empty rich entity lists. This avoids forcing search, assembly, or later answer builders to handle two incompatible query contracts.
+
+### 5.3 Entity extraction
 
 Current entity extraction pulls:
 
@@ -225,8 +276,13 @@ Current entity extraction pulls:
   - `.ts`
   - `.tsx`
   - `.jsx`
+- uppercase env/config keys such as `CODESEEK_DATABASE_URL`
+- route-like paths such as `/api/v1/health`
+- route/API terms such as `submission-key`
+- dependency/model/library tokens such as `qdrant-client` and `BAAI/bge-small-en-v1.5`
+- known bare dependency names such as `fastapi`, `uvicorn`, `qdrant`, and `pytest`
 
-This stage is entirely rule-based. There is no learned intent classifier and no structural parser for the query itself.
+This stage is still rule-based. There is no learned intent classifier and no structural parser for the query itself. The important change is that the rules are now bounded by a documented output contract instead of being open-ended one-off routing checks.
 
 ## 6. Retrieval Stage
 
@@ -237,13 +293,30 @@ This stage is entirely rule-based. There is no learned intent classifier and no 
 Dense retrieval:
 
 - loads `SentenceTransformer(BAAI/bge-small-en-v1.5)`
+- is enabled by default with `RETRIEVAL_ENABLE_DENSE=1`
+- can be disabled with `RETRIEVAL_ENABLE_DENSE=0` for offline lexical/metadata evals
 - encodes `query: <raw_query>`
 - queries Qdrant for top `15` by default
 - uses payload plus vector similarity score
 
-This is the only semantic retrieval layer in the current system.
+This remains the primary semantic retrieval layer in the current system.
 
-### 6.2 Metadata search
+### 6.2 Optional lexical search
+
+The searcher now has a feature-flagged in-process BM25-style lexical layer.
+
+Current behavior:
+
+- disabled by default with `RETRIEVAL_ENABLE_LEXICAL=0`
+- enabled with `RETRIEVAL_ENABLE_LEXICAL=1`
+- builds lazily per Qdrant `collection_name` on first lexical query
+- caches the lexical index in process memory
+- invalidates the cache after successful session ingestion for that collection
+- indexes relative path, symbol names, qualified symbols, chunk type, language, signature, docstring, summary, bounded content excerpt, imports, calls, parameters, methods, and file symbols
+
+This layer is intentionally in-process for the first implementation so it adds no new deployment dependency. Multi-worker deployments still need to tolerate per-worker cache rebuilds until a shared sparse-index strategy is adopted.
+
+### 6.3 Metadata search
 
 Metadata search supplements dense retrieval with exact-match filters over:
 
@@ -256,9 +329,33 @@ There are also a few hardcoded path-hint heuristics for disambiguation, for exam
 - websocket/ws-related paths
 - test-related paths
 
-This layer is exact and heuristic-driven. It is not a BM25 or fuzzy lexical search.
+Direct symbol/path matches are treated as exact evidence. Broader path-hint metadata matches are treated as probabilistic ranking signals.
 
-### 6.3 Dependency search
+### 6.4 Exact entity search
+
+Exact entity search consumes the richer entity output from `query_processor.py`.
+
+Current exact entity categories:
+
+- `env_keys`
+- `dependencies`
+- `config_keys`
+- `routes`
+- `api_terms`
+- `exact_terms`
+
+Current behavior:
+
+- runs even when lexical retrieval is disabled
+- scans a bounded set of stored Qdrant payloads for exact entity matches
+- prefers structured metadata fields such as `env_keys`, `dependencies`, `dev_dependencies`, `detected_frameworks`, `services`, `entrypoints`, `summary_facts`, `routes`, and `api_terms`
+- falls back to exact matching against `relative_path`, `symbol_name`, `qualified_symbol`, `summary`, and bounded `content_excerpt`
+- returns matches as source type `exact_entity`
+- marks matches as `exact_retrieval_hit` during merge so they are promoted ahead of dense/lexical/probabilistic metadata hits
+
+This is the first bridge between query understanding and retrieval ranking. It improves exact env/config/dependency/API lookup without requiring lexical retrieval to be enabled by default.
+
+### 6.5 Dependency search
 
 For `DEPENDENCY` intent, the searcher also queries Qdrant for chunks whose `calls` array contains the requested symbol.
 
@@ -267,17 +364,19 @@ This allows questions like:
 - who uses `x`
 - where is `y()` called
 
-### 6.4 Merge strategy
+### 6.6 Merge strategy
 
 Search results are merged by `chunk_id`.
 
 Properties of the current merge:
 
 - dense similarity score is kept as `retrieval_score`
+- dense, lexical, and broad metadata matches contribute to `fusion_score`
 - a boolean `multi_layer_hit` is added when the chunk appeared in more than one layer
-- merged results are sorted with multi-layer hits first, then by descending dense score
+- exact dependency, direct symbol, direct file/path, and exact entity hits are promoted ahead of probabilistic matches
+- merged results are sorted by exact hit, multi-layer hit, dense score, fusion score, then lexical overlap
 
-This means exact metadata matches can be promoted if they overlap with dense results, but pure metadata hits have no independent ranking score beyond merge position and later reranking.
+This keeps graph/entity-backed evidence ahead of probabilistic dense or lexical matches while still allowing lexical retrieval to improve recall for exact wording, config keys, dependency names, and doc-heavy queries.
 
 ## 7. Search Augmentations
 
@@ -287,7 +386,11 @@ After the base merge, the current system applies two important augmentations.
 
 For broad overview queries, `_inject_overview_candidates()` pulls extra chunks from Qdrant by scrolling the collection and ranking them with `_overview_priority()`.
 
-The current priority function favors paths that look like:
+The current priority function first favors the synthetic repo-summary artifact:
+
+- `__repo_summary__.md`
+
+It then favors paths that look like:
 
 - `README.md`
 - `package.json`
@@ -300,9 +403,9 @@ The current priority function favors paths that look like:
 - app entrypoints such as `src/main.*`, `src/App.*`, `main.py`
 - data files and symbols named like `app`, `home`, `skills`, `about`, `contact`
 
-Important limitation:
+Current behavior:
 
-The ranking logic knows these files are useful, but if ingestion never indexed them, they still cannot be returned. This is the single biggest mismatch in the current overview strategy.
+The ranking logic can now surface the synthetic repo-summary chunk and representative repo files. Backend re-ingestion/eval validation passed for the first repo, but broader multi-repo validation is still needed before treating the rule-based summary as sufficient.
 
 ### 7.2 Import-backed candidate injection
 
@@ -512,9 +615,41 @@ Behavior:
 
 Important limitation:
 
-This logic can only see those files if they were retrieved or are readable locally through returned source paths. Because many of those files are not currently ingested, overview mode is often starved of the right evidence.
+This logic can now prefer the synthetic `__repo_summary__.md` artifact and first-pass structured metadata from README, dependency manifests, Docker Compose, Dockerfile, and env examples. It is still not a deep semantic architecture model, so broad architecture answers need more dedicated assembly work.
 
-### 12.3 Explanation mode
+### 12.3 Flow mode
+
+Triggered by `is_flow_explanation_request()`.
+
+Signals include a phase-1 flow marker plus backend/session/indexing terms, such as:
+
+- `backend request orchestration`
+- `auth session lifecycle`
+- `indexing session creation flow`
+- `trace indexing`
+
+Behavior:
+
+- routes through `build_flow_answer()`
+- covers phase-1 deterministic families:
+  - backend request orchestration
+  - auth/session lifecycle
+  - indexing/session creation trace
+- maps each flow family to reusable evidence roles instead of tuning for exact user wording
+- selects up to seven flow-relevant sources with required roles first
+- returns those selected flow evidence sources to the API, keeping UI source cards aligned with the deterministic answer body
+- computes evidence state as `strong`, `partial`, or `weak`
+- renders ordered implementation steps from matched roles such as auth entrypoint, session creation, session lookup, logout/session deletion, indexing job, and retrieval pipeline
+- reports missing required evidence roles when the selected source set is partial or weak
+- includes a key-evidence section and source list
+- emits `response_mode=flow_summary`
+- bypasses the LLM
+
+Important limitation:
+
+This is intentionally bounded to phase-1 flow families. Deployment/configuration, provider credential lifecycle, and broad architecture implementation answers still need later deterministic or LLM-assisted handling.
+
+### 12.4 Explanation mode
 
 Triggered by `is_explanation_request()`.
 
@@ -645,7 +780,7 @@ The current strategy is reasonably strong at:
 
 These are the main weaknesses visible in the current implementation.
 
-### 16.1 The ingestion corpus is too code-only
+### 16.1 The ingestion corpus is still code-heavy
 
 This is the highest-impact problem.
 
@@ -657,11 +792,11 @@ Many of the best files for:
 - architecture
 - configuration
 
-are not being indexed at all because the language detector only supports Python and JS/TS source files.
+are now partially indexed, receive first-pass structured metadata, and are synthesized into a rule-based repo-summary artifact. They still do not go through AST extraction.
 
-As a result, the retrieval layer often has no direct access to the strongest overview evidence.
+As a result, the retrieval layer has better access to repo-level evidence than before, but broad project understanding is still weaker than symbol-level code understanding.
 
-### 16.2 Overview heuristics are smarter than the corpus
+### 16.2 Overview heuristics still need richer structured evidence
 
 The searcher and deterministic overview code both try to prioritize:
 
@@ -671,24 +806,28 @@ The searcher and deterministic overview code both try to prioritize:
 - `docker-compose.yml`
 - config files
 
-but this strategy is undercut by ingestion gaps. The ranking knows what matters, but the index often does not contain it.
+The index now contains many of these files and stores first-pass structured metadata for dependency groups, services, ports, env keys, entrypoints, and README purpose/setup sections. Downstream answer quality is still limited because source gating and non-overview deterministic answer builders do not yet fully consume those fields.
 
-### 16.3 Query understanding is brittle
+### 16.3 Query understanding is improved but still heuristic
 
-Intent classification and entity extraction are regex-only. This causes predictable failure modes:
+Query understanding now emits a scored intent/entity contract and extracts env keys, dependency names, route/API terms, config keys, files, and symbols. Exact entity promotion uses those extracted terms before probabilistic ranking.
+
+Remaining predictable failure modes:
 
 - broad semantic questions can be misread as symbol-level questions
-- file detection is limited to code extensions
-- dependency phrasing is narrow
+- service names are not reliable until structured non-code metadata exists
+- architecture intent is detected but not yet routed through a dedicated architecture assembly path
 - follow-up rewriting is based on shallow markers, not discourse understanding
+- topic-shift behavior is specified in the plan but not implemented as an entity-memory flow yet
 
-### 16.4 Metadata search is exact-match only
+### 16.4 Lexical retrieval is first-pass and still experimental
 
-There is no true sparse lexical retrieval layer such as BM25. That means:
+The code now includes an optional in-process BM25-style lexical layer, but it is still a first-pass implementation and disabled by default. Remaining limitations:
 
-- symbol aliases are weakly handled
-- text-heavy questions over summaries/config/docs are weak
-- dense retrieval has to do too much work alone
+- cache invalidation is process-local
+- multi-worker deployments can rebuild indexes independently
+- tuning still depends on broader eval coverage
+- weighted fusion is intentionally deferred until baselines exist
 
 ### 16.5 Import-backed evidence is narrow
 
@@ -714,9 +853,9 @@ The explanation builder is optimized for component/data-export cases. It is less
 
 If the goal is better response quality, the current best next steps are clear.
 
-### 17.1 Highest priority: ingest non-code repository evidence
+### 17.1 Highest priority: deepen non-code repository evidence
 
-Add first-class ingestion support for:
+The baseline support now exists, but the next step is to deepen it for:
 
 - `README.md`
 - `package.json`
@@ -734,7 +873,7 @@ Recommended approach:
 - store parsed metadata in payload fields
 - keep raw excerpt content for direct citation
 
-This single change will improve:
+Deepening this layer will further improve:
 
 - project overview
 - tech stack answers
@@ -743,20 +882,29 @@ This single change will improve:
 
 more than prompt tuning will.
 
-### 17.2 Add a true lexical retrieval layer
+### 17.2 Validate and tune lexical retrieval
 
-Add BM25 or equivalent sparse retrieval over:
+The first lexical layer now exists. Next work is validation and tuning:
 
-- file content
-- chunk summaries
-- paths
-- symbol names
+- run retrieval evals with `RETRIEVAL_ENABLE_LEXICAL=0` and `RETRIEVAL_ENABLE_LEXICAL=1`
+- use `RETRIEVAL_ENABLE_DENSE=0` for offline lexical/metadata evals when the embedding model is not cached locally
+- add exact-wording evals for env keys, config keys, dependency names, and README phrases
+- measure memory and latency cost of lazy per-collection indexing
+- tune fusion only after baselines exist
 
-Then fuse:
+Initial baseline results are recorded in [Lexical Retrieval Baseline Results](./eval_results_lexical_baseline.md). The first run showed that lexical retrieval should remain disabled by default because it did not improve `hit@10` and reduced MRR on the exact-wording eval.
 
-- dense search
-- sparse search
-- metadata filters
+The later scored-intent/exact-entity promotion pass improved the default dense path on the same exact-wording eval from `hit@10 0.500` to `0.750` without enabling lexical retrieval. That makes structured extraction the better next step than enabling BM25 by default.
+
+After structured non-code metadata extraction and re-ingestion, the backend collection contains `753` chunks from `122` parsed files. The exact-wording eval remained at `hit@10 0.750` with lexical disabled, improved `expected_framework_score` to `1.000`, and still showed lexical-enabled MRR below the lexical-off default path. Lexical should therefore remain disabled by default.
+
+After repo-summary artifact re-ingestion, the backend collection contains `763` chunks from `123` parsed files. The lexical-off exact-wording eval stayed stable at `hit@10 0.750`, `mrr@10 0.383`, `expected_framework_score 1.000`, and `expected_dependency_score 0.875`.
+
+The refreshed collection now includes the synthetic `__repo_summary__.md` chunk. Overview retrieval and deterministic overview answers prefer that chunk over ordinary README/package/config chunks. Incremental ingestion refreshes unchanged repo-summary evidence files so the synthetic summary is not rebuilt from only the changed-file subset.
+
+The multi-repo eval suite now uses committed fixture repos for frontend-heavy, backend-heavy, infra-heavy, and mixed/monorepo shapes, plus CodeSeek exact-wording and phase-1 flow regressions. The latest lexical-off run passed thresholds with `24` cases, weighted `hit@10 0.917`, weighted `mrr@10 0.712`, weighted citation coverage `0.937`, expected response-mode score `1.000`, and expected framework/dependency scores of `1.000`.
+
+The phase-1 flow eval verifies `flow_summary` routing, citations, answer terms, varied auth wording, and deterministic latency. Latest flow-only metrics are `4` cases, `hit@10 1.000`, `mrr@10 1.000`, citation coverage `1.000`, response-mode score `1.000`, answer-term score `1.000`, latency p50 `155 ms`, and latency p95 `168 ms`.
 
 This will materially improve:
 
@@ -834,7 +982,7 @@ If improving answer quality is the near-term goal, the best order is:
 
 1. Index non-code overview/config files.
 2. Add sparse lexical retrieval and merge it with dense retrieval.
-3. Create a repo-summary chunk during ingestion.
+3. Re-ingest and evaluate the repo-summary chunk across representative repos.
 4. Expand import/dependency tracing beyond named JS/TS imports.
 5. Widen reasoning sources while keeping displayed citations selective.
 6. Add quality eval sets for overview and architecture questions.

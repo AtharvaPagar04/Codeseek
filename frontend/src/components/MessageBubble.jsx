@@ -112,7 +112,18 @@ export default function MessageBubble({ message }) {
   const handleCopyResponse = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
     if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
+    const sourceLines = Array.isArray(message.sources)
+      ? message.sources
+          .map((src) => {
+            const file = src.file || src.relative_path || '';
+            const symbol = src.symbol || src.symbol_name || '';
+            const lines = src.lines || formatLines(src.start_line, src.end_line);
+            return `${file}${symbol ? ` :: ${symbol}` : ''}${lines ? ` (lines ${lines})` : ''}`;
+          })
+          .filter(Boolean)
+      : [];
+    const fullText = sourceLines.length > 0 ? `${text}\n\nSources:\n${sourceLines.join('\n')}` : text;
+    navigator.clipboard.writeText(fullText).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });

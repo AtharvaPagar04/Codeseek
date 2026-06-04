@@ -9,10 +9,12 @@ from retrieval.assembler import assemble
 from retrieval.code_answers import (
     build_explanation_answer,
     build_code_answer,
+    build_flow_answer,
     build_overview_answer,
     find_supporting_import_exports,
     is_code_request,
     is_explanation_request,
+    is_flow_explanation_request,
     is_overview_request,
 )
 from retrieval.config import (
@@ -87,6 +89,10 @@ def run_query(
     metrics.add_stage("assemble", started)
     meta["source_filter"] = explain_source_filter_decision(raw_query, sources)
     shown_sources = select_sources_for_display(raw_query, sources)
+    if is_flow_explanation_request(raw_query):
+        flow_sources = select_sources_for_display(raw_query, expanded)
+        if flow_sources:
+            shown_sources = flow_sources
     if not shown_sources:
         answer = LOW_CONTEXT_FALLBACK
         memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
@@ -95,6 +101,7 @@ def run_query(
                 "stage_latency_ms": metrics.stage_latency_ms,
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
+                "response_mode": "low_context",
             }
         )
         log_event(
@@ -150,6 +157,7 @@ def run_query(
                 "stage_latency_ms": metrics.stage_latency_ms,
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
+                "response_mode": "code_excerpt",
             }
         )
         log_event(
@@ -175,6 +183,7 @@ def run_query(
                 "stage_latency_ms": metrics.stage_latency_ms,
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
+                "response_mode": "overview_summary",
             }
         )
         log_event(
@@ -192,6 +201,39 @@ def run_query(
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
+    if is_flow_explanation_request(raw_query):
+        answer, flow_sources = build_flow_answer(
+            raw_query,
+            shown_sources,
+            llm_chunks or expanded,
+            return_sources=True,
+        )
+        if flow_sources:
+            shown_sources = flow_sources
+        memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "errors": metrics.errors,
+                "response_mode": "flow_summary",
+            }
+        )
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(shown_sources),
+            source_filter=meta["source_filter"],
+            response_mode="flow_summary",
+        )
+        if return_meta:
+            return answer, shown_sources, token_count, meta
+        return answer, shown_sources, token_count
     if is_explanation_request(raw_query):
         answer = build_explanation_answer(raw_query, shown_sources, llm_chunks or expanded)
         memory.add(raw_query, answer, resolved_query=_resolved_query_text(query_info, raw_query))
@@ -200,6 +242,7 @@ def run_query(
                 "stage_latency_ms": metrics.stage_latency_ms,
                 "total_latency_ms": metrics.total_ms(),
                 "errors": metrics.errors,
+                "response_mode": "explanation_summary",
             }
         )
         log_event(
@@ -268,6 +311,7 @@ def run_query(
             "stage_latency_ms": metrics.stage_latency_ms,
             "total_latency_ms": metrics.total_ms(),
             "errors": metrics.errors,
+            "response_mode": "llm",
         }
     )
     log_event(

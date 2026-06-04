@@ -158,7 +158,15 @@ export default function RepoPickerModal({
               )}
 
               {reposError && (
-                <div className="p-4 text-sm text-offline/80 text-center">{reposError}</div>
+                <div className="p-4 text-sm text-offline/80 text-center space-y-3">
+                  <div>{reposError}</div>
+                  <button
+                    onClick={() => onLoadRepos?.()}
+                    className="rounded-full border border-border px-3 py-1 text-xs font-mono text-text-secondary hover:text-text-primary hover:border-text-muted transition-colors"
+                  >
+                    Retry Repo Load
+                  </button>
+                </div>
               )}
 
               {!reposLoading && !reposError && filtered.length === 0 && (

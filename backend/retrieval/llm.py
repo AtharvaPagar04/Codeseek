@@ -51,6 +51,15 @@ _llm_failures = 0
 _llm_circuit_open_until = 0.0
 
 
+class LlmProviderError(Exception):
+    """Structured upstream-provider failure surfaced to the API layer."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = int(status_code)
+        self.detail = detail
+
+
 def generate_answer(
     raw_query: str,
     context: str,
@@ -175,11 +184,17 @@ def _provider_answer(prompt: str, provider: str, api_key: str, model: str) -> st
     now = time.time()
     if _llm_circuit_open_until > now:
         remaining = int(_llm_circuit_open_until - now)
-        return f"LLM temporarily unavailable (circuit open for {remaining}s)."
+        raise LlmProviderError(
+            503,
+            f"LLM provider temporarily unavailable. Retry after {remaining}s.",
+        )
 
     last_exc: Exception | None = None
     if provider == "unsupported":
-        return f"Unsupported LLM provider: {model}"
+        raise LlmProviderError(
+            400,
+            f"Unsupported LLM provider configuration: {model}",
+        )
     for attempt in range(1, RETRIEVAL_RETRY_ATTEMPTS + 1):
         try:
             response = _chat_completion_request(
@@ -199,7 +214,7 @@ def _provider_answer(prompt: str, provider: str, api_key: str, model: str) -> st
     _llm_failures += 1
     if _llm_failures >= RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD:
         _llm_circuit_open_until = time.time() + RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS
-    return f"LLM call failed after retries: {last_exc}"
+    raise _classify_provider_error(last_exc)
 
 
 def _chat_completion_request(
@@ -256,6 +271,43 @@ def _provider_endpoint(provider: str, api_key: str) -> tuple[str, dict[str, str]
             {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
     raise ValueError(f"Unsupported provider: {provider}")
+
+
+def _classify_provider_error(exc: Exception | None) -> LlmProviderError:
+    if isinstance(exc, LlmProviderError):
+        return exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429:
+            return LlmProviderError(
+                429,
+                "Provider rate limit reached. Wait and retry, or switch provider credentials.",
+            )
+        if status in {401, 403}:
+            return LlmProviderError(
+                400,
+                "Provider API key rejected or lacks permission.",
+            )
+        if 400 <= status < 500:
+            return LlmProviderError(
+                400,
+                f"Provider request rejected ({status}). Check provider, model, and key configuration.",
+            )
+        return LlmProviderError(
+            502,
+            f"Provider request failed upstream ({status}).",
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return LlmProviderError(
+            504,
+            "Provider request timed out. Retry or choose a faster model.",
+        )
+    if exc is None:
+        return LlmProviderError(502, "Provider request failed after retries.")
+    return LlmProviderError(
+        502,
+        f"Provider request failed after retries: {type(exc).__name__}.",
+    )
 
 
 def _extract_message_content(response: dict[str, Any]) -> str:

@@ -8,6 +8,7 @@ export default function SessionView({
   session,
   appendMessage,
   onClearMessages,
+  onRetryIndexing,
 }) {
   const [input, setInput] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
@@ -70,7 +71,12 @@ export default function SessionView({
       {!hasMessages ? (
         <div className="flex-1 flex flex-col items-center justify-center px-5 min-h-0">
           {statusMessage && (
-            <StatusNotice tone={session.status === 'failed' ? 'error' : 'info'} message={statusMessage} />
+            <StatusNotice
+              tone={session.status === 'failed' ? 'error' : 'info'}
+              message={statusMessage}
+              actionLabel={session.status === 'failed' ? 'Retry indexing' : ''}
+              onAction={session.status === 'failed' ? () => onRetryIndexing?.(session.id) : undefined}
+            />
           )}
           <EmptyState
             repoName={session.repo_id}
@@ -108,7 +114,12 @@ export default function SessionView({
         <>
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
             {statusMessage && (
-              <StatusNotice tone={session.status === 'failed' ? 'error' : 'info'} message={statusMessage} />
+              <StatusNotice
+                tone={session.status === 'failed' ? 'error' : 'info'}
+                message={statusMessage}
+                actionLabel={session.status === 'failed' ? 'Retry indexing' : ''}
+                onAction={session.status === 'failed' ? () => onRetryIndexing?.(session.id) : undefined}
+              />
             )}
             {(activeThread?.messages || []).map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
@@ -178,14 +189,24 @@ function statusCopy(session) {
   return '';
 }
 
-function StatusNotice({ tone, message }) {
+function StatusNotice({ tone, message, actionLabel = '', onAction = null }) {
   const toneClass =
     tone === 'error'
       ? 'border-offline/40 bg-offline/10 text-offline'
       : 'border-warning/40 bg-warning/10 text-warning';
   return (
     <div className={`w-full max-w-xl mb-4 rounded-xl border px-4 py-3 text-xs font-mono leading-relaxed ${toneClass}`}>
-      {message}
+      <div className="flex items-start justify-between gap-3">
+        <div>{message}</div>
+        {actionLabel && onAction && (
+          <button
+            onClick={onAction}
+            className="shrink-0 rounded-full border border-current/30 px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors hover:bg-black/10"
+          >
+            {actionLabel}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

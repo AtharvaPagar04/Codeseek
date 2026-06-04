@@ -6,6 +6,7 @@ import {
   applyClearSessionMessages,
   applySetSessionThreads,
   applySetThreadMessages,
+  normalizeSessionRecord,
 } from './useSessions.js';
 
 function baseSessions() {
@@ -117,4 +118,26 @@ test('setSessionThreads falls back to first visible thread when active thread di
 
   assert.equal(next[0].active_thread_id, 'thread-c');
   assert.equal(next[0].threads.length, 1);
+});
+
+test('normalizeSessionRecord preserves local thread state when backend reuses a session', () => {
+  const next = normalizeSessionRecord(
+    {
+      id: 'session-1',
+      repo_full_name: 'org/repo-one',
+      status: 'ready',
+      error: '',
+      created_at: '2026-06-03T00:00:00.000Z',
+    },
+    baseSessions()[0],
+    {
+      now: '2026-06-03T02:00:00.000Z',
+      lastActive: '2026-06-03T02:00:00.000Z',
+    }
+  );
+
+  assert.equal(next.active_thread_id, 'thread-a');
+  assert.equal(next.threads.length, 2);
+  assert.equal(next.threads[0].messages[0].content, 'active message');
+  assert.equal(next.last_active, '2026-06-03T02:00:00.000Z');
 });

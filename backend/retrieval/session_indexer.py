@@ -16,6 +16,7 @@ from rag_ingestion.main import run_pipeline
 from retrieval.config import QDRANT_HOST, QDRANT_PORT
 from retrieval.db import db_cursor, init_db
 from retrieval.isolation import expected_collection_name
+from retrieval.searcher import invalidate_lexical_index
 from retrieval.thread_store import ensure_default_thread
 
 WORKSPACE_ROOT = Path(
@@ -343,6 +344,7 @@ def _index_job(session_id: str) -> None:
             )
             return
         counters = run_pipeline(str(repo_root), collection_name=session["collection"])
+        invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
         if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
             raise RuntimeError("Ingestion completed but no embeddings were stored")

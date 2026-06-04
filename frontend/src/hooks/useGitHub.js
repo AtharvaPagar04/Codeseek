@@ -6,7 +6,7 @@ import {
   logoutGithubSession,
 } from '../utils/api';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export function useGitHub() {
   const [username, setUsername] = useState(null);
@@ -17,23 +17,31 @@ export function useGitHub() {
   const [isConnected, setIsConnected] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthError, setOauthError] = useState(null);
+  const [authStateMessage, setAuthStateMessage] = useState(null);
 
   const loadAuthState = useCallback(async () => {
     try {
       const data = await fetchGithubSessionMe();
       if (!data?.authenticated || !data.user) {
+        setAuthStateMessage((current) =>
+          isConnected ? 'GitHub session expired. Reconnect to list repositories and create sessions.' : current
+        );
         setIsConnected(false);
         setUsername(null);
         setAvatarUrl(null);
         return;
       }
+      setAuthStateMessage(null);
       setIsConnected(true);
       setUsername(data.user.username || null);
       setAvatarUrl(data.user.avatar_url || null);
     } catch {
+      setAuthStateMessage((current) =>
+        isConnected ? 'GitHub session expired. Reconnect to continue.' : current
+      );
       setIsConnected(false);
     }
-  }, []);
+  }, [isConnected]);
 
   useEffect(() => {
     loadAuthState();
@@ -121,6 +129,7 @@ export function useGitHub() {
     setUsername(null);
     setAvatarUrl(null);
     setRepos([]);
+    setAuthStateMessage(null);
   }, []);
 
   return {
@@ -132,6 +141,7 @@ export function useGitHub() {
     reposError,
     oauthLoading,
     oauthError,
+    authStateMessage,
     initiateOAuth,
     storeAuth,
     fetchRepos,

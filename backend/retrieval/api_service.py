@@ -39,6 +39,7 @@ from retrieval.github_store import get_github_credential, upsert_github_credenti
 from retrieval.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
+from retrieval.llm import LlmProviderError
 from retrieval.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -608,6 +609,18 @@ def _query_impl(
                 "source_filter": meta.get("source_filter", {}),
             },
         }
+    except LlmProviderError as exc:
+        total_ms = int((time.perf_counter() - started) * 1000)
+        observe_api_request(path, str(exc.status_code), total_ms)
+        RETRIEVAL_ERRORS_TOTAL.labels(error_type="provider").inc()
+        log_event(
+            "api.query.error",
+            request_id,
+            error=exc.detail,
+            status_code=exc.status_code,
+            total_latency_ms=total_ms,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except HTTPException:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, "error", total_ms)

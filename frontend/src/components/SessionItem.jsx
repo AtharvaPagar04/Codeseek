@@ -24,6 +24,24 @@ function getExcerpt(messages) {
   return stripped.length > 60 ? stripped.slice(0, 60) + '…' : stripped;
 }
 
+function getSessionExcerpt(session) {
+  const activeThread =
+    session.threads?.find((thread) => thread.id === session.active_thread_id) ||
+    session.threads?.[0] ||
+    null;
+  return getExcerpt(activeThread?.messages || []);
+}
+
+function statusBadge(session) {
+  if (session.status === 'failed') {
+    return { label: 'Failed', className: 'text-offline border-offline/30 bg-offline/10' };
+  }
+  if (session.status && session.status !== 'ready') {
+    return { label: 'Indexing', className: 'text-warning border-warning/30 bg-warning/10' };
+  }
+  return { label: 'Ready', className: 'text-online border-online/30 bg-online/10' };
+}
+
 function getRelativeTime(iso) {
   if (!iso) return '';
   try {
@@ -35,6 +53,7 @@ function getRelativeTime(iso) {
 
 export default function SessionItem({ session, isActive, onSelect, onDelete }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const badge = statusBadge(session);
 
   const handleDelete = (e) => {
     e.stopPropagation();
@@ -67,9 +86,13 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
               {session.repo_id}
             </div>
             <div className="text-xs text-text-muted truncate mt-0.5">
-              {getExcerpt(session.messages)}
+              {getSessionExcerpt(session)}
             </div>
           </div>
+
+          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide ${badge.className}`}>
+            {badge.label}
+          </span>
 
           {/* Delete button — visible on hover */}
           <button

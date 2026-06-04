@@ -9,6 +9,27 @@ export const sortByLastActive = (sessions) =>
 export const normalizeThreads = (threads) =>
   Array.isArray(threads) ? threads.map((thread) => ({ ...thread, messages: thread.messages || [] })) : [];
 
+export const normalizeSessionRecord = (sessionData, current = null, options = {}) => {
+  const now = options.now || new Date().toISOString();
+  const repoFullName = sessionData.repo_full_name || current?.repo_full_name || '';
+  const repoId = repoFullName.split('/').pop() || sessionData.repo_id || current?.repo_id || 'repository';
+  const createdAt = sessionData.created_at || current?.created_at || now;
+  return {
+    ...current,
+    id: sessionData.id,
+    repo_id: repoId,
+    repo_full_name: repoFullName,
+    repo_description: sessionData.repo_description || current?.repo_description || '',
+    repo_private: sessionData.repo_private ?? current?.repo_private ?? false,
+    status: sessionData.status || current?.status || 'indexing',
+    error: sessionData.error || '',
+    created_at: createdAt,
+    last_active: options.lastActive || current?.last_active || sessionData.updated_at || createdAt,
+    threads: current?.threads || [],
+    active_thread_id: current?.active_thread_id || current?.threads?.[0]?.id || null,
+  };
+};
+
 export const applyClearSessionMessages = (sessions, sessionId, now) => {
   const next = sessions.map((session) =>
     session.id === sessionId
@@ -85,26 +106,17 @@ export function useSessions() {
 
   const addSession = useCallback((sessionData) => {
     const now = new Date().toISOString();
-    const repoFullName = sessionData.repo_full_name || '';
-    const repoId = repoFullName.split('/').pop() || sessionData.repo_id || 'repository';
-    const newSession = {
-      id: sessionData.id,
-      repo_id: repoId,
-      repo_full_name: repoFullName,
-      repo_description: sessionData.repo_description || '',
-      repo_private: sessionData.repo_private ?? false,
-      status: sessionData.status || 'indexing',
-      error: sessionData.error || '',
-      created_at: sessionData.created_at || now,
-      last_active: now,
-      threads: [],
-      active_thread_id: null,
-    };
-    setSessions((prev) =>
-      sortByLastActive([newSession, ...prev.filter((s) => s.id !== newSession.id)])
-    );
+    const newSession = normalizeSessionRecord(sessionData, sessions.find((s) => s.id === sessionData.id) || null, {
+      now,
+      lastActive: now,
+    });
+    setSessions((prev) => {
+      const current = prev.find((s) => s.id === sessionData.id) || null;
+      const merged = normalizeSessionRecord(sessionData, current, { now, lastActive: now });
+      return sortByLastActive([merged, ...prev.filter((s) => s.id !== merged.id)]);
+    });
     return newSession;
-  }, []);
+  }, [sessions]);
 
   const deleteSession = useCallback((sessionId) => {
     setSessions((prev) => sortByLastActive(prev.filter((s) => s.id !== sessionId)));
@@ -165,20 +177,12 @@ export function useSessions() {
       const byId = new Map(prev.map((s) => [s.id, s]));
       for (const b of backendSessions) {
         const current = byId.get(b.id);
-        const repoFullName = b.repo_full_name || current?.repo_full_name || '';
-        const repoId = repoFullName.split('/').pop() || current?.repo_id || 'repository';
-        byId.set(b.id, {
-          ...current,
-          id: b.id,
-          repo_id: repoId,
-          repo_full_name: repoFullName,
-          status: b.status || current?.status || 'indexing',
-          error: b.error || '',
-          created_at: b.created_at || current?.created_at,
-          last_active: current?.last_active || b.updated_at || b.created_at,
-          threads: current?.threads || [],
-          active_thread_id: current?.active_thread_id || null,
-        });
+        byId.set(
+          b.id,
+          normalizeSessionRecord(b, current, {
+            lastActive: current?.last_active || b.updated_at || b.created_at,
+          })
+        );
       }
       const backendIds = new Set(backendSessions.map((s) => s.id));
       const merged = [...byId.values()].filter((s) => backendIds.has(s.id));

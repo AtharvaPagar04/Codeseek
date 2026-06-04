@@ -16,6 +16,7 @@ import {
   fetchThreadMessages,
   listSessions,
   listSessionThreads,
+  retrySessionIndexing,
 } from './utils/api';
 
 function Shell() {
@@ -38,6 +39,7 @@ function Shell() {
     reposError,
     oauthLoading,
     oauthError,
+    authStateMessage,
     initiateOAuth,
     storeAuth,
     fetchRepos,
@@ -48,6 +50,7 @@ function Shell() {
   const [modalOpen, setModalOpen] = useState(false);
   const [apiModalOpen, setApiModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
+  const [uiNotice, setUiNotice] = useState(null);
   const pollingErrorShownRef = useRef(false);
 
   // Keep active session in sync when sessions change
@@ -122,16 +125,28 @@ function Shell() {
 
   const handleSelectRepo = async (repo) => {
     try {
+      const existing = sessions.find((session) => session.repo_full_name === repo.full_name);
       const created = await createSession({
         repoFullName: repo.full_name,
         repoUrl: repo.clone_url || `https://github.com/${repo.full_name}.git`,
       });
       const newSession = addSession(created);
       setActiveSessionId(newSession.id);
+      setUiNotice(
+        existing
+          ? {
+              tone: 'info',
+              message: `Opened existing session for ${repo.full_name}.`,
+            }
+          : {
+              tone: 'success',
+              message: `Created session for ${repo.full_name}. Indexing will continue in the background.`,
+            }
+      );
       setModalOpen(false);
       setSidebarOpen(false);
     } catch (err) {
-      alert(err.message || 'Failed to create session.');
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to create session.' });
     }
   };
 
@@ -140,11 +155,27 @@ function Shell() {
       await deleteSessionApi(sessionId);
     } catch (err) {
       console.warn('[sessions] delete api failed:', err.message);
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to delete session.' });
+      return;
     }
     deleteSession(sessionId);
     if (sessionId === activeSessionId) {
       const remaining = sessions.filter((s) => s.id !== sessionId);
       setActiveSessionId(remaining[0]?.id ?? null);
+    }
+    setUiNotice({ tone: 'info', message: 'Session deleted.' });
+  };
+
+  const handleRetryIndexing = async (sessionId) => {
+    try {
+      const session = await retrySessionIndexing(sessionId);
+      addSession(session);
+      setUiNotice({
+        tone: 'info',
+        message: `Retrying indexing for ${session.repo_full_name}.`,
+      });
+    } catch (err) {
+      setUiNotice({ tone: 'error', message: err.message || 'Failed to retry indexing.' });
     }
   };
 
@@ -162,7 +193,32 @@ function Shell() {
         isMobile={isMobile}
         onOpenApiTokens={() => setApiModalOpen(true)}
         activeSession={activeSession}
+        githubNotice={authStateMessage}
       />
+      {uiNotice && (
+        <div className="px-4 pt-3">
+          <div
+            className={`mx-auto max-w-4xl rounded-xl border px-4 py-3 text-xs font-mono ${
+              uiNotice.tone === 'error'
+                ? 'border-offline/40 bg-offline/10 text-offline'
+                : uiNotice.tone === 'success'
+                  ? 'border-online/40 bg-online/10 text-online'
+                  : 'border-border bg-surface-3/80 text-text-secondary'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span>{uiNotice.message}</span>
+              <button
+                onClick={() => setUiNotice(null)}
+                className="shrink-0 text-text-muted hover:text-text-primary"
+                aria-label="Dismiss notice"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
         {/* Sidebar — desktop: toggleable, mobile: overlay drawer */}
@@ -205,6 +261,7 @@ function Shell() {
               key={activeSession.id}
               session={activeSession}
               appendMessage={appendMessage}
+              onRetryIndexing={handleRetryIndexing}
               onClearMessages={async (sessionId) => {
                 try {
                   const activeThreadId = activeSession.active_thread_id;
@@ -215,6 +272,7 @@ function Shell() {
                   }
                 } catch (err) {
                   console.warn('[sessions] clear messages api failed:', err.message);
+                  setUiNotice({ tone: 'error', message: err.message || 'Failed to clear messages.' });
                 }
                 clearSessionMessages(sessionId);
               }}

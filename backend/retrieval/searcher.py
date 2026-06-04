@@ -1,6 +1,8 @@
 """Qdrant search stage for retrieval."""
 
 from collections import defaultdict
+from dataclasses import dataclass
+import math
 from pathlib import Path
 import re
 import time
@@ -10,6 +12,8 @@ from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 from sentence_transformers import SentenceTransformer
 
 from retrieval.config import (
+    ENABLE_DENSE_RETRIEVAL,
+    ENABLE_LEXICAL_RETRIEVAL,
     EMBEDDING_MODEL,
     QDRANT_HOST,
     QDRANT_PORT,
@@ -21,6 +25,7 @@ from retrieval.config import (
     RETRIEVAL_RETRY_BACKOFF_SECONDS,
     TOP_K_AFTER_MERGE,
     TOP_K_DENSE,
+    TOP_K_LEXICAL,
     get_collection_name,
     get_repo_root,
 )
@@ -30,6 +35,21 @@ _model = None
 _model_unavailable = False
 _qdrant_failures = 0
 _qdrant_circuit_open_until = 0.0
+_lexical_indexes: dict[str, "_LexicalIndex"] = {}
+
+
+@dataclass
+class _LexicalDocument:
+    payload: dict
+    tokens: list[str]
+
+
+@dataclass
+class _LexicalIndex:
+    collection: str
+    documents: list[_LexicalDocument]
+    document_frequency: dict[str, int]
+    average_length: float
 
 
 def _get_client():
@@ -85,10 +105,12 @@ def search(query_info: dict) -> list[dict]:
     entities = query_info["entities"]
 
     dense_results = _dense_search(raw_query)
+    lexical_results = _lexical_search(raw_query) if ENABLE_LEXICAL_RETRIEVAL else []
     filter_results = _metadata_search(raw_query, entities)
+    exact_entity_results = _exact_entity_search(entities)
     dependency_results = _dependency_search(entities) if intent == "DEPENDENCY" else []
 
-    merged = _merge_results(dense_results, filter_results, dependency_results)
+    merged = _merge_results(dense_results, lexical_results, filter_results, exact_entity_results, dependency_results)
     if _is_overview_query(raw_query):
         merged = _inject_overview_candidates(merged)
     merged = _inject_import_backing_candidates(raw_query, merged)
@@ -97,6 +119,8 @@ def search(query_info: dict) -> list[dict]:
 
 
 def _dense_search(raw_query: str):
+    if not ENABLE_DENSE_RETRIEVAL:
+        return []
     model = _get_model()
     if model is None:
         return []
@@ -197,7 +221,7 @@ def _metadata_search(raw_query: str, entities: dict):
                 payload = hit.payload or {}
                 relative_path = str(payload.get("relative_path", "")).lower()
                 if key.lower() in relative_path:
-                    results.append((payload, 0.0, "filter"))
+                    results.append((payload, 0.0, "metadata"))
 
     # Raw-query path hints for cases without explicit symbol extraction.
     raw_lower = raw_query.lower()
@@ -220,7 +244,7 @@ def _metadata_search(raw_query: str, entities: dict):
             payload = hit.payload or {}
             relative_path = str(payload.get("relative_path", "")).lower()
             if key.lower() in relative_path:
-                results.append((payload, 0.0, "filter"))
+                results.append((payload, 0.0, "metadata"))
 
     return results
 
@@ -245,20 +269,285 @@ def _dependency_search(entities: dict):
     return results
 
 
+def _exact_entity_search(entities: dict) -> list[tuple[dict, float, str]]:
+    terms = _entity_exact_terms(entities)
+    if not terms:
+        return []
+
+    collection = get_collection_name()
+    payloads = _scroll_collection_payloads(collection, max_points=1500)
+    results: list[tuple[dict, float, str]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        chunk_id = str(payload.get("chunk_id", "")).strip()
+        if not chunk_id or chunk_id in seen:
+            continue
+        score = _exact_entity_score(payload, terms)
+        if score <= 0:
+            continue
+        exact_payload = dict(payload)
+        exact_payload["exact_entity_score"] = score
+        results.append((exact_payload, score, "exact_entity"))
+        seen.add(chunk_id)
+    results.sort(key=lambda item: -item[1])
+    return results[:TOP_K_AFTER_MERGE]
+
+
+def _entity_exact_terms(entities: dict) -> list[str]:
+    terms: list[str] = []
+    for key in ("env_keys", "dependencies", "config_keys", "routes", "api_terms", "exact_terms"):
+        value = entities.get(key) or []
+        if isinstance(value, str):
+            terms.append(value)
+        elif isinstance(value, list):
+            terms.extend(str(item) for item in value)
+    cleaned = []
+    for term in terms:
+        value = term.strip()
+        if len(value) < 3:
+            continue
+        cleaned.append(value)
+    return sorted(set(cleaned), key=str.lower)
+
+
+def _exact_entity_score(payload: dict, terms: list[str]) -> float:
+    text = _exact_entity_text(payload)
+    lowered_text = text.lower()
+    structured_terms = _payload_structured_entity_terms(payload)
+    score = 0.0
+    for term in terms:
+        lowered = term.lower()
+        if term in structured_terms or lowered in structured_terms:
+            score += 4.0
+        elif term in text:
+            score += 3.0
+        elif lowered in lowered_text:
+            score += 2.0
+    return score
+
+
+def _exact_entity_text(payload: dict) -> str:
+    return " ".join(
+        str(part)
+        for part in (
+            payload.get("relative_path", ""),
+            payload.get("symbol_name", ""),
+            payload.get("qualified_symbol", ""),
+            payload.get("summary", ""),
+            payload.get("content_excerpt", ""),
+        )
+        if part
+    )
+
+
+def _payload_structured_entity_terms(payload: dict) -> set[str]:
+    terms: set[str] = set()
+    for key in (
+        "env_keys",
+        "dependencies",
+        "dev_dependencies",
+        "detected_frameworks",
+        "services",
+        "ports",
+        "entrypoints",
+        "config_tools",
+        "routes",
+        "api_terms",
+        "summary_facts",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list):
+            for item in value:
+                terms.add(str(item))
+                terms.add(str(item).lower())
+        elif isinstance(value, dict):
+            for dict_key, dict_value in value.items():
+                terms.add(str(dict_key))
+                terms.add(str(dict_key).lower())
+                if isinstance(dict_value, list):
+                    for item in dict_value:
+                        terms.add(str(item))
+                        terms.add(str(item).lower())
+                elif dict_value:
+                    terms.add(str(dict_value))
+                    terms.add(str(dict_value).lower())
+        elif value:
+            terms.add(str(value))
+            terms.add(str(value).lower())
+    return terms
+
+
+def invalidate_lexical_index(collection_name: str | None = None) -> None:
+    """Invalidate cached lexical indexes after ingestion updates a collection."""
+    if collection_name:
+        _lexical_indexes.pop(collection_name, None)
+        return
+    _lexical_indexes.clear()
+
+
+def _lexical_search(raw_query: str) -> list[tuple[dict, float, str]]:
+    query_tokens = _lexical_tokens(raw_query)
+    if not query_tokens:
+        return []
+    collection = get_collection_name()
+    index = _get_lexical_index(collection)
+    if not index.documents:
+        return []
+
+    scored: list[tuple[dict, float, str]] = []
+    for document in index.documents:
+        score = _bm25_score(query_tokens, document.tokens, index)
+        if score <= 0:
+            continue
+        scored.append((document.payload, score, "lexical"))
+    scored.sort(key=lambda item: -item[1])
+    return scored[:TOP_K_LEXICAL]
+
+
+def _get_lexical_index(collection: str) -> _LexicalIndex:
+    cached = _lexical_indexes.get(collection)
+    if cached is not None:
+        return cached
+
+    payloads = _scroll_collection_payloads(collection)
+    documents: list[_LexicalDocument] = []
+    document_frequency: dict[str, int] = defaultdict(int)
+    total_length = 0
+    for payload in payloads:
+        if not payload.get("chunk_id"):
+            continue
+        tokens = _lexical_tokens(_lexical_document_text(payload))
+        if not tokens:
+            continue
+        documents.append(_LexicalDocument(payload=dict(payload), tokens=tokens))
+        total_length += len(tokens)
+        for token in set(tokens):
+            document_frequency[token] += 1
+
+    index = _LexicalIndex(
+        collection=collection,
+        documents=documents,
+        document_frequency=dict(document_frequency),
+        average_length=(total_length / len(documents)) if documents else 0.0,
+    )
+    _lexical_indexes[collection] = index
+    return index
+
+
+def _scroll_collection_payloads(collection: str, limit: int = 256, max_points: int = 5000) -> list[dict]:
+    client = _get_client()
+    payloads: list[dict] = []
+    offset = None
+    while len(payloads) < max_points:
+        response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            limit=min(limit, max_points - len(payloads)),
+            offset=offset,
+            with_payload=True,
+        ))
+        if response is None:
+            break
+        hits, offset = response
+        payloads.extend(hit.payload or {} for hit in hits)
+        if not offset:
+            break
+    return payloads
+
+
+def _lexical_document_text(payload: dict) -> str:
+    parts = [
+        payload.get("relative_path", ""),
+        payload.get("symbol_name", ""),
+        payload.get("qualified_symbol", ""),
+        payload.get("chunk_type", ""),
+        payload.get("language", ""),
+        payload.get("signature", ""),
+        payload.get("docstring", ""),
+        payload.get("summary", ""),
+        payload.get("content_excerpt", ""),
+    ]
+    for key in (
+        "imports",
+        "calls",
+        "parameters",
+        "methods",
+        "file_symbols",
+        "env_keys",
+        "dependencies",
+        "dev_dependencies",
+        "detected_frameworks",
+        "services",
+        "entrypoints",
+        "config_tools",
+        "routes",
+        "api_terms",
+        "summary_facts",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif isinstance(value, dict):
+            parts.extend(str(item) for item in value)
+            parts.extend(str(item) for item in value.values())
+        elif value:
+            parts.append(str(value))
+    return " ".join(str(part) for part in parts if part)
+
+
+def _lexical_tokens(text: str) -> list[str]:
+    raw = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{1,}", text.lower())
+    tokens: list[str] = []
+    for token in raw:
+        tokens.append(token)
+        if "_" in token:
+            tokens.extend(part for part in token.split("_") if len(part) > 1)
+    return tokens
+
+
+def _bm25_score(query_tokens: list[str], document_tokens: list[str], index: _LexicalIndex) -> float:
+    if not document_tokens or not index.documents:
+        return 0.0
+    term_frequency: dict[str, int] = defaultdict(int)
+    for token in document_tokens:
+        term_frequency[token] += 1
+
+    k1 = 1.5
+    b = 0.75
+    document_count = len(index.documents)
+    doc_len = len(document_tokens)
+    avg_len = index.average_length or 1.0
+    score = 0.0
+    for token in set(query_tokens):
+        tf = term_frequency.get(token, 0)
+        if tf <= 0:
+            continue
+        df = index.document_frequency.get(token, 0)
+        idf = math.log(1 + (document_count - df + 0.5) / (df + 0.5))
+        denom = tf + k1 * (1 - b + b * doc_len / avg_len)
+        score += idf * (tf * (k1 + 1)) / denom
+    return score
+
+
 def _merge_results(*layers):
     records = {}
     layer_hits = defaultdict(set)
 
     for layer in layers:
-        for payload, score, source in layer:
+        for rank, (payload, score, source) in enumerate(layer, start=1):
             chunk_id = payload.get("chunk_id")
             if not chunk_id:
                 continue
             if chunk_id not in records:
                 records[chunk_id] = dict(payload)
                 records[chunk_id]["retrieval_score"] = 0.0
+                records[chunk_id]["fusion_score"] = 0.0
+                records[chunk_id]["exact_retrieval_hit"] = False
             if source == "dense":
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
+            if source in {"dense", "lexical", "metadata"}:
+                records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
+            if source in {"filter", "calls", "exact_entity"}:
+                records[chunk_id]["exact_retrieval_hit"] = True
             layer_hits[chunk_id].add(source)
 
     merged = []
@@ -268,8 +557,10 @@ def _merge_results(*layers):
 
     merged.sort(
         key=lambda item: (
+            not item.get("exact_retrieval_hit", False),
             not item.get("multi_layer_hit", False),
             -float(item.get("retrieval_score", 0.0)),
+            -float(item.get("fusion_score", 0.0)),
         )
     )
     return merged
@@ -320,8 +611,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[di
 
     rescored.sort(
         key=lambda item: (
+            not item.get("exact_retrieval_hit", False),
             not item.get("multi_layer_hit", False),
             -float(item.get("retrieval_score", 0.0)),
+            -float(item.get("fusion_score", 0.0)),
             -int(item.get("_lexical_overlap", 0)),
         )
     )
@@ -502,10 +795,13 @@ def _overview_priority(payload: dict) -> int:
     relative_path = str(payload.get("relative_path", "")).lower()
     symbol_name = str(payload.get("symbol_name", "")).lower()
     chunk_type = str(payload.get("chunk_type", "")).lower()
+    file_type = str(payload.get("file_type", "")).lower()
     score = 0
 
     if not relative_path:
         return score
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        return 100
     if _is_test_path(relative_path) or symbol_name.startswith("test_"):
         return -10
 

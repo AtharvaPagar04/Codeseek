@@ -153,6 +153,10 @@ export default function ApiTokensModal({ onClose }) {
                 <p className="mt-1 text-text-muted text-[11px]">
                   Query requests will use the currently selected provider key from this list.
                 </p>
+                <p className="mt-2 text-text-muted text-[11px]">
+                  Add a provider key before sending queries. If responses later fail with auth or rate-limit errors,
+                  return here and update or switch the active credential.
+                </p>
               </div>
             ) : (
               <div className="bg-surface-3 border border-border rounded-xl p-3 flex items-start justify-between gap-3">

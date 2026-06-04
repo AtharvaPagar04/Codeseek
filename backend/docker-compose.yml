@@ -46,6 +46,10 @@ services:
       - QDRANT_PORT=6333
       - CODESEEK_DB_BACKEND=${CODESEEK_DB_BACKEND:-postgres}
       - CODESEEK_DATABASE_URL=${CODESEEK_DATABASE_URL:-postgresql://codeseek:codeseek@postgres:5432/codeseek}
+      # Persistent workspace: cloned repos survive backend container restarts.
+      - CODESEEK_REPO_WORKSPACE=/data/repo_workspace
+    volumes:
+      - repo_workspace:/data/repo_workspace
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)\""]
       interval: 15s
@@ -55,3 +59,6 @@ services:
 volumes:
   postgres_data:
   qdrant_storage:
+  # Named volume for cloned repo workspaces.  Without this, every backend
+  # restart triggers a full re-clone and re-index for all sessions.
+  repo_workspace:

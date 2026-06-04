@@ -8,12 +8,14 @@ from retrieval.searcher import _inject_overview_candidates, _overview_priority, 
 
 class SearcherOverviewTests(unittest.TestCase):
     def test_overview_priority_prefers_representative_files(self) -> None:
+        repo_summary = {"relative_path": "__repo_summary__.md", "chunk_type": "repo_summary", "file_type": "repo_summary"}
         readme = {"relative_path": "README.md", "symbol_name": "README", "chunk_type": "file_summary"}
         package_json = {"relative_path": "package.json", "symbol_name": "package_json", "chunk_type": "file_summary"}
         env_example = {"relative_path": ".env.example", "symbol_name": ".env.example", "chunk_type": "file_summary"}
         component = {"relative_path": "src/components/Skills.tsx", "symbol_name": "Skills", "chunk_type": "function"}
         test_file = {"relative_path": "tests/test_skills.py", "symbol_name": "test_skills", "chunk_type": "function"}
 
+        self.assertGreater(_overview_priority(repo_summary), _overview_priority(readme))
         self.assertGreater(_overview_priority(readme), _overview_priority(component))
         self.assertGreater(_overview_priority(package_json), _overview_priority(component))
         self.assertGreater(_overview_priority(env_example), _overview_priority(component))
