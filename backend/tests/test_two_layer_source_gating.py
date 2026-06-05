@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from retrieval.source_filter import split_sources_two_layer, select_sources_for_display
-from retrieval.assembler import assemble_for_reasoning, intent_context_budget
+from retrieval.assembler import assemble, assemble_for_reasoning, intent_context_budget
 from retrieval.config import (
     DISPLAY_SOURCES_CAP,
     REASONING_SOURCES_CAP,
@@ -280,6 +280,188 @@ class TestAssembleForReasoningRanking:
                     os.environ["RETRIEVAL_REPO_ROOT"] = old_repo_root
 
             assert sources[0]["symbol_name"] == "run_query"
+
+    def test_assemble_reads_monorepo_prefixed_paths_when_repo_root_is_subdirectory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            backend_root = repo_root / "backend"
+            retrieval_dir = backend_root / "retrieval"
+            retrieval_dir.mkdir(parents=True)
+            (retrieval_dir / "main.py").write_text(
+                "def run_query():\n    return 'ok'\n",
+                encoding="utf-8",
+            )
+
+            chunk = {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 1,
+                "end_line": 2,
+                "expansion_type": "primary",
+                "retrieval_score": 0.90,
+                "chunk_type": "function",
+            }
+
+            old_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
+            os.environ["RETRIEVAL_REPO_ROOT"] = str(backend_root)
+            try:
+                context, sources, _used = assemble([chunk], "")
+            finally:
+                if old_repo_root is None:
+                    os.environ.pop("RETRIEVAL_REPO_ROOT", None)
+                else:
+                    os.environ["RETRIEVAL_REPO_ROOT"] = old_repo_root
+
+            assert "def run_query()" in context
+            assert len(sources) == 1
+            assert sources[0]["relative_path"] == "backend/retrieval/main.py"
+
+    def test_assemble_falls_back_to_stored_excerpt_when_repo_root_is_missing(self):
+        missing_root = "/tmp/does-not-exist-codeseek"
+        chunk = {
+            "relative_path": "backend/README.md",
+            "symbol_name": "README",
+            "start_line": 1,
+            "end_line": 2,
+            "expansion_type": "primary",
+            "retrieval_score": 0.90,
+            "chunk_type": "file_summary",
+            "content_excerpt": "# CodeSeek\nRepository-grounded assistant for source code.\n",
+            "summary": "Repository-grounded assistant for source code.",
+        }
+
+        old_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
+        os.environ["RETRIEVAL_REPO_ROOT"] = missing_root
+        try:
+            context, sources, _used = assemble([chunk], "")
+        finally:
+            if old_repo_root is None:
+                os.environ.pop("RETRIEVAL_REPO_ROOT", None)
+            else:
+                os.environ["RETRIEVAL_REPO_ROOT"] = old_repo_root
+
+        assert "Repository-grounded assistant for source code." in context
+        assert len(sources) == 1
+        assert sources[0]["relative_path"] == "backend/README.md"
+
+    def test_assemble_architecture_prefers_backend_runtime_and_config_anchors_over_large_readmes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            backend_root = repo_root / "backend"
+            retrieval_dir = backend_root / "retrieval"
+            ingestion_dir = backend_root / "rag_ingestion"
+            docs_dir = backend_root / "docs"
+            retrieval_dir.mkdir(parents=True)
+            ingestion_dir.mkdir(parents=True)
+            docs_dir.mkdir(parents=True)
+
+            (repo_root / "README.md").write_text(("# Root\n" + ("overview line\n" * 800)), encoding="utf-8")
+            (backend_root / "README.md").write_text(("# Backend\n" + ("backend line\n" * 300)), encoding="utf-8")
+            (retrieval_dir / "api_service.py").write_text("def _query_impl():\n    return 'ok'\n", encoding="utf-8")
+            (retrieval_dir / "main.py").write_text("def run_query():\n    return 'ok'\n", encoding="utf-8")
+            (ingestion_dir / "main.py").write_text("def run_pipeline():\n    return 'ok'\n", encoding="utf-8")
+            (backend_root / "docker-compose.yml").write_text("services:\n  api:\n    image: test\n", encoding="utf-8")
+            (backend_root / ".env.example").write_text("CODESEEK_DATABASE_URL=test\n", encoding="utf-8")
+            (docs_dir / "deployment_runbook.md").write_text("Deploy steps\n", encoding="utf-8")
+
+            chunks = [
+                {
+                    "relative_path": "__repo_summary__.md",
+                    "symbol_name": "repo_summary",
+                    "chunk_type": "repo_summary",
+                    "file_type": "repo_summary",
+                    "start_line": 1,
+                    "end_line": 10,
+                    "expansion_type": "primary",
+                    "retrieval_score": 1.0,
+                    "content_excerpt": "Repository-grounded RAG assistant for source code.\n",
+                },
+                {
+                    "relative_path": "README.md",
+                    "symbol_name": "<file>",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 572,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.99,
+                },
+                {
+                    "relative_path": "backend/README.md",
+                    "symbol_name": "<file>",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 164,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.98,
+                },
+                {
+                    "relative_path": "backend/retrieval/api_service.py",
+                    "symbol_name": "_query_impl",
+                    "chunk_type": "function",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.80,
+                },
+                {
+                    "relative_path": "backend/retrieval/main.py",
+                    "symbol_name": "run_query",
+                    "chunk_type": "function",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.79,
+                },
+                {
+                    "relative_path": "backend/rag_ingestion/main.py",
+                    "symbol_name": "run_pipeline",
+                    "chunk_type": "function",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.78,
+                },
+                {
+                    "relative_path": "backend/docker-compose.yml",
+                    "symbol_name": "docker-compose.yml",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 3,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.77,
+                },
+                {
+                    "relative_path": "backend/.env.example",
+                    "symbol_name": ".env.example",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "expansion_type": "primary",
+                    "retrieval_score": 0.76,
+                },
+            ]
+
+            old_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
+            os.environ["RETRIEVAL_REPO_ROOT"] = str(repo_root)
+            try:
+                _context, sources, _used = assemble(
+                    chunks,
+                    "",
+                    primary_intent="ARCHITECTURE",
+                    raw_query="How is this codebase structured?",
+                )
+            finally:
+                if old_repo_root is None:
+                    os.environ.pop("RETRIEVAL_REPO_ROOT", None)
+                else:
+                    os.environ["RETRIEVAL_REPO_ROOT"] = old_repo_root
+
+            source_paths = [source["relative_path"] for source in sources[:6]]
+            assert "__repo_summary__.md" in source_paths
+            assert "backend/retrieval/api_service.py" in source_paths
+            assert "backend/retrieval/main.py" in source_paths
+            assert "backend/rag_ingestion/main.py" in source_paths
+            assert "backend/docker-compose.yml" in source_paths
 
 
 # ---------------------------------------------------------------------------

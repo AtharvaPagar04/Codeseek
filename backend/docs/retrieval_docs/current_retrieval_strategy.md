@@ -433,7 +433,9 @@ It then favors paths that look like:
 
 Current behavior:
 
-The ranking logic can now surface the synthetic repo-summary chunk and representative repo files. Backend re-ingestion/eval validation passed for the first repo, but broader multi-repo validation is still needed before treating the rule-based summary as sufficient.
+The ranking logic can now surface the synthetic repo-summary chunk and representative repo files. For short overview/architecture/module prompts, the display-source path now also front-loads repo-summary and backend architecture anchors before the display cap is applied, so `__repo_summary__.md`, `backend/README.md`, `backend/retrieval/api_service.py`, and `backend/retrieval/main.py` are less likely to be crowded out by shallow `README.md`-only selections. Backend re-ingestion/eval validation passed for the first repo, but broader multi-repo validation is still needed before treating the rule-based summary as sufficient.
+
+For architecture prompts specifically, search now also prepends exact structural file hits from explicit architecture file hints when those files exist in Qdrant. This reduces dependence on dense README-style matches for anchors such as `backend/retrieval/api_service.py`, `backend/retrieval/main.py`, and `backend/rag_ingestion/main.py`.
 
 ### 7.2 Import-backed candidate injection
 
@@ -596,8 +598,12 @@ Controlled by `RETRIEVAL_ENABLE_TWO_LAYER_SOURCES` (default `1`). Set to `0` to 
 - scores sources by lexical overlap with the query
 - removes test sources unless the query mentions tests
 - applies a query-type-aware primary cap (5 default, up to 9 for provider/credential flows)
+- prepends high-priority overview anchors for broad repo-understanding prompts before display capping
+- prepends architecture-specific backend/runtime/configuration anchors for structure/module prompts before display capping
 - injects phase-1 flow anchors (specific symbol names for auth/indexing/deployment/provider traces)
 - injects trace anchors for auth-flow questions
+- resolves stored chunk paths by safe suffix fallback during assembly, so monorepo-style paths such as `backend/retrieval/main.py` still assemble correctly when the active repo root is already the `backend` subdirectory
+- falls back to stored payload text (`content_excerpt`, then summary) when the repo workspace is missing locally but Qdrant still has valid chunk payloads
 
 ### 11.3 Intent-aware context budget
 
@@ -664,7 +670,20 @@ Behavior:
 
 - routes through `build_architecture_answer()`
 - emits `response_mode=architecture_summary`
-- uses repo-summary/README/config/deployment/module evidence selected by overview-style retrieval
+- builds a bucket-based architecture source set from the broader retrieved chunks instead of relying only on README-heavy shown sources
+- bucket targets are:
+  - repo/docs
+  - API surface
+  - orchestration
+  - ingestion
+  - config/deployment
+- when one of those buckets is still missing from retrieved chunks, fills it from deterministic local repo anchors if the session workspace exists on disk
+- when indexed chunks and local fallback anchors both exist for the same architecture path, prefers the indexed chunk and suppresses same-path duplicates
+- exact structural file-hit injection prefers representative indexed symbols such as `_query_impl`, `run_query`, and `run_pipeline` over incidental same-file symbols
+- architecture file-hit injection is triggered for architecture-shaped wording even when scored intent lands on `OVERVIEW`
+- exact same-path file-hit scans use a wider limit so representative architecture symbols are less likely to be missed due to scroll order
+- if a weaker same-path architecture chunk already exists lower in the merged pool, the best indexed chunk for that file is now promoted to the front instead of being skipped
+- when architecture buckets are still missing after normal search/expand, deterministic architecture selection now attempts an exact indexed path fetch from Qdrant before falling back to local file summaries
 - injects architecture file hints such as README, Docker Compose, Dockerfile, env template, deployment runbook, retrieval entrypoints, and ingestion entrypoints
 - renders separate sections for runtime shape, code organization, and configuration/deployment boundaries
 - bypasses the LLM
@@ -686,8 +705,10 @@ Signals include phrases like:
 Behavior:
 
 - selects up to five overview-priority sources
+- prefers repo-summary, `backend/README.md`, and backend runtime/ingestion anchors ahead of plain `README.md` when both are available
 - tries project summary from:
   - `README`
+  - `backend/README.md`
   - `package.json`
   - chunk summaries
 - extracts tech stack from:

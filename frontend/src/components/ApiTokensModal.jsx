@@ -11,6 +11,7 @@ const PROVIDER_OPTIONS = [
   { value: 'gemini', label: 'Gemini' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'aicredits', label: 'AI Credits' },
 ];
 
 const PROVIDER_MODELS = {
@@ -37,6 +38,10 @@ const PROVIDER_MODELS = {
     { value: 'google/gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { value: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
     { value: 'meta-llama/llama-3-8b-instruct', label: 'Llama 3 8B' },
+  ],
+  aicredits: [
+    { value: 'default', label: 'Default (gpt-5.4-mini)' },
+    { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
   ],
 };
 

@@ -20,21 +20,23 @@ _enc = tiktoken.get_encoding("cl100k_base")
 
 @lru_cache(maxsize=FILE_CACHE_MAX_SIZE)
 def _read_file_lines(repo_root: str, relative_path: str) -> tuple[str, ...]:
-    path = Path(repo_root) / relative_path
+    path = _resolve_repo_file(repo_root, relative_path)
+    if path is None:
+        raise FileNotFoundError(relative_path)
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         return tuple(handle.readlines())
 
 
-def assemble(chunks: list[dict], history_block: str) -> tuple[str, list[dict], int]:
+def assemble(
+    chunks: list[dict],
+    history_block: str,
+    primary_intent: str | None = None,
+    raw_query: str = "",
+) -> tuple[str, list[dict], int]:
     """Create context blocks under token budget and return cited sources."""
     ranked = sorted(
         chunks,
-        key=lambda c: (
-            _tier(c.get("expansion_type", "primary")),
-            -float(c.get("retrieval_score", 0.0)),
-            c.get("relative_path", ""),
-            int(c.get("start_line", 0)),
-        ),
+        key=lambda c: _assembly_sort_key(c, primary_intent=primary_intent, raw_query=raw_query),
     )
 
     history_tokens = len(_enc.encode(history_block)) if history_block else 0
@@ -168,6 +170,71 @@ def _tier(expansion_type: str) -> int:
     return order.get(expansion_type, 9)
 
 
+def _assembly_sort_key(
+    chunk: dict,
+    *,
+    primary_intent: str | None,
+    raw_query: str,
+) -> tuple:
+    tier = _tier(chunk.get("expansion_type", "primary"))
+    retrieval_score = -float(chunk.get("retrieval_score", 0.0))
+    path = str(chunk.get("relative_path", ""))
+    start_line = int(chunk.get("start_line", 0))
+    intent = (primary_intent or "").upper()
+
+    if intent in {"ARCHITECTURE", "OVERVIEW", "TECH_STACK"}:
+        return (
+            tier,
+            -_assembly_overview_anchor_score(chunk, raw_query),
+            _snippet_size_penalty(chunk),
+            retrieval_score,
+            path,
+            start_line,
+        )
+
+    return (tier, retrieval_score, path, start_line)
+
+
+def _assembly_overview_anchor_score(chunk: dict, raw_query: str) -> int:
+    relative_path = str(chunk.get("relative_path", "")).strip().lower()
+    chunk_type = str(chunk.get("chunk_type", "")).strip().lower()
+    file_type = str(chunk.get("file_type", "")).strip().lower()
+    symbol_name = str(chunk.get("symbol_name", "")).strip().lower()
+    tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
+
+    score = 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        score += 100
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        score += 96
+    if relative_path.endswith("backend/retrieval/main.py"):
+        score += 94
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        score += 92
+    if relative_path == "backend/readme.md":
+        score += 90
+    if relative_path.endswith("backend/docker-compose.yml"):
+        score += 86
+    if relative_path.endswith("backend/.env.example"):
+        score += 84
+    if relative_path.endswith("backend/docs/deployment_runbook.md"):
+        score += 82
+    if relative_path.endswith("backend/retrieval/db.py"):
+        score += 80
+    if relative_path == "readme.md":
+        score += 40
+    if relative_path.endswith("docker-compose.yml"):
+        score += 38
+    if relative_path.endswith(".env.example"):
+        score += 36
+    if relative_path.endswith("docs/deployment_runbook.md"):
+        score += 34
+
+    if any(token in relative_path or token in symbol_name for token in tokens if len(token) > 2):
+        score += 4
+    return score
+
+
 def _reasoning_sort_key(
     chunk: dict,
     *,
@@ -225,15 +292,57 @@ def _snippet_size_penalty(chunk: dict) -> int:
     return 2
 
 
+def _resolve_repo_file(repo_root: str | Path, relative_path: str) -> Path | None:
+    """Resolve stored chunk paths even when the active repo root is a subdirectory.
+
+    Example:
+    - repo_root: /repo/backend
+    - relative_path: backend/retrieval/main.py
+    - resolved path: /repo/backend/retrieval/main.py
+    """
+    clean_relative = str(relative_path).strip()
+    if not clean_relative:
+        return None
+
+    root = Path(repo_root).resolve()
+    relative = Path(clean_relative)
+    candidates: list[Path] = [root / relative]
+    parts = relative.parts
+    for start in range(1, len(parts)):
+        candidates.append(root.joinpath(*parts[start:]))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            return resolved
+    return None
+
+
 def _read_chunk_content(chunk: dict) -> str | None:
     relative_path = chunk.get("relative_path")
     if not relative_path:
-        return None
+        excerpt = str(chunk.get("content_excerpt", "")).strip()
+        if excerpt:
+            return excerpt
+        summary = str(chunk.get("summary", "")).strip()
+        return summary or None
     repo_root = get_repo_root()
     try:
         lines = _read_file_lines(repo_root, relative_path)
     except OSError:
-        return None
+        excerpt = str(chunk.get("content_excerpt", "")).strip()
+        if excerpt:
+            return excerpt
+        summary = str(chunk.get("summary", "")).strip()
+        return summary or None
 
     start = max(0, int(chunk.get("start_line", 1)) - 1)
     end = max(start, int(chunk.get("end_line", start + 1)))

@@ -55,6 +55,8 @@ SYSTEM_PROMPT = (
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
 OPENROUTER_MODEL = os.getenv("RETRIEVAL_OPENROUTER_MODEL", "openai/gpt-4o-mini")
 GEMINI_MODEL = os.getenv("RETRIEVAL_GEMINI_MODEL", "gemini-1.5-flash")
+AICREDITS_MODEL = os.getenv("RETRIEVAL_AICREDITS_MODEL", "gpt-5.4-mini")
+AICREDITS_BASE_URL = os.getenv("AICREDITS_BASE_URL", "https://api.aicredits.io/v1")
 
 _llm_failures = 0
 _llm_circuit_open_until = 0.0
@@ -187,7 +189,7 @@ def _resolve_provider_config(provider_config: dict[str, Any] | None) -> dict[str
         api_key = str(provider_config.get("api_key", "")).strip()
         model = str(provider_config.get("model", "")).strip()
         if provider and api_key:
-            if provider not in {"groq", "openai", "openrouter", "gemini"}:
+            if provider not in {"groq", "openai", "openrouter", "gemini", "aicredits"}:
                 return {
                     "provider": "unsupported",
                     "api_key": api_key,
@@ -210,6 +212,8 @@ def _default_model(provider: str) -> str:
         return OPENROUTER_MODEL
     if provider == "gemini":
         return GEMINI_MODEL
+    if provider == "aicredits":
+        return AICREDITS_MODEL
     return ""
 
 
@@ -302,6 +306,11 @@ def _provider_endpoint(provider: str, api_key: str) -> tuple[str, dict[str, str]
     if provider == "gemini":
         return (
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+    if provider == "aicredits":
+        return (
+            f"{AICREDITS_BASE_URL}/chat/completions",
             {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
     raise ValueError(f"Unsupported provider: {provider}")

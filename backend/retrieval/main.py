@@ -117,7 +117,12 @@ def run_query(
     expanded = expand(candidates, query_info)
     metrics.add_stage("expand", started)
     started = time.perf_counter()
-    context, sources, token_count = assemble(expanded, history_block_capped)
+    context, sources, token_count = assemble(
+        expanded,
+        history_block_capped,
+        primary_intent=primary_intent,
+        raw_query=raw_query,
+    )
     metrics.add_stage("assemble", started)
     meta["source_filter"] = explain_source_filter_decision(raw_query, sources)
     # Two-layer source gating: display_sources for citations, reasoning_sources for context.
@@ -193,7 +198,12 @@ def run_query(
         in allowed_keys
     ]
     if llm_chunks:
-        context, _, token_count = assemble(llm_chunks, history_block_capped)
+        context, _, token_count = assemble(
+            llm_chunks,
+            history_block_capped,
+            primary_intent=primary_intent,
+            raw_query=raw_query,
+        )
     # For the LLM path: use the broader reasoning_sources for context assembly.
     reasoning_chunks = [
         c
@@ -269,7 +279,14 @@ def run_query(
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
     if is_architecture_request(raw_query):
-        answer = build_architecture_answer(raw_query, shown_sources, expanded)
+        answer, architecture_sources = build_architecture_answer(
+            raw_query,
+            shown_sources,
+            expanded,
+            return_sources=True,
+        )
+        if architecture_sources:
+            shown_sources = architecture_sources
         cited_entities = extract_cited_entities(shown_sources)
         memory.add(
             raw_query, answer,

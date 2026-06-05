@@ -56,6 +56,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertTrue(is_overview_request("tech stack"))
         self.assertTrue(is_architecture_request("architecture overview"))
         self.assertTrue(is_architecture_request("how is this project structured"))
+        self.assertTrue(is_architecture_request("What are the main modules and what does each one do?"))
         self.assertTrue(is_flow_explanation_request("explain the auth session lifecycle"))
         self.assertTrue(is_flow_explanation_request("trace the indexing session creation flow"))
         self.assertTrue(is_flow_explanation_request("walk me through backend request orchestration"))
@@ -209,6 +210,30 @@ class CodeAnswerTests(unittest.TestCase):
             self.assertIn("FastAPI service for repository-grounded answers.", answer)
             self.assertIn("Tech stack: FastAPI, Uvicorn, HTTPX, Qdrant.", answer)
 
+    def test_build_overview_answer_reads_monorepo_prefixed_readme_when_repo_root_is_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            backend_root = repo_root / "backend"
+            backend_root.mkdir()
+            (backend_root / "README.md").write_text(
+                "# CodeSeek Backend\nFastAPI service for repository-grounded code search and cited answers.\n",
+                encoding="utf-8",
+            )
+            sources = [
+                {
+                    "relative_path": "backend/README.md",
+                    "symbol_name": "README",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "expansion_type": "primary",
+                }
+            ]
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(backend_root)}, clear=False):
+                answer = build_overview_answer("What is this project about?", sources, [])
+
+            self.assertIn("FastAPI service for repository-grounded code search and cited answers.", answer)
+
     def test_build_overview_answer_uses_structured_file_summaries(self) -> None:
         sources = [
             {
@@ -277,6 +302,56 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertIn("Tech stack: FastAPI, React, Qdrant.", answer)
         self.assertIn("Runtime services summarized for this repo: api, qdrant.", answer)
 
+    def test_build_overview_answer_prefers_backend_architecture_anchors_over_plain_readme(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "entrypoints": ["retrieval.api_service:app", "rag_ingestion.main:run_pipeline"],
+                "services": ["api", "qdrant"],
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 10,
+                "summary": "Overview: top-level readme summary",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+        ]
+
+        answer = build_overview_answer("Give me a repository overview.", sources, sources)
+
+        self.assertIn("Backend API layer handles authenticated query execution and retrieval orchestration.", answer)
+        self.assertIn("Function: _query_impl.", answer)
+        self.assertIn("Function: run_query.", answer)
+        self.assertIn("backend/retrieval/api_service.py :: _query_impl", answer)
+        self.assertIn("backend/retrieval/main.py :: run_query", answer)
+
     def test_build_architecture_answer_uses_structured_repo_evidence(self) -> None:
         sources = [
             {
@@ -319,6 +394,369 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertIn("Runtime services are summarized as: api, postgres, qdrant.", answer)
         self.assertIn("Entrypoints surfaced by repo summary: retrieval.api_service:app.", answer)
         self.assertIn("Configuration boundary includes env keys such as: CODESEEK_DATABASE_URL.", answer)
+
+    def test_build_architecture_answer_prefers_backend_anchors_over_frontend_package(self) -> None:
+        sources = [
+            {
+                "relative_path": "frontend/package.json",
+                "symbol_name": "package_json",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 28,
+                "summary": "Description: codeseek-frontend is a JavaScript/TypeScript project described in package.json",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 42,
+                "end_line": 108,
+                "summary": "Function: run_pipeline",
+                "expansion_type": "primary",
+            },
+        ]
+
+        answer = build_architecture_answer("How is this codebase structured?", sources, sources)
+
+        self.assertIn("Top-Level Subsystems:", answer)
+        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
+        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
+        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+        self.assertNotIn("codeseek-frontend is a JavaScript/TypeScript project described in package.json.", answer)
+
+    def test_build_architecture_answer_enforces_bucket_coverage_from_expanded_chunks(self) -> None:
+        shown_sources = [
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 164,
+                "summary": "Backend readme",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "README.md",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 572,
+                "summary": "Root readme",
+                "expansion_type": "primary",
+            },
+        ]
+        expanded = shown_sources + [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 42,
+                "end_line": 108,
+                "summary": "Function: run_pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docker-compose.yml",
+                "symbol_name": "docker-compose.yml",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 64,
+                "summary": "Services: postgres, qdrant, codeseek-api",
+                "expansion_type": "primary",
+            },
+        ]
+
+        answer, selected_sources = build_architecture_answer(
+            "How is this codebase structured?",
+            shown_sources,
+            expanded,
+            return_sources=True,
+        )
+
+        selected_paths = [source["relative_path"] for source in selected_sources]
+        self.assertIn("__repo_summary__.md", selected_paths)
+        self.assertIn("backend/retrieval/api_service.py", selected_paths)
+        self.assertIn("backend/retrieval/main.py", selected_paths)
+        self.assertIn("backend/rag_ingestion/main.py", selected_paths)
+        self.assertIn("backend/docker-compose.yml", selected_paths)
+        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
+        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
+        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+
+    def test_build_architecture_answer_fills_missing_buckets_from_local_repo_files(self) -> None:
+        shown_sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "README.md",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 40,
+                "summary": "Root readme",
+                "expansion_type": "primary",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "backend/retrieval").mkdir(parents=True)
+            (repo_root / "backend/rag_ingestion").mkdir(parents=True)
+            (repo_root / "deploy").mkdir(parents=True)
+            (repo_root / "backend/retrieval/api_service.py").write_text(
+                "from fastapi import FastAPI\n\napp = FastAPI()\n",
+                encoding="utf-8",
+            )
+            (repo_root / "backend/retrieval/main.py").write_text(
+                "def run_query():\n    return 'ok'\n",
+                encoding="utf-8",
+            )
+            (repo_root / "backend/rag_ingestion/main.py").write_text(
+                "def run_pipeline():\n    return 'ok'\n",
+                encoding="utf-8",
+            )
+            (repo_root / "deploy/.env.example").write_text(
+                "CODESEEK_DATABASE_URL=postgresql://example\n",
+                encoding="utf-8",
+            )
+
+            with patch("retrieval.code_answers.get_repo_root", return_value=str(repo_root)):
+                answer, selected_sources = build_architecture_answer(
+                    "How is this codebase structured?",
+                    shown_sources,
+                    shown_sources,
+                    return_sources=True,
+                )
+
+        selected_paths = [source["relative_path"] for source in selected_sources]
+        self.assertIn("backend/retrieval/api_service.py", selected_paths)
+        self.assertIn("backend/retrieval/main.py", selected_paths)
+        self.assertIn("backend/rag_ingestion/main.py", selected_paths)
+        self.assertIn("deploy/.env.example", selected_paths)
+        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
+        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+
+    def test_build_architecture_answer_prefers_indexed_bucket_fallbacks_before_local_files(self) -> None:
+        shown_sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "README.md",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 40,
+                "summary": "Root readme",
+                "expansion_type": "primary",
+            },
+        ]
+
+        indexed_fallbacks = [
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "indexed_fallback",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "indexed_fallback",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 42,
+                "end_line": 108,
+                "summary": "Function: run_pipeline",
+                "expansion_type": "indexed_fallback",
+            },
+            {
+                "relative_path": "backend/docker-compose.yml",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 64,
+                "summary": "Services: postgres, qdrant, codeseek-api",
+                "expansion_type": "indexed_fallback",
+            },
+        ]
+
+        with patch("retrieval.code_answers._architecture_indexed_bucket_fallbacks", return_value=indexed_fallbacks):
+            answer, selected_sources = build_architecture_answer(
+                "Give me a high-level architecture overview of this codebase.",
+                shown_sources,
+                shown_sources,
+                return_sources=True,
+            )
+
+        selected_paths = [source["relative_path"] for source in selected_sources]
+        self.assertIn("backend/retrieval/api_service.py", selected_paths)
+        self.assertIn("backend/retrieval/main.py", selected_paths)
+        self.assertIn("backend/rag_ingestion/main.py", selected_paths)
+        self.assertIn("backend/docker-compose.yml", selected_paths)
+        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
+        self.assertNotIn("File: backend/retrieval/api_service.py.", answer)
+
+    def test_build_architecture_answer_prefers_indexed_symbols_over_same_path_local_fallbacks(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 42,
+                "end_line": 108,
+                "summary": "Function: run_pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docker-compose.yml",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 64,
+                "summary": "Services: postgres, qdrant, codeseek-api",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 1265,
+                "summary": "File: backend/retrieval/api_service.py",
+                "expansion_type": "local_fallback",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 709,
+                "summary": "File: backend/retrieval/main.py",
+                "expansion_type": "local_fallback",
+            },
+        ]
+
+        answer, selected_sources = build_architecture_answer(
+            "How is this codebase structured?",
+            sources,
+            sources,
+            return_sources=True,
+        )
+
+        selected_by_path = {source["relative_path"]: source for source in selected_sources}
+        self.assertEqual(selected_by_path["backend/retrieval/api_service.py"]["symbol_name"], "_query_impl")
+        self.assertEqual(selected_by_path["backend/retrieval/main.py"]["symbol_name"], "run_query")
+        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
 
     def test_build_flow_answer_explains_auth_session_lifecycle(self) -> None:
         sources = [
@@ -1243,6 +1681,72 @@ class CodeAnswerTests(unittest.TestCase):
 
         self.assertIn("Architecture Summary", answer)
         self.assertEqual(sources, [source])
+        self.assertEqual(token_count, 12)
+        self.assertEqual(meta["response_mode"], "architecture_summary")
+        generate_answer.assert_not_called()
+
+    def test_run_query_returns_architecture_bucket_sources_not_only_display_input(self) -> None:
+        shown_source = {
+            "relative_path": "backend/README.md",
+            "symbol_name": "<file>",
+            "chunk_type": "file_summary",
+            "start_line": 1,
+            "end_line": 164,
+            "summary": "Backend readme",
+            "expansion_type": "primary",
+        }
+        api_chunk = {
+            "relative_path": "backend/retrieval/api_service.py",
+            "symbol_name": "_query_impl",
+            "chunk_type": "function",
+            "start_line": 512,
+            "end_line": 678,
+            "summary": "Function: _query_impl",
+            "expansion_type": "primary",
+            "retrieval_score": 0.9,
+            "chunk_id": "api-1",
+        }
+        repo_summary_chunk = {
+            "relative_path": "__repo_summary__.md",
+            "symbol_name": "repo_summary",
+            "chunk_type": "repo_summary",
+            "file_type": "repo_summary",
+            "start_line": 1,
+            "end_line": 12,
+            "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+            "expansion_type": "primary",
+            "retrieval_score": 1.0,
+            "chunk_id": "repo-1",
+        }
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch("retrieval.main.process_query", return_value={"raw_query": "How is this codebase structured?", "intent": "SEMANTIC", "primary_intent": "ARCHITECTURE", "entities": {}}), patch(
+                "retrieval.main.search", return_value=[repo_summary_chunk, api_chunk]
+            ), patch("retrieval.main.expand", return_value=[repo_summary_chunk, api_chunk]), patch(
+                "retrieval.main.assemble", return_value=("context", [shown_source], 12)
+            ), patch(
+                "retrieval.main.split_sources_two_layer", return_value=([shown_source], [shown_source])
+            ), patch(
+                "retrieval.main.generate_answer"
+            ) as generate_answer:
+                answer, sources, token_count, meta = run_query(
+                    "How is this codebase structured?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertIn("Architecture Summary", answer)
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "__repo_summary__.md" for src in sources))
         self.assertEqual(token_count, 12)
         self.assertEqual(meta["response_mode"], "architecture_summary")
         generate_answer.assert_not_called()

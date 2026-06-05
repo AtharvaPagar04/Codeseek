@@ -77,6 +77,18 @@ Most recent validation result:
 - `RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=1` by default; set to `0` to revert to single-list legacy behaviour
 - history starvation fix: `HISTORY_TOKEN_CAP` (1500 tok global) + `INTENT_HISTORY_CAPS` (per-intent tighter caps); all assembly calls now use `get_history_block_capped()`
 - partial-evidence signaling: `score_evidence_confidence()` classifies display sources as `strong`/`partial`/`weak`; LLM-path answers get a banner prepended for `partial`/`weak`; `evidence_confidence` is logged and returned in the API response
+- short overview/architecture/module prompts now prepend repo-summary and backend architecture anchors during display-source selection, reducing shallow `README.md`-only source sets for deterministic broad repo-understanding answers
+- focused regression validation for the latest overview-source-gating change passed: `42` tests across `tests/test_retrieval_source_filtering.py` and `tests/test_code_answers.py`
+- assembler and deterministic file readers now resolve monorepo-prefixed chunk paths against subdirectory repo roots by safe suffix fallback, fixing low-context failures where valid overview sources assembled as zero readable files
+- assembler now falls back to stored chunk payload text when the indexed repo workspace is missing locally, preventing valid Qdrant hits from collapsing into `assembled_sources=0`
+- architecture/structure prompts now prepend backend/runtime/configuration anchors during display-source selection so shown sources are less likely to stall at `repo_summary` plus a single orchestration file
+- deterministic architecture answers now build a bucket-based source set from broader retrieved chunks so API/orchestration/ingestion/config anchors can replace README-only source mixes when that evidence exists
+- architecture retrieval now prepends exact structural file hits for injected architecture file hints, so the architecture chunk pool is less dependent on dense README/config matches alone
+- deterministic architecture answers now also fill missing API/orchestration/ingestion/config buckets from local repo anchors when retrieval is still incomplete but the session workspace exists on disk
+- deterministic architecture selection now prefers representative indexed symbols and suppresses same-path fallback duplicates, reducing cases where local file summaries overshadow stronger indexed chunks from the same file
+- architecture search now applies exact structural file injection for architecture-shaped wording even when scored intent resolves to `OVERVIEW`, and scans a wider same-path hit window so representative symbols are less likely to be missed
+- architecture search now promotes the best indexed same-path chunk even when a weaker chunk from that file is already present lower in the merged candidate set, preventing exact file hints from being nullified by pre-existing lower-quality hits
+- deterministic architecture selection now has an intermediate indexed-bucket fallback stage before local file fallback, allowing missing architecture buckets to be filled from exact indexed path hits when search recall is still thin
 
 The main quality problem is no longer "prompt weakness first." The main problems are now:
 

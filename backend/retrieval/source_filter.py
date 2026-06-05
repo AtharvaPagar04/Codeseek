@@ -20,6 +20,21 @@ import re
 
 from retrieval.config import DISPLAY_SOURCES_CAP, REASONING_SOURCES_CAP
 
+_OVERVIEW_NOISE_SYMBOLS = frozenset(
+    {
+        "_is_overview_query",
+        "query_is_overview_summary",
+        "build_overview_answer",
+        "build_architecture_answer",
+        "is_architecture_request",
+        "is_overview_request",
+        "_architecture_module_points",
+        "_inject_architecture_files",
+        "_inject_overview_candidates",
+        "_preferred_overview_sources",
+    }
+)
+
 
 def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict]:
     """Prefer query-relevant primary citations and cap output noise."""
@@ -29,8 +44,16 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     wants_auth_trace = query_is_auth_flow_trace(raw_query)
     wants_phase1_flow = query_is_phase1_flow(raw_query)
     wants_overview = query_is_overview_summary(raw_query)
+    wants_architecture = query_is_architecture_summary(raw_query)
+    suppress_overview_meta = should_suppress_overview_meta_sources(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
+
+    if suppress_overview_meta:
+        primary_filtered = _filter_overview_noise(primary)
+        expanded_filtered = _filter_overview_noise(expanded)
+        primary = primary_filtered
+        expanded = expanded_filtered
 
     def overlap(src: dict) -> int:
         return source_relevance_score(src, query_tokens)
@@ -77,6 +100,13 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
             continue
         seen.add(key)
         unique.append(src)
+    if wants_overview:
+        unique = _prepend_overview_anchors(raw_query, sources, unique)
+    if wants_architecture:
+        unique = _prepend_architecture_anchors(raw_query, sources, unique)
+    if suppress_overview_meta:
+        filtered_unique = _filter_overview_noise(unique)
+        unique = filtered_unique
     return unique
 
 
@@ -99,7 +129,12 @@ def split_sources_two_layer(
 
     When enabled=False both lists are identical to display_sources (legacy behaviour).
     """
+    wants_overview = query_is_overview_summary(raw_query)
+    suppress_overview_meta = should_suppress_overview_meta_sources(raw_query)
     display = select_sources_for_display(raw_query, assembled_sources)
+    if suppress_overview_meta:
+        filtered_display = _filter_overview_noise(display)
+        display = filtered_display
     display = display[:DISPLAY_SOURCES_CAP]
 
     if not enabled:
@@ -109,6 +144,9 @@ def split_sources_two_layer(
     reasoning: list[dict] = list(display)
 
     remaining = [s for s in assembled_sources if _source_key(s) not in display_keys]
+    if suppress_overview_meta:
+        remaining_filtered = _filter_overview_noise(remaining)
+        remaining = remaining_filtered
     primary_remaining = [s for s in remaining if s.get("expansion_type") == "primary"]
     expanded_remaining = [s for s in remaining if s.get("expansion_type") != "primary"]
 
@@ -132,6 +170,72 @@ def _source_key(src: dict) -> tuple:
         int(src.get("end_line", 0)),
         src.get("expansion_type", ""),
     )
+
+
+def _prepend_overview_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
+    """Front-load high-signal overview anchors so short prompts keep them after display capping."""
+    if not query_is_overview_summary(raw_query):
+        return selected
+
+    query_tokens = query_tokens_from_text(raw_query)
+    ranked = sorted(
+        (
+            src
+            for src in all_sources
+            if _overview_anchor_score(src) > 0 and not is_test_source(src)
+        ),
+        key=lambda src: (
+            -_overview_anchor_score(src),
+            -source_relevance_score(src, query_tokens),
+            str(src.get("relative_path", "")),
+            int(src.get("start_line", 0)),
+        ),
+    )
+    anchors = ranked[:5]
+    merged = anchors + list(selected)
+
+    seen = set()
+    unique = []
+    for src in merged:
+        key = _source_key(src)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(src)
+    return unique
+
+
+def _prepend_architecture_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
+    """Front-load runtime, ingestion, and config anchors for structure prompts."""
+    if not query_is_architecture_summary(raw_query):
+        return selected
+
+    query_tokens = query_tokens_from_text(raw_query)
+    ranked = sorted(
+        (
+            src
+            for src in all_sources
+            if _architecture_anchor_score(src) > 0 and not is_test_source(src)
+        ),
+        key=lambda src: (
+            -_architecture_anchor_score(src),
+            -source_relevance_score(src, query_tokens),
+            str(src.get("relative_path", "")),
+            int(src.get("start_line", 0)),
+        ),
+    )
+    anchors = ranked[:6]
+    merged = anchors + list(selected)
+
+    seen = set()
+    unique = []
+    for src in merged:
+        key = _source_key(src)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(src)
+    return unique
 
 
 def score_evidence_confidence(
@@ -528,13 +632,16 @@ def query_is_phase1_flow(raw_query: str) -> bool:
 
 def query_is_overview_summary(raw_query: str) -> bool:
     q = raw_query.lower()
-    return any(
+    if any(
         phrase in q
         for phrase in (
             "what is this project about",
             "whats this project about",
             "project overview",
             "overview of the project",
+            "repository overview",
+            "codebase overview",
+            "give me a repository overview",
             "what does this project do",
             "what does this app do",
             "tech stack",
@@ -542,9 +649,84 @@ def query_is_overview_summary(raw_query: str) -> bool:
             "architecture",
             "system design",
             "project structure",
+            "repository structure",
+            "codebase structure",
             "how is this project structured",
+            "how is this codebase structured",
+            "what are the main modules",
+            "what are the core modules",
+            "core modules in this codebase",
+            "main modules in this codebase",
+            "top-level subsystems",
+            "top level subsystems",
             "module layout",
             "runtime shape",
+        )
+    ):
+        return True
+
+    tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", q))
+    if {"tech", "stack"} <= tokens:
+        return True
+    if ("module" in tokens or "modules" in tokens) and tokens & {"main", "core", "top", "level"}:
+        return True
+    if ("subsystem" in tokens or "subsystems" in tokens) and tokens & {"top", "level"}:
+        return True
+    if tokens & {"architecture", "structure", "overview", "repository", "codebase", "project"}:
+        return bool(tokens & {"about", "summary", "describe", "what", "structured", "shape"})
+    return False
+
+
+def query_is_architecture_summary(raw_query: str) -> bool:
+    q = raw_query.lower()
+    if any(
+        phrase in q
+        for phrase in (
+            "architecture overview",
+            "architecture",
+            "system design",
+            "project structure",
+            "repository structure",
+            "codebase structure",
+            "how is this project structured",
+            "how is this codebase structured",
+            "how is this repository structured",
+            "main modules",
+            "core modules",
+            "top-level subsystems",
+            "top level subsystems",
+            "module layout",
+            "runtime shape",
+        )
+    ):
+        return True
+
+    tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", q))
+    if ("module" in tokens or "modules" in tokens) and tokens & {"main", "core", "top", "level"}:
+        return True
+    if ("subsystem" in tokens or "subsystems" in tokens) and tokens & {"top", "level"}:
+        return True
+    if tokens & {"architecture", "structure", "modules", "subsystems"}:
+        return bool(tokens & {"what", "describe", "structured", "shape", "overview", "main", "core", "top"})
+    return False
+
+
+def should_suppress_overview_meta_sources(raw_query: str) -> bool:
+    """Return True for broad repo-structure prompts that should hide helper internals."""
+    q = raw_query.lower()
+    if query_is_overview_summary(raw_query):
+        return True
+    return any(
+        phrase in q
+        for phrase in (
+            "main modules",
+            "core modules",
+            "top-level subsystems",
+            "top level subsystems",
+            "repository overview",
+            "codebase overview",
+            "codebase structured",
+            "project structured",
         )
     )
 
@@ -570,3 +752,113 @@ def source_relevance_score(src: dict, query_tokens: set[str]) -> int:
         elif token in hay:
             score += 1
     return score
+
+
+def _filter_overview_noise(sources: list[dict]) -> list[dict]:
+    """Remove meta-answering helper sources from repo-level overview queries."""
+    kept: list[dict] = []
+    for src in sources:
+        path = str(src.get("relative_path", "")).strip().lower()
+        symbol = str(src.get("symbol_name", "")).strip().lower()
+        if _is_overview_noise_source(path, symbol):
+            continue
+        kept.append(src)
+    return kept
+
+
+def _overview_anchor_score(src: dict) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    chunk_type = str(src.get("chunk_type", "")).strip().lower()
+    file_type = str(src.get("file_type", "")).strip().lower()
+
+    if not relative_path or _is_overview_noise_source(relative_path, symbol_name):
+        return 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        return 100
+    if relative_path == "backend/readme.md":
+        return 92
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        return 84
+    if relative_path.endswith("backend/retrieval/main.py"):
+        return 82
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        return 80
+    if relative_path.endswith("backend/docker-compose.yml"):
+        return 70
+    if relative_path.endswith("backend/retrieval/db.py"):
+        return 68
+    if relative_path == "readme.md":
+        return 52
+    if relative_path.endswith("docker-compose.yml"):
+        return 48
+    if relative_path.endswith(("requirements.txt", "pyproject.toml", "package.json", ".env.example")):
+        return 40
+    return 0
+
+
+def _architecture_anchor_score(src: dict) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    chunk_type = str(src.get("chunk_type", "")).strip().lower()
+    file_type = str(src.get("file_type", "")).strip().lower()
+
+    if not relative_path or _is_overview_noise_source(relative_path, symbol_name):
+        return 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        return 100
+    if relative_path == "backend/readme.md":
+        return 96
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        return 94
+    if relative_path.endswith("backend/retrieval/main.py"):
+        return 92
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        return 90
+    if relative_path.endswith("backend/docker-compose.yml"):
+        return 88
+    if relative_path.endswith("backend/.env.example"):
+        return 86
+    if relative_path.endswith("backend/docs/deployment_runbook.md"):
+        return 84
+    if relative_path.endswith("backend/retrieval/db.py"):
+        return 82
+    if relative_path == "readme.md":
+        return 50
+    if relative_path.endswith("docker-compose.yml"):
+        return 48
+    if relative_path.endswith(".env.example"):
+        return 46
+    if relative_path.endswith("docs/deployment_runbook.md"):
+        return 44
+    return 0
+
+
+def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
+    if symbol_name in _OVERVIEW_NOISE_SYMBOLS:
+        return True
+
+    if not relative_path.startswith("backend/"):
+        return False
+
+    if relative_path.endswith("retrieval/source_filter.py"):
+        return True
+
+    if relative_path.endswith("retrieval/query_processor.py") and symbol_name.startswith("_inject_"):
+        return True
+
+    if relative_path.endswith("retrieval/code_answers.py") and (
+        symbol_name in _OVERVIEW_NOISE_SYMBOLS
+        or symbol_name.startswith("_architecture_")
+        or symbol_name.startswith("_overview_")
+    ):
+        return True
+
+    if relative_path.endswith("retrieval/searcher.py") and (
+        symbol_name in _OVERVIEW_NOISE_SYMBOLS
+        or symbol_name.startswith("_is_overview")
+        or symbol_name.startswith("_inject_overview")
+    ):
+        return True
+
+    return False
