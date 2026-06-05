@@ -17,6 +17,7 @@ All retrieval pipeline documentation is grouped under:
 
 - `docs/retrieval_docs/current_retrieval_strategy.md`
 - `docs/retrieval_docs/response_quality_refinement_plan.md`
+- `docs/retrieval_docs/ragas_validation_design.md`
 - `docs/retrieval_docs/eval_results_lexical_baseline.md`
 - `docs/retrieval_docs/README.md`
 - `docs/retrieval_docs/retrieval_pipeline_docs.md`

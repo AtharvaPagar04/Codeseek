@@ -23,6 +23,7 @@ Current response-quality state:
 
 - [Current Retrieval Strategy](./current_retrieval_strategy.md)
 - [Response Quality Refinement Plan](./response_quality_refinement_plan.md)
+- [RAGAS Validation Design](./ragas_validation_design.md)
 - [Manual Response-Review Checklist](./manual_response_review_checklist.md)
 - [Embedding Model Benchmark Results](./embedding_model_benchmark_results.md)
 - [Lexical Layer Benchmark Results](./lexical_layer_benchmark_results.md)
