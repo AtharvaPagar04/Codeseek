@@ -13,12 +13,21 @@ from retrieval.code_answers import (
 )
 from retrieval.config import (
     GROQ_MODEL,
+    LOCAL_LLM_BASE_URL,
+    LOCAL_LLM_COMPLEX_MODEL,
+    LOCAL_LLM_PRIMARY_MODEL,
+    LOCAL_LLM_TIMEOUT_SECONDS,
     MAX_RESPONSE_TOKENS,
     RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS,
     RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD,
     RETRIEVAL_GROQ_TIMEOUT_SECONDS,
     RETRIEVAL_RETRY_ATTEMPTS,
     RETRIEVAL_RETRY_BACKOFF_SECONDS,
+)
+from retrieval.local_llm_runtime import (
+    background_prime_primary_model,
+    get_provider_runtime_state,
+    wait_for_model_ready,
 )
 
 SYSTEM_PROMPT = (
@@ -55,6 +64,8 @@ SYSTEM_PROMPT = (
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
 OPENROUTER_MODEL = os.getenv("RETRIEVAL_OPENROUTER_MODEL", "openai/gpt-4o-mini")
 GEMINI_MODEL = os.getenv("RETRIEVAL_GEMINI_MODEL", "gemini-1.5-flash")
+AICREDITS_MODEL = os.getenv("RETRIEVAL_AICREDITS_MODEL", "gpt-5.4-mini")
+AICREDITS_BASE_URL = os.getenv("AICREDITS_BASE_URL", "https://api.aicredits.io/v1")
 
 _llm_failures = 0
 _llm_circuit_open_until = 0.0
@@ -76,6 +87,9 @@ def generate_answer(
     allowed_sources: list[dict] | None = None,
     extra_context_blocks: list[str] | None = None,
     provider_config: dict[str, Any] | None = None,
+    query_info: dict[str, Any] | None = None,
+    evidence_confidence: dict[str, Any] | str | None = None,
+    selection_meta: dict[str, Any] | None = None,
 ) -> str:
     """Generate a grounded answer from context using a selected provider."""
     prompt = _build_prompt(
@@ -85,14 +99,82 @@ def generate_answer(
         allowed_sources or [],
         extra_context_blocks=extra_context_blocks or [],
     )
-    resolved = _resolve_provider_config(provider_config)
+    resolved = _resolve_provider_config(
+        provider_config,
+        raw_query=raw_query,
+        query_info=query_info or {},
+        evidence_confidence=evidence_confidence,
+    )
+    if selection_meta is not None and resolved:
+        runtime_state = get_provider_runtime_state(resolved["provider"], resolved["model"])
+        selection_meta.update(
+            {
+                "provider": resolved["provider"],
+                "model": resolved["model"],
+                "routing_mode": resolved.get("routing_mode", ""),
+                "timeout_seconds": resolved.get("timeout_seconds", 0.0),
+                "runtime_status": runtime_state.get("status", ""),
+                "runtime_detail": runtime_state.get("detail", ""),
+            }
+        )
     if resolved:
-        return _provider_answer(
+        if resolved["provider"] == "local":
+            try:
+                if resolved["model"] == LOCAL_LLM_COMPLEX_MODEL:
+                    wait_for_model_ready(
+                        resolved["model"],
+                        timeout_seconds=resolved["timeout_seconds"],
+                        reason="query_requires_complex_model",
+                    )
+                else:
+                    background_prime_primary_model()
+            except TimeoutError as exc:
+                raise LlmProviderError(503, str(exc)) from exc
+            except RuntimeError as exc:
+                raise LlmProviderError(502, str(exc)) from exc
+        answer = _provider_answer(
             prompt,
             provider=resolved["provider"],
             api_key=resolved["api_key"],
             model=resolved["model"],
+            timeout_seconds=resolved["timeout_seconds"],
+            base_url=resolved.get("base_url", ""),
         )
+        if (
+            resolved["provider"] == "local"
+            and resolved.get("routing_mode", "").startswith("auto")
+            and resolved["model"] == LOCAL_LLM_PRIMARY_MODEL
+            and _should_escalate_local_answer(answer)
+        ):
+            try:
+                wait_for_model_ready(
+                    LOCAL_LLM_COMPLEX_MODEL,
+                    timeout_seconds=resolved["timeout_seconds"],
+                    reason="auto_escalation_required",
+                )
+            except TimeoutError as exc:
+                raise LlmProviderError(503, str(exc)) from exc
+            except RuntimeError as exc:
+                raise LlmProviderError(502, str(exc)) from exc
+            fallback_answer = _provider_answer(
+                prompt,
+                provider=resolved["provider"],
+                api_key=resolved["api_key"],
+                model=LOCAL_LLM_COMPLEX_MODEL,
+                timeout_seconds=resolved["timeout_seconds"],
+                base_url=resolved.get("base_url", ""),
+            )
+            if selection_meta is not None:
+                selection_meta.update(
+                    {
+                        "escalated": True,
+                        "initial_model": LOCAL_LLM_PRIMARY_MODEL,
+                        "model": LOCAL_LLM_COMPLEX_MODEL,
+                        "fallback_reason": "insufficient_first_pass",
+                    }
+                )
+            return fallback_answer
+        return answer
     return "No LLM provider API key configured. Add one in the frontend API config and make it active."
 
 
@@ -181,23 +263,51 @@ def _build_prompt(
     return "\n\n".join(parts)
 
 
-def _resolve_provider_config(provider_config: dict[str, Any] | None) -> dict[str, str] | None:
+def _resolve_provider_config(
+    provider_config: dict[str, Any] | None,
+    *,
+    raw_query: str,
+    query_info: dict[str, Any],
+    evidence_confidence: dict[str, Any] | str | None,
+) -> dict[str, Any] | None:
     if provider_config:
         provider = str(provider_config.get("provider", "")).strip().lower()
         api_key = str(provider_config.get("api_key", "")).strip()
         model = str(provider_config.get("model", "")).strip()
-        if provider and api_key:
-            if provider not in {"groq", "openai", "openrouter", "gemini"}:
+        if provider:
+            if provider not in {"groq", "openai", "openrouter", "gemini", "aicredits", "local"}:
                 return {
                     "provider": "unsupported",
                     "api_key": api_key,
                     "model": provider,
+                    "timeout_seconds": RETRIEVAL_GROQ_TIMEOUT_SECONDS,
+                    "base_url": "",
                 }
-            return {
-                "provider": provider,
-                "api_key": api_key,
-                "model": model or _default_model(provider),
-            }
+            if provider == "local":
+                requested_model = model or _default_model(provider)
+                chosen_model, routing_mode = _resolve_local_model(
+                    raw_query=raw_query,
+                    query_info=query_info,
+                    evidence_confidence=evidence_confidence,
+                    requested_model=requested_model,
+                )
+                return {
+                    "provider": provider,
+                    "api_key": api_key,
+                    "model": chosen_model,
+                    "routing_mode": routing_mode,
+                    "timeout_seconds": LOCAL_LLM_TIMEOUT_SECONDS,
+                    "base_url": LOCAL_LLM_BASE_URL,
+                }
+            if api_key:
+                return {
+                    "provider": provider,
+                    "api_key": api_key,
+                    "model": model or _default_model(provider),
+                    "routing_mode": "manual" if model else "default",
+                    "timeout_seconds": RETRIEVAL_GROQ_TIMEOUT_SECONDS,
+                    "base_url": "",
+                }
     return None
 
 
@@ -210,10 +320,91 @@ def _default_model(provider: str) -> str:
         return OPENROUTER_MODEL
     if provider == "gemini":
         return GEMINI_MODEL
+    if provider == "aicredits":
+        return AICREDITS_MODEL
+    if provider == "local":
+        return "auto"
     return ""
 
 
-def _provider_answer(prompt: str, provider: str, api_key: str, model: str) -> str:
+def _resolve_local_model(
+    *,
+    raw_query: str,
+    query_info: dict[str, Any],
+    evidence_confidence: dict[str, Any] | str | None,
+    requested_model: str,
+) -> tuple[str, str]:
+    normalized = requested_model.strip().lower()
+    if normalized in {
+        "qwen2.5-coder:3b-8k",
+        "qwen-coder-7b-8192",
+        "qwen-coder-3b",
+        "qwen-coder-7b",
+    }:
+        return requested_model, "manual"
+    if normalized not in {"", "default", "auto"}:
+        return requested_model, "manual"
+
+    score = 0
+    intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
+    entities = query_info.get("entities") or {}
+    entity_breadth = 0
+    if isinstance(entities, dict):
+        for value in entities.values():
+            if isinstance(value, list):
+                entity_breadth += len(value)
+            elif isinstance(value, dict):
+                entity_breadth += len(value)
+    words = [token for token in raw_query.lower().split() if token.strip()]
+
+    if intent in {"TRACE", "ARCHITECTURE", "EXPLANATION", "FOLLOWUP", "DEPENDENCY"}:
+        score += 2
+    elif intent in {"OVERVIEW", "SEMANTIC"} and len(words) >= 12:
+        score += 1
+
+    if entity_breadth >= 4:
+        score += 1
+    if entity_breadth >= 8:
+        score += 1
+    if len(words) >= 18:
+        score += 1
+    if any(marker in raw_query.lower() for marker in ("how does", "walk through", "trace", "explain", "architecture", "lifecycle")):
+        score += 1
+
+    if isinstance(evidence_confidence, dict):
+        level = str(evidence_confidence.get("level", "")).lower()
+    else:
+        level = str(evidence_confidence or "").lower()
+    if level == "weak":
+        score += 2
+    elif level == "partial":
+        score += 1
+
+    model = LOCAL_LLM_COMPLEX_MODEL if score >= 3 else LOCAL_LLM_PRIMARY_MODEL
+    return model, f"auto(score={score})"
+
+
+def _should_escalate_local_answer(answer: str) -> bool:
+    normalized = answer.strip().lower()
+    if not normalized:
+        return True
+    if "insufficient context in retrieved code to answer confidently" in normalized:
+        return True
+    if normalized.startswith("no response text returned from model"):
+        return True
+    weak_markers = ("cannot", "unable", "insufficient", "missing context", "not enough context")
+    return len(normalized) < 160 and any(marker in normalized for marker in weak_markers)
+
+
+def _provider_answer(
+    prompt: str,
+    provider: str,
+    api_key: str,
+    model: str,
+    *,
+    timeout_seconds: float,
+    base_url: str = "",
+) -> str:
     global _llm_failures, _llm_circuit_open_until
     now = time.time()
     if _llm_circuit_open_until > now:
@@ -236,6 +427,8 @@ def _provider_answer(prompt: str, provider: str, api_key: str, model: str) -> st
                 api_key=api_key,
                 model=model,
                 prompt=prompt,
+                timeout_seconds=timeout_seconds,
+                base_url=base_url,
             )
             _llm_failures = 0
             content = _extract_message_content(response)
@@ -256,27 +449,43 @@ def _chat_completion_request(
     api_key: str,
     model: str,
     prompt: str,
+    *,
+    timeout_seconds: float,
+    base_url: str = "",
+    system_prompt: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
-    url, headers = _provider_endpoint(provider, api_key)
+    url, headers = _provider_endpoint(provider, api_key, base_url=base_url)
+    sys_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.1,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+        if provider == "local":
+            payload["options"] = {
+                "temperature": 0.1,
+                "num_predict": max_tokens,
+            }
+    else:
+        payload["max_tokens"] = MAX_RESPONSE_TOKENS
+
     response = httpx.post(
         url,
         headers=headers,
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            "max_tokens": MAX_RESPONSE_TOKENS,
-            "temperature": 0.1,
-        },
-        timeout=RETRIEVAL_GROQ_TIMEOUT_SECONDS,
+        json=payload,
+        timeout=timeout_seconds,
     )
     response.raise_for_status()
     return response.json()
 
 
-def _provider_endpoint(provider: str, api_key: str) -> tuple[str, dict[str, str]]:
+def _provider_endpoint(provider: str, api_key: str, *, base_url: str = "") -> tuple[str, dict[str, str]]:
     if provider == "groq":
         return (
             "https://api.groq.com/openai/v1/chat/completions",
@@ -304,6 +513,21 @@ def _provider_endpoint(provider: str, api_key: str) -> tuple[str, dict[str, str]
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
+    if provider == "aicredits":
+        return (
+            f"{AICREDITS_BASE_URL}/chat/completions",
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+    if provider == "local":
+        local_base = (base_url or LOCAL_LLM_BASE_URL).rstrip("/")
+        if local_base.endswith("/chat/completions"):
+            url = local_base
+        else:
+            url = f"{local_base}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return (url, headers)
     raise ValueError(f"Unsupported provider: {provider}")
 
 

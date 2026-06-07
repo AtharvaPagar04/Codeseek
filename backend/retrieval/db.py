@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS repo_sessions (
     last_indexed_commit TEXT NOT NULL DEFAULT '',
     chunks_generated INTEGER NOT NULL DEFAULT 0,
     embeddings_stored INTEGER NOT NULL DEFAULT 0,
-    idempotent_reuse INTEGER NOT NULL DEFAULT 0
+    idempotent_reuse INTEGER NOT NULL DEFAULT 0,
+    enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -186,16 +187,16 @@ def get_database_locator() -> str:
     return str(get_db_path())
 
 
-def init_db() -> None:
+def init_db(force: bool = False) -> None:
     global _initialized, _initialized_backend, _initialized_locator
     backend = get_db_backend()
     locator = get_database_locator()
-    if _initialized and _initialized_backend == backend and _initialized_locator == locator:
+    if backend == "sqlite" and not Path(locator).exists():
+        force = True
+    if not force and _initialized and _initialized_backend == backend and _initialized_locator == locator:
         return
     with _init_lock:
-        backend = get_db_backend()
-        locator = get_database_locator()
-        if _initialized and _initialized_backend == backend and _initialized_locator == locator:
+        if not force and _initialized and _initialized_backend == backend and _initialized_locator == locator:
             return
         if backend == "postgres":
             _init_postgres(locator)
@@ -220,6 +221,10 @@ def _init_sqlite(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
             )
+        if "enable_chunk_descriptions" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0"
+            )
         message_columns = {
             row[1]
             for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
@@ -241,6 +246,10 @@ def _init_postgres(database_url: str) -> None:
             if not _postgres_has_column(cursor, "repo_sessions", "user_id"):
                 cursor.execute(
                     "ALTER TABLE repo_sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "enable_chunk_descriptions"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0"
                 )
             if not _postgres_has_column(cursor, "chat_messages", "thread_id"):
                 cursor.execute(

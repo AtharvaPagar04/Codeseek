@@ -19,7 +19,17 @@ from retrieval.memory_store import (
     save_turn_entities,
 )
 
-_enc = tiktoken.get_encoding("cl100k_base")
+try:
+    _enc = tiktoken.get_encoding("cl100k_base")
+except Exception:  # pragma: no cover - offline fallback for test environments
+    class _FallbackEncoding:
+        def encode(self, text: str) -> list[int]:
+            return list(text.encode("utf-8"))
+
+        def decode(self, tokens: list[int]) -> str:
+            return bytes(tokens).decode("utf-8", errors="ignore")
+
+    _enc = _FallbackEncoding()
 
 
 def _token_count(text: str) -> int:

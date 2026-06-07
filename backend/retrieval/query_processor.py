@@ -204,14 +204,26 @@ FLOW_FILES = {
 
 ARCHITECTURE_FILES = [
     "README.md",
+    "backend/README.md",
     "docker-compose.yml",
+    "backend/docker-compose.yml",
     "Dockerfile",
+    "backend/Dockerfile",
     ".env.example",
     "docs/deployment_runbook.md",
+    "backend/docs/deployment_runbook.md",
     "retrieval/api_service.py",
+    "backend/retrieval/api_service.py",
     "retrieval/main.py",
+    "backend/retrieval/main.py",
+    "retrieval/searcher.py",
+    "backend/retrieval/searcher.py",
+    "retrieval/db.py",
+    "backend/retrieval/db.py",
     "retrieval/session_indexer.py",
+    "backend/retrieval/session_indexer.py",
     "rag_ingestion/main.py",
+    "backend/rag_ingestion/main.py",
 ]
 
 
@@ -273,18 +285,7 @@ def _inject_flow_symbols(query: str, entities: dict) -> None:
 
 def _inject_architecture_files(query: str, entities: dict) -> None:
     lower = query.lower()
-    if not any(
-        phrase in lower
-        for phrase in (
-            "architecture",
-            "system design",
-            "project structure",
-            "how is this project structured",
-            "how is the project structured",
-            "module layout",
-            "runtime shape",
-        )
-    ):
+    if not _has_architecture_markers(lower):
         return
     files = list(entities.get("files") or [])
     files.extend(ARCHITECTURE_FILES)
@@ -476,18 +477,21 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     explicit_code_request = _has_code_request_markers(lower)
     explicit_lookup = _has_lookup_markers(lower)
     short_query = len(lower.split()) <= 3
+    overview_markers = _has_overview_markers(lower)
+    architecture_markers = _has_architecture_markers(lower)
+    tech_stack_markers = _has_tech_stack_markers(lower)
 
-    if any(phrase in lower for phrase in ("what is this project about", "what does this project do", "overview")):
+    if overview_markers:
         scores["OVERVIEW"] = 0.86
-    if "architecture" in lower or "design" in lower or "how is this project structured" in lower:
-        scores["ARCHITECTURE"] = 0.82
-    if any(phrase in lower for phrase in ("tech stack", "stack used", "framework", "library", "dependencies")):
+    if architecture_markers:
+        scores["ARCHITECTURE"] = 0.88
+    if tech_stack_markers:
         scores["TECH_STACK"] = 0.82
     if any(phrase in lower for phrase in ("trace", "flow", "lifecycle", "call path", "step by step")):
         scores["TRACE"] = 0.78
     if entities.get("env_keys") or entities.get("services") or any(word in lower for word in ("env", "environment", "config", "configuration", "service", "container")):
         scores["CONFIG"] = 0.82
-    if has_files:
+    if has_files and not (overview_markers or architecture_markers or tech_stack_markers):
         scores["FILE"] = 0.82
     if any(phrase in lower for phrase in ("explain", "how does", "what does", "walk me through")):
         scores["EXPLANATION"] = 0.72
@@ -499,7 +503,7 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["LOW_CONTEXT"] = 0.7
     if has_symbols or has_files or has_exact_terms:
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.68)
-    if has_files and any(phrase in lower for phrase in ("explain", "what is in", "show", "open")):
+    if has_files and not architecture_markers and any(phrase in lower for phrase in ("explain", "what is in", "show", "open")):
         scores["FILE"] = max(scores["FILE"], 0.86)
     if has_symbols and any(phrase in lower for phrase in ("where is", "defined", "implemented", "used")):
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.8)
@@ -517,6 +521,54 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     if short_query and not (has_symbols or has_files or has_exact_terms):
         scores["SEMANTIC"] = min(scores["SEMANTIC"], 0.2)
     return scores
+
+
+def _has_overview_markers(lower: str) -> bool:
+    return any(
+        phrase in lower
+        for phrase in (
+            "what is this project about",
+            "what does this project do",
+            "what does this codebase do",
+            "what does this repo do",
+            "repository overview",
+            "repo overview",
+            "project overview",
+            "overview of the project",
+            "overview of this",
+            "give me an overview",
+            "give me a repository overview",
+            "overview",
+        )
+    )
+
+
+def _has_architecture_markers(lower: str) -> bool:
+    return any(
+        phrase in lower
+        for phrase in (
+            "architecture",
+            "system design",
+            "design",
+            "project structure",
+            "repository structure",
+            "codebase structure",
+            "how is this project structured",
+            "how is the project structured",
+            "how is this codebase structured",
+            "how is this repository structured",
+            "what are the main modules",
+            "what are the core modules",
+            "top-level subsystems",
+            "top level subsystems",
+            "module layout",
+            "runtime shape",
+        )
+    )
+
+
+def _has_tech_stack_markers(lower: str) -> bool:
+    return any(phrase in lower for phrase in ("tech stack", "stack used", "framework", "library", "dependencies"))
 
 
 def _has_followup_markers(lower: str) -> bool:

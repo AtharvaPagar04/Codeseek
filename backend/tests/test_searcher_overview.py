@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import tempfile
 from pathlib import Path
@@ -20,6 +21,16 @@ class SearcherOverviewTests(unittest.TestCase):
         self.assertGreater(_overview_priority(package_json), _overview_priority(component))
         self.assertGreater(_overview_priority(env_example), _overview_priority(component))
         self.assertLess(_overview_priority(test_file), 0)
+
+    def test_overview_priority_prefers_backend_architecture_files_over_frontend_package_metadata(self) -> None:
+        frontend_package = {"relative_path": "frontend/package.json", "symbol_name": "package_json", "chunk_type": "file_summary"}
+        backend_api = {"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_query_impl", "chunk_type": "function"}
+        backend_main = {"relative_path": "backend/retrieval/main.py", "symbol_name": "run_query", "chunk_type": "function"}
+        ingestion_main = {"relative_path": "backend/rag_ingestion/main.py", "symbol_name": "run_pipeline", "chunk_type": "function"}
+
+        self.assertGreater(_overview_priority(backend_api), _overview_priority(frontend_package))
+        self.assertGreater(_overview_priority(backend_main), _overview_priority(frontend_package))
+        self.assertGreater(_overview_priority(ingestion_main), _overview_priority(frontend_package))
 
     def test_inject_overview_candidates_prepends_unique_candidates(self) -> None:
         current = [{"chunk_id": "1", "relative_path": "src/App.tsx"}]
@@ -54,6 +65,362 @@ class SearcherOverviewTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["chunk_id"], "overview-1")
+
+    def test_search_injects_overview_candidates_for_codebase_structure_queries(self) -> None:
+        query_info = {"raw_query": "How is this codebase structured?", "intent": "SYMBOL", "primary_intent": "FILE", "entities": {"files": ["backend/retrieval/main.py"]}}
+        overview_payload = {
+            "chunk_id": "overview-structure-1",
+            "relative_path": "backend/retrieval/main.py",
+            "symbol_name": "run_query",
+            "start_line": 1,
+            "end_line": 20,
+            "chunk_type": "function",
+        }
+
+        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
+            "retrieval.searcher._metadata_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._exact_entity_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._repository_overview_candidates", return_value=[overview_payload]
+        ):
+            results = search(query_info)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["chunk_id"], "overview-structure-1")
+
+    def test_search_injects_architecture_file_candidates_from_exact_file_hints(self) -> None:
+        query_info = {
+            "raw_query": "How is this codebase structured?",
+            "intent": "SEMANTIC",
+            "primary_intent": "ARCHITECTURE",
+            "entities": {
+                "files": [
+                    "backend/retrieval/api_service.py",
+                    "backend/retrieval/main.py",
+                    "backend/rag_ingestion/main.py",
+                ]
+            },
+        }
+        dense_readme = {
+            "chunk_id": "dense-readme-1",
+            "relative_path": "README.md",
+            "symbol_name": "",
+            "start_line": 1,
+            "end_line": 200,
+            "chunk_type": "file",
+        }
+        api_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "api-1",
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "chunk_type": "function",
+            }
+        )
+        main_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "main-1",
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "chunk_type": "function",
+            }
+        )
+        ingestion_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "ingest-1",
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "start_line": 42,
+                "end_line": 108,
+                "chunk_type": "function",
+            }
+        )
+
+        with patch("retrieval.searcher._dense_search", return_value=[(dense_readme, 0.9, "dense")]), patch(
+            "retrieval.searcher._metadata_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._exact_entity_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._repository_overview_candidates", return_value=[]
+        ), patch(
+            "retrieval.searcher._qdrant_call",
+            side_effect=[
+                ([api_hit], None),
+                ([main_hit], None),
+                ([ingestion_hit], None),
+            ],
+        ):
+            results = search(query_info)
+
+        paths = [item["relative_path"] for item in results[:4]]
+        self.assertIn("backend/retrieval/api_service.py", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertIn("backend/rag_ingestion/main.py", paths)
+
+    def test_search_architecture_file_injection_prefers_representative_symbols(self) -> None:
+        query_info = {
+            "raw_query": "How is this codebase structured?",
+            "intent": "SEMANTIC",
+            "primary_intent": "ARCHITECTURE",
+            "entities": {
+                "files": [
+                    "backend/retrieval/api_service.py",
+                    "backend/retrieval/main.py",
+                    "backend/rag_ingestion/main.py",
+                ]
+            },
+        }
+        api_query_request = SimpleNamespace(
+            payload={
+                "chunk_id": "api-class-1",
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "QueryRequest",
+                "start_line": 189,
+                "end_line": 193,
+                "chunk_type": "class",
+            }
+        )
+        api_query_impl = SimpleNamespace(
+            payload={
+                "chunk_id": "api-fn-1",
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "chunk_type": "function",
+            }
+        )
+        main_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "main-1",
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "chunk_type": "function",
+            }
+        )
+        ingestion_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "ingest-1",
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "start_line": 42,
+                "end_line": 108,
+                "chunk_type": "function",
+            }
+        )
+
+        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
+            "retrieval.searcher._metadata_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._exact_entity_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._repository_overview_candidates", return_value=[]
+        ), patch(
+            "retrieval.searcher._qdrant_call",
+            side_effect=[
+                ([api_query_request, api_query_impl], None),
+                ([main_hit], None),
+                ([ingestion_hit], None),
+            ],
+        ):
+            results = search(query_info)
+
+        selected_api = next(item for item in results if item["relative_path"] == "backend/retrieval/api_service.py")
+        self.assertEqual(selected_api["symbol_name"], "_query_impl")
+
+    def test_search_injects_architecture_file_candidates_for_architecture_overview_wording(self) -> None:
+        query_info = {
+            "raw_query": "Give me a high-level architecture overview of this codebase.",
+            "intent": "SEMANTIC",
+            "primary_intent": "OVERVIEW",
+            "entities": {
+                "files": [
+                    "backend/retrieval/api_service.py",
+                    "backend/retrieval/main.py",
+                    "backend/rag_ingestion/main.py",
+                ]
+            },
+        }
+        api_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "api-1",
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "chunk_type": "function",
+            }
+        )
+        main_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "main-1",
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "chunk_type": "function",
+            }
+        )
+        ingestion_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "ingest-1",
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "start_line": 42,
+                "end_line": 108,
+                "chunk_type": "function",
+            }
+        )
+
+        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
+            "retrieval.searcher._metadata_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._exact_entity_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._repository_overview_candidates", return_value=[]
+        ), patch(
+            "retrieval.searcher._qdrant_call",
+            side_effect=[
+                ([api_hit], None),
+                ([main_hit], None),
+                ([ingestion_hit], None),
+            ],
+        ):
+            results = search(query_info)
+
+        paths = [item["relative_path"] for item in results[:4]]
+        self.assertIn("backend/retrieval/api_service.py", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertIn("backend/rag_ingestion/main.py", paths)
+
+    def test_search_promotes_best_same_path_architecture_chunk_when_file_already_exists_lower(self) -> None:
+        query_info = {
+            "raw_query": "How is this codebase structured?",
+            "intent": "SEMANTIC",
+            "primary_intent": "ARCHITECTURE",
+            "entities": {
+                "files": [
+                    "backend/retrieval/api_service.py",
+                    "backend/retrieval/main.py",
+                ]
+            },
+        }
+        api_query_request = {
+            "chunk_id": "api-class-1",
+            "relative_path": "backend/retrieval/api_service.py",
+            "symbol_name": "QueryRequest",
+            "start_line": 189,
+            "end_line": 193,
+            "chunk_type": "class",
+            "retrieval_score": 0.2,
+            "exact_retrieval_hit": True,
+        }
+        api_query_impl = SimpleNamespace(
+            payload={
+                "chunk_id": "api-fn-1",
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "chunk_type": "function",
+            }
+        )
+        main_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "main-1",
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "chunk_type": "function",
+            }
+        )
+
+        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
+            "retrieval.searcher._metadata_search", return_value=[(api_query_request, 0.0, "filter")]
+        ), patch(
+            "retrieval.searcher._exact_entity_search", return_value=[]
+        ), patch(
+            "retrieval.searcher._repository_overview_candidates", return_value=[]
+        ), patch(
+            "retrieval.searcher._qdrant_call",
+            side_effect=[
+                ([api_query_impl], None),
+                ([main_hit], None),
+            ],
+        ):
+            results = search(query_info)
+
+        selected_api = next(item for item in results if item["relative_path"] == "backend/retrieval/api_service.py")
+        self.assertEqual(selected_api["symbol_name"], "_query_impl")
+
+    def test_repository_overview_candidates_exclude_fixture_state_and_retrieval_docs_noise(self) -> None:
+        repo_summary_hit = SimpleNamespace(
+            payload={
+                "chunk_id": "repo-summary-1",
+                "relative_path": "__repo_summary__.md",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+            }
+        )
+        noisy_state = SimpleNamespace(
+            payload={
+                "chunk_id": "state-1",
+                "relative_path": ".rag_ingestion_state.json",
+                "chunk_type": "file_summary",
+            }
+        )
+        noisy_fixture = SimpleNamespace(
+            payload={
+                "chunk_id": "fixture-1",
+                "relative_path": "backend/tests/fixtures/retrieval_repos/backend_api/README.md",
+                "chunk_type": "file_summary",
+            }
+        )
+        noisy_docs = SimpleNamespace(
+            payload={
+                "chunk_id": "docs-1",
+                "relative_path": "backend/docs/retrieval_docs/README.md",
+                "chunk_type": "file_summary",
+            }
+        )
+        backend_readme = SimpleNamespace(
+            payload={
+                "chunk_id": "backend-readme-1",
+                "relative_path": "backend/README.md",
+                "chunk_type": "file_summary",
+            }
+        )
+        backend_main = SimpleNamespace(
+            payload={
+                "chunk_id": "backend-main-1",
+                "relative_path": "backend/retrieval/main.py",
+                "chunk_type": "function",
+                "symbol_name": "run_query",
+            }
+        )
+
+        with patch("retrieval.searcher._get_client") as get_client:
+            get_client.return_value.scroll.side_effect = [
+                ([repo_summary_hit], None),
+                ([noisy_state, noisy_fixture, noisy_docs, backend_readme, backend_main], None),
+            ]
+            candidates = _inject_overview_candidates([])
+
+        paths = [item["relative_path"] for item in candidates]
+        self.assertIn("__repo_summary__.md", paths)
+        self.assertIn("backend/README.md", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertNotIn(".rag_ingestion_state.json", paths)
+        self.assertNotIn("backend/tests/fixtures/retrieval_repos/backend_api/README.md", paths)
+        self.assertNotIn("backend/docs/retrieval_docs/README.md", paths)
 
     def test_search_injects_import_backing_candidate_for_section_query(self) -> None:
         query_info = {"raw_query": "what skills are listed in the skills section", "intent": "SEMANTIC", "entities": {}}

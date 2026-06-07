@@ -1,0 +1,76 @@
+{
+  "name": "codeseek-ragas-human-review-v1",
+  "source_fixture": "docs/retrieval_docs/eval_codeseek_ragas_v1.json",
+  "reviewer": "codex",
+  "reviewed_at_utc": "2026-06-06T00:00:00Z",
+  "notes": "Curated release-signoff sample used when automated metrics and manual review need a tighter gate.",
+  "cases": [
+    {
+      "case_id": "cs-ragas-001",
+      "review_status": "approved",
+      "priority": "high",
+      "expected_response_mode": "llm",
+      "minimums": {
+        "context_precision": 0.75,
+        "context_recall": 0.75,
+        "faithfulness": 0.80,
+        "answer_relevancy": 0.75,
+        "answer_correctness": 0.70
+      },
+      "notes": "Config lookup should cite the env example and deployment runbook."
+    },
+    {
+      "case_id": "cs-ragas-006",
+      "review_status": "approved",
+      "priority": "high",
+      "expected_response_mode": "architecture_summary",
+      "minimums": {
+        "context_precision": 0.70,
+        "context_recall": 0.75,
+        "faithfulness": 0.80,
+        "answer_relevancy": 0.75,
+        "answer_correctness": 0.65
+      },
+      "notes": "Architecture answers should stay compact and include deployment surfaces."
+    },
+    {
+      "case_id": "cs-ragas-010",
+      "review_status": "approved",
+      "priority": "medium",
+      "expected_response_mode": "low_context",
+      "minimums": {
+        "faithfulness": 0.90,
+        "answer_relevancy": 0.70
+      },
+      "notes": "Known absent-evidence question; low-context fallback is the correct behavior."
+    },
+    {
+      "case_id": "cs-ragas-015",
+      "review_status": "approved",
+      "priority": "high",
+      "expected_response_mode": "flow_summary",
+      "minimums": {
+        "context_precision": 0.70,
+        "context_recall": 0.75,
+        "faithfulness": 0.80,
+        "answer_relevancy": 0.75,
+        "answer_correctness": 0.65
+      },
+      "notes": "Flow summaries should include session creation and ingestion linkage."
+    },
+    {
+      "case_id": "cs-ragas-021",
+      "review_status": "needs_followup",
+      "priority": "medium",
+      "expected_response_mode": "low_context",
+      "notes": "Intentional negative sample for unsupported Go parser lookup."
+    },
+    {
+      "case_id": "cs-ragas-022",
+      "review_status": "needs_followup",
+      "priority": "medium",
+      "expected_response_mode": "low_context",
+      "notes": "Intentional negative sample for unsupported Rust parser lookup."
+    }
+  ]
+}

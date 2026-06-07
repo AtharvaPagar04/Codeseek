@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from retrieval.crypto_store import decrypt_secret, encrypt_secret
 from retrieval.db import db_cursor
 
+SUPPORTED_PROVIDER_TYPES = frozenset({"groq", "openai", "openrouter", "gemini", "aicredits", "local"})
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -68,13 +70,19 @@ def create_provider_credential(
     *,
     set_active: bool = False,
 ) -> dict:
+    provider = provider.strip().lower()
+    if provider not in SUPPORTED_PROVIDER_TYPES:
+        raise ValueError(f"Unsupported provider: {provider}")
+    secret = api_key.strip()
+    if provider != "local" and not secret:
+        raise ValueError("api_key is required for remote providers")
     now = _now()
     credential = {
         "id": uuid.uuid4().hex,
         "user_id": user_id,
-        "provider": provider.strip().lower(),
+        "provider": provider,
         "label": label.strip(),
-        "encrypted_api_key": encrypt_secret(api_key.strip()),
+        "encrypted_api_key": encrypt_secret(secret),
         "model": model.strip(),
         "is_active": bool(set_active),
         "created_at": now,

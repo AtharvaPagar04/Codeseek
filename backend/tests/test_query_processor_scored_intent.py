@@ -66,8 +66,29 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         result = query_processor.process_query("architecture overview")
 
         self.assertIn("README.md", result["entities"]["files"])
+        self.assertIn("backend/README.md", result["entities"]["files"])
         self.assertIn("docker-compose.yml", result["entities"]["files"])
         self.assertIn("retrieval/api_service.py", result["entities"]["files"])
+        self.assertIn("backend/retrieval/api_service.py", result["entities"]["files"])
+        self.assertIn("backend/retrieval/main.py", result["entities"]["files"])
+        self.assertIn("backend/rag_ingestion/main.py", result["entities"]["files"])
+
+    def test_injects_architecture_files_for_module_structure_prompt(self) -> None:
+        result = query_processor.process_query("What are the main modules and what does each one do?")
+
+        self.assertIn("backend/retrieval/api_service.py", result["entities"]["files"])
+        self.assertIn("backend/retrieval/main.py", result["entities"]["files"])
+        self.assertIn("backend/rag_ingestion/main.py", result["entities"]["files"])
+        self.assertIn("backend/docker-compose.yml", result["entities"]["files"])
+        self.assertIn("backend/retrieval/db.py", result["entities"]["files"])
+        self.assertEqual(result["primary_intent"], "ARCHITECTURE")
+
+    def test_prefers_architecture_intent_for_codebase_structure_prompt(self) -> None:
+        result = query_processor.process_query("How is this codebase structured?")
+
+        self.assertEqual(result["primary_intent"], "ARCHITECTURE")
+        self.assertGreaterEqual(result["intent_scores"]["ARCHITECTURE"], 0.85)
+        self.assertLess(result["intent_scores"]["FILE"], result["intent_scores"]["ARCHITECTURE"])
 
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")

@@ -120,6 +120,8 @@ def search(query_info: dict) -> list[dict]:
     # fast-path fallback for cases where intent scoring disagrees.
     if _is_overview_intent(primary_intent) or _is_overview_query(raw_query):
         merged = _inject_overview_candidates(merged)
+    if primary_intent == "ARCHITECTURE" or _is_architecture_query(raw_query):
+        merged = _inject_architecture_file_candidates(merged, entities)
     merged = _inject_import_backing_candidates(raw_query, merged)
     merged = _rerank_with_query_tokens(raw_query, merged)
     return merged[:TOP_K_AFTER_MERGE]
@@ -824,6 +826,71 @@ def _inject_overview_candidates(candidates: list[dict]) -> list[dict]:
     return to_prepend + list(candidates)
 
 
+def _inject_architecture_file_candidates(candidates: list[dict], entities: dict) -> list[dict]:
+    """Prepend exact structural file hits for architecture prompts."""
+    file_hints = [str(item).strip() for item in (entities.get("files") or []) if str(item).strip()]
+    if not file_hints:
+        return candidates
+
+    client = _get_client()
+    collection = get_collection_name()
+    existing_by_chunk_id = {
+        str(item.get("chunk_id", "")).strip(): item
+        for item in candidates
+        if item.get("chunk_id")
+    }
+    to_prepend: list[dict] = []
+
+    for file_hint in file_hints:
+        response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="relative_path", match=MatchValue(value=file_hint))]
+            ),
+            limit=24,
+            with_payload=True,
+        ))
+        if response is None:
+            continue
+        hits, _ = response
+        if not hits:
+            continue
+
+        best_payloads = sorted(
+            (hit.payload or {} for hit in hits if hit.payload),
+            key=lambda payload: (
+                -_architecture_file_priority(payload),
+                -_architecture_symbol_priority(payload),
+                str(payload.get("symbol_name", "")),
+                int(payload.get("start_line", 0)),
+            ),
+        )
+        chosen = best_payloads[0]
+        chunk_id = str(chosen.get("chunk_id", "")).strip()
+        if not chunk_id:
+            continue
+        promoted = dict(existing_by_chunk_id.get(chunk_id, chosen))
+        promoted.setdefault("retrieval_score", min(1.0, _architecture_file_priority(promoted) / 100.0))
+        promoted.setdefault("fusion_score", 0.0)
+        promoted["exact_retrieval_hit"] = True
+        to_prepend.append(promoted)
+
+    if not to_prepend:
+        return candidates
+
+    promoted_ids = {
+        str(item.get("chunk_id", "")).strip()
+        for item in to_prepend
+        if item.get("chunk_id")
+    }
+    remaining = [
+        item
+        for item in candidates
+        if str(item.get("chunk_id", "")).strip() not in promoted_ids
+    ]
+    return to_prepend + remaining
+
+
 def _repository_overview_candidates() -> list[dict]:
     """Fetch the repo-summary chunk (targeted) plus high-priority structured
     overview chunks (README, manifests, config files).
@@ -886,6 +953,8 @@ def _repository_overview_candidates() -> list[dict]:
             seen_files.add("__repo_summary__.md")
 
     for payload in payloads:
+        if _exclude_overview_payload(payload):
+            continue
         score = _overview_priority(payload)
         if score <= 0:
             continue
@@ -897,6 +966,27 @@ def _repository_overview_candidates() -> list[dict]:
         if len(chosen) >= max(6, TOP_K_AFTER_MERGE):
             break
     return chosen
+
+
+def _exclude_overview_payload(payload: dict) -> bool:
+    """Reject files that are systematically noisy for repo-level overview answers."""
+    relative_path = str(payload.get("relative_path", "")).strip().lower()
+    if not relative_path:
+        return True
+
+    if relative_path == ".rag_ingestion_state.json":
+        return True
+    if relative_path.startswith("backend/tests/fixtures/"):
+        return True
+    if relative_path.startswith("tests/fixtures/"):
+        return True
+    if relative_path.startswith("backend/docs/retrieval_docs/"):
+        return True
+    if relative_path.startswith("docs/retrieval_docs/"):
+        return True
+    if relative_path.endswith(("eval_codeseek_exact_wording.json", "eval_codeseek_flow_phase1.json", "eval_suite_multi_repo.json")):
+        return True
+    return False
 
 
 def _query_tokens(raw_query: str) -> set[str]:
@@ -1196,10 +1286,24 @@ def _overview_priority(payload: dict) -> int:
     if _is_test_path(relative_path) or symbol_name.startswith("test_"):
         return -10
 
+    if relative_path == "backend/readme.md":
+        score += 38
     if relative_path in {"readme.md", "readme.mdx"}:
         score += 30
+    if relative_path.endswith("retrieval/api_service.py"):
+        score += 44
+    if relative_path.endswith("retrieval/main.py"):
+        score += 42
+    if relative_path.endswith("rag_ingestion/main.py"):
+        score += 40
+    if relative_path.endswith("retrieval/searcher.py"):
+        score += 28
+    if relative_path.endswith("retrieval/code_answers.py"):
+        score += 22
     if relative_path.endswith("package.json"):
         score += 24
+    if relative_path.startswith("frontend/") and relative_path.endswith("package.json"):
+        score -= 8
     if relative_path.endswith(("package-lock.json", "pnpm-lock.yaml", "yarn.lock")):
         score += 18
     if relative_path.endswith("pyproject.toml") or relative_path.endswith("requirements.txt"):
@@ -1247,6 +1351,63 @@ def _overview_priority(payload: dict) -> int:
     return score
 
 
+def _architecture_file_priority(payload: dict) -> int:
+    relative_path = str(payload.get("relative_path", "")).lower()
+    symbol_name = str(payload.get("symbol_name", "")).lower()
+    chunk_type = str(payload.get("chunk_type", "")).lower()
+    file_type = str(payload.get("file_type", "")).lower()
+
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        return 100
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        return 98
+    if relative_path.endswith("backend/retrieval/main.py"):
+        return 96
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        return 94
+    if relative_path.endswith("backend/docker-compose.yml"):
+        return 92
+    if relative_path.endswith("backend/.env.example"):
+        return 90
+    if relative_path.endswith("backend/docs/deployment_runbook.md"):
+        return 88
+    if relative_path.endswith("backend/retrieval/db.py"):
+        return 86
+    if relative_path == "backend/readme.md":
+        return 84
+    if relative_path == "readme.md":
+        return 40
+    return 0
+
+
+def _architecture_symbol_priority(payload: dict) -> int:
+    relative_path = str(payload.get("relative_path", "")).lower()
+    symbol_name = str(payload.get("symbol_name", "")).lower()
+    chunk_type = str(payload.get("chunk_type", "")).lower()
+
+    score = 0
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        if symbol_name == "_query_impl":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+        elif chunk_type == "class":
+            score += 4
+    elif relative_path.endswith("backend/retrieval/main.py"):
+        if symbol_name == "run_query":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+    elif relative_path.endswith("backend/rag_ingestion/main.py"):
+        if symbol_name == "run_pipeline":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+    elif chunk_type == "function":
+        score += 4
+    return score
+
+
 # Intents that should always receive repo-summary + structured overview evidence.
 _OVERVIEW_INTENTS: frozenset[str] = frozenset({"OVERVIEW", "TECH_STACK", "ARCHITECTURE"})
 
@@ -1271,7 +1432,21 @@ def _is_overview_query(raw_query: str) -> bool:
             "what does this codebase do",
             "what does this repo do",
             "give me an overview",
+            "give me a repository overview",
             "repo overview",
+            "repository overview",
+            "how is this codebase structured",
+            "how is this project structured",
+            "how is this repository structured",
+            "project structure",
+            "repository structure",
+            "codebase structure",
+            "what are the main modules",
+            "what are the core modules",
+            "top-level subsystems",
+            "top level subsystems",
+            "module layout",
+            "runtime shape",
             "tech stack",
             "what framework",
             "what frameworks",
@@ -1288,17 +1463,38 @@ def _is_overview_query(raw_query: str) -> bool:
     )
 
 
+def _is_architecture_query(raw_query: str) -> bool:
+    q = raw_query.lower()
+    return any(
+        phrase in q
+        for phrase in (
+            "architecture overview",
+            "high-level architecture",
+            "system architecture",
+            "project structure",
+            "codebase structure",
+            "how is this codebase structured",
+            "how is this project structured",
+            "main modules",
+            "top-level subsystems",
+        )
+    )
+
+
 def _is_test_path(relative_path: str) -> bool:
     return "/test" in relative_path or relative_path.startswith("test")
 
 
 def dependency_health() -> dict[str, str]:
     """Best-effort readiness for retrieval dependencies."""
-    model = _get_model()
-    if model is None:
-        model_status = "degraded"
+    if not ENABLE_DENSE_RETRIEVAL:
+        model_status = "disabled"
     else:
-        model_status = "ok"
+        model = _get_model()
+        if model is None:
+            model_status = "degraded"
+        else:
+            model_status = "ok"
 
     client = _get_client()
     qdrant_ready = _qdrant_call(lambda: client.get_collections())

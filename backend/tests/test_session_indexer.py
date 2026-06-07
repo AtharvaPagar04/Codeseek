@@ -80,7 +80,7 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
     monkeypatch.setattr(
         session_indexer,
         "run_pipeline",
-        lambda _root, collection_name: SimpleNamespace(
+        lambda _root, collection_name, **kwargs: SimpleNamespace(
             chunks_generated=0, embeddings_stored=0, collection=collection_name
         ),
     )
@@ -177,7 +177,7 @@ def test_index_job_uses_session_github_token(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         session_indexer,
         "run_pipeline",
-        lambda _root, collection_name: SimpleNamespace(
+        lambda _root, collection_name, **kwargs: SimpleNamespace(
             chunks_generated=1, embeddings_stored=1, collection=collection_name
         ),
     )
@@ -203,7 +203,7 @@ def test_index_job_invalidates_lexical_index_after_ingestion(monkeypatch, tmp_pa
     monkeypatch.setattr(
         session_indexer,
         "run_pipeline",
-        lambda _root, collection_name: SimpleNamespace(
+        lambda _root, collection_name, **kwargs: SimpleNamespace(
             chunks_generated=1, embeddings_stored=1, collection=collection_name
         ),
     )

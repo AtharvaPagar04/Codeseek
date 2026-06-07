@@ -7,7 +7,10 @@ import re
 import tomllib
 from pathlib import Path
 
-from retrieval.config import get_repo_root
+from qdrant_client import QdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+from retrieval.config import QDRANT_HOST, QDRANT_PORT, get_collection_name, get_repo_root
 
 _DIRECT_CODE_PHRASES = (
     "show code",
@@ -43,6 +46,8 @@ _OVERVIEW_PHRASES = (
     "what does this project do",
     "tech stack",
     "architecture overview",
+    "codebase overview",
+    "repository overview",
 )
 IMPORT_TRACE_DEPTH_LIMIT = 3
 
@@ -392,7 +397,7 @@ def is_overview_request(raw_query: str) -> bool:
     if {"tech", "stack"} <= tokens:
         return True
     return bool(
-        tokens & {"overview", "project", "architecture", "stack"}
+        tokens & {"overview", "project", "architecture", "stack", "repository", "codebase"}
     ) and bool(tokens & {"about", "purpose", "summary", "explain", "describe", "what"})
 
 
@@ -406,9 +411,16 @@ def is_architecture_request(raw_query: str) -> bool:
             "architecture",
             "system design",
             "project structure",
+            "codebase structure",
+            "repository structure",
             "how is this project structured",
             "how is the project structured",
+            "how is this codebase structured",
+            "how is this repository structured",
             "module layout",
+            "main modules",
+            "core modules",
+            "top level modules",
             "runtime shape",
         )
     )
@@ -613,8 +625,10 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
     bullets: list[str] = []
     technologies = _extract_tech_stack(selected_sources)
     architecture = _overview_architecture_points(selected_sources)
+    subsystem_points = _overview_subsystem_points(selected_sources)
     if technologies:
         bullets.append(f"- Tech stack: {', '.join(technologies[:8])}.")
+    bullets.extend(f"- {point}" for point in subsystem_points[:3])
     bullets.extend(f"- {point}" for point in architecture[:4])
     if not bullets:
         bullets.append("- Retrieved overview evidence is limited to the currently selected source set.")
@@ -627,10 +641,18 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
     return "\n".join(lines)
 
 
-def build_architecture_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
-    selected_sources = _preferred_overview_sources(sources)
+def build_architecture_answer(
+    raw_query: str,
+    sources: list[dict],
+    chunks: list[dict],
+    return_sources: bool = False,
+) -> str | tuple[str, list[dict]]:
+    selected_sources = _preferred_architecture_sources(sources, chunks)
     if not selected_sources:
-        return "Insufficient context in retrieved code to describe the architecture confidently."
+        answer = "Insufficient context in retrieved code to describe the architecture confidently."
+        if return_sources:
+            return answer, []
+        return answer
 
     purpose = _project_summary(selected_sources, chunks)
     if not purpose:
@@ -639,8 +661,12 @@ def build_architecture_answer(raw_query: str, sources: list[dict], chunks: list[
     runtime_points = _architecture_runtime_points(selected_sources)
     module_points = _architecture_module_points(selected_sources)
     boundary_points = _architecture_boundary_points(selected_sources)
+    subsystem_points = _overview_subsystem_points(selected_sources)
 
     lines = ["Architecture Summary", "", purpose, ""]
+    lines.append("Top-Level Subsystems:")
+    lines.extend(f"- {point}" for point in (subsystem_points or ["Top-level subsystem boundaries are only partially visible in retrieved evidence."])[:5])
+    lines.append("")
     lines.append("Runtime Shape:")
     lines.extend(f"- {point}" for point in (runtime_points or ["Runtime/service structure is only partially visible in retrieved evidence."])[:5])
     lines.append("")
@@ -652,7 +678,10 @@ def build_architecture_answer(raw_query: str, sources: list[dict], chunks: list[
     lines.append("")
     lines.append("Sources:")
     lines.extend(_source_reference_lines(selected_sources[:6]))
-    return "\n".join(lines)
+    answer = "\n".join(lines)
+    if return_sources:
+        return answer, selected_sources[:6]
+    return answer
 
 
 def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
@@ -898,12 +927,236 @@ def _preferred_overview_sources(sources: list[dict]) -> list[dict]:
     )[:5]
 
 
+def _preferred_architecture_sources(sources: list[dict], chunks: list[dict]) -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[tuple[str, str, int, int]] = set()
+    for item in list(sources) + list(chunks):
+        key = _source_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(item)
+
+    for item in _architecture_indexed_bucket_fallbacks(candidates):
+        key = _source_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(item)
+
+    for item in _architecture_local_bucket_fallbacks(candidates):
+        key = _source_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(item)
+
+    filtered = [item for item in candidates if _architecture_source_priority(item) > 0]
+    ranked = sorted(
+        filtered,
+        key=lambda item: (
+            -_architecture_source_priority(item),
+            -_architecture_symbol_priority(item),
+            item.get("relative_path", ""),
+            int(item.get("start_line", 0)),
+        ),
+    )
+    if not ranked:
+        return _preferred_overview_sources(sources)
+
+    selected: list[dict] = []
+    selected_keys: set[tuple[str, str, int, int]] = set()
+    selected_paths: set[str] = set()
+    required_buckets = (
+        "repo",
+        "api",
+        "orchestration",
+        "ingestion",
+        "config",
+    )
+    for bucket in required_buckets:
+        bucket_choice = next((item for item in ranked if _architecture_bucket(item) == bucket), None)
+        if bucket_choice is None:
+            continue
+        key = _source_key(bucket_choice)
+        relative_path = str(bucket_choice.get("relative_path", "")).lower()
+        if key in selected_keys:
+            continue
+        if relative_path in selected_paths:
+            continue
+        selected.append(bucket_choice)
+        selected_keys.add(key)
+        if relative_path:
+            selected_paths.add(relative_path)
+
+    for item in ranked:
+        if len(selected) >= 6:
+            break
+        key = _source_key(item)
+        relative_path = str(item.get("relative_path", "")).lower()
+        if key in selected_keys:
+            continue
+        if relative_path in selected_paths:
+            continue
+        selected.append(item)
+        selected_keys.add(key)
+        if relative_path:
+            selected_paths.add(relative_path)
+    return selected[:6]
+
+
+_architecture_qdrant_client: QdrantClient | None = None
+
+
+def _get_architecture_qdrant_client() -> QdrantClient:
+    global _architecture_qdrant_client
+    if _architecture_qdrant_client is None:
+        _architecture_qdrant_client = QdrantClient(
+            QDRANT_HOST,
+            port=QDRANT_PORT,
+            check_compatibility=False,
+        )
+    return _architecture_qdrant_client
+
+
+def _architecture_indexed_bucket_fallbacks(candidates: list[dict]) -> list[dict]:
+    present_buckets = {_architecture_bucket(item) for item in candidates}
+    fallback_paths = _architecture_bucket_paths()
+    indexed: list[dict] = []
+    for bucket, paths in fallback_paths.items():
+        if bucket in present_buckets:
+            continue
+        indexed_source = _indexed_architecture_source(paths)
+        if indexed_source is None:
+            continue
+        indexed.append(indexed_source)
+    return indexed
+
+
+def _architecture_local_bucket_fallbacks(candidates: list[dict]) -> list[dict]:
+    present_buckets = {_architecture_bucket(item) for item in candidates}
+    fallback_paths = _architecture_bucket_paths()
+    fallbacks: list[dict] = []
+    for bucket, paths in fallback_paths.items():
+        if bucket in present_buckets:
+            continue
+        for relative_path in paths:
+            fallback = _local_architecture_source(relative_path)
+            if fallback is None:
+                continue
+            fallbacks.append(fallback)
+            break
+    return fallbacks
+
+
+def _architecture_bucket_paths() -> dict[str, list[str]]:
+    return {
+        "api": [
+            "backend/retrieval/api_service.py",
+            "retrieval/api_service.py",
+            "app/main.py",
+            "main.py",
+        ],
+        "orchestration": [
+            "backend/retrieval/main.py",
+            "retrieval/main.py",
+            "backend/main.py",
+            "main.py",
+        ],
+        "ingestion": [
+            "backend/rag_ingestion/main.py",
+            "rag_ingestion/main.py",
+            "backend/worker.py",
+            "worker.py",
+        ],
+        "config": [
+            "backend/docker-compose.yml",
+            "docker-compose.yml",
+            "backend/.env.example",
+            "deploy/.env.example",
+            ".env.example",
+            "backend/docs/deployment_runbook.md",
+            "docs/deployment_runbook.md",
+            "backend/retrieval/db.py",
+            "retrieval/db.py",
+        ],
+    }
+
+
+def _indexed_architecture_source(relative_paths: list[str]) -> dict | None:
+    client = _get_architecture_qdrant_client()
+    collection = get_collection_name()
+    best: dict | None = None
+    best_key: tuple[int, int, int, str, int] | None = None
+    for relative_path in relative_paths:
+        try:
+            hits, _ = client.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="relative_path", match=MatchValue(value=relative_path))]
+                ),
+                limit=30,
+                with_payload=True,
+            )
+        except Exception:
+            continue
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            if not payload.get("relative_path"):
+                continue
+            payload.setdefault("retrieval_score", min(1.0, _architecture_source_priority(payload) / 100.0))
+            payload.setdefault("fusion_score", 0.0)
+            payload["exact_retrieval_hit"] = True
+            key = (
+                _architecture_source_priority(payload),
+                _architecture_symbol_priority(payload),
+                0 if str(payload.get("expansion_type", "")).lower() != "local_fallback" else -1,
+                str(payload.get("relative_path", "")),
+                -int(payload.get("start_line", 0)),
+            )
+            if best_key is None or key > best_key:
+                best = payload
+                best_key = key
+        if best is not None:
+            return best
+    return None
+
+
+def _local_architecture_source(relative_path: str) -> dict | None:
+    path = _resolve_repo_file(relative_path)
+    if path is None:
+        return None
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    repo_root = Path(get_repo_root()).resolve()
+    try:
+        resolved_relative = path.resolve().relative_to(repo_root).as_posix()
+    except ValueError:
+        return None
+    return {
+        "relative_path": resolved_relative,
+        "symbol_name": "<file>",
+        "chunk_type": "file_summary",
+        "file_type": path.name.lower(),
+        "start_line": 1,
+        "end_line": max(1, len(lines)),
+        "summary": f"File: {resolved_relative}",
+        "content_excerpt": "\n".join(lines[:200]),
+        "expansion_type": "local_fallback",
+        "exact_retrieval_hit": True,
+    }
+
+
 def _format_source_snippet(source: dict) -> str | None:
     relative_path = str(source.get("relative_path", "")).strip()
     if not relative_path:
         return None
 
-    path = Path(get_repo_root()) / relative_path
+    path = _resolve_repo_file(relative_path)
+    if path is None:
+        return None
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -925,7 +1178,9 @@ def _read_source_excerpt(source: dict) -> str:
     relative_path = str(source.get("relative_path", "")).strip()
     if not relative_path:
         return ""
-    path = Path(get_repo_root()) / relative_path
+    path = _resolve_repo_file(relative_path)
+    if path is None:
+        return ""
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -1526,7 +1781,7 @@ def _project_summary(sources: list[dict], chunks: list[dict]) -> str:
         relative_path = str(source.get("relative_path", "")).strip()
         lower = relative_path.lower()
         excerpt = _read_source_excerpt(source)
-        if lower.startswith("readme"):
+        if lower == "readme.md" or lower.endswith("/readme.md"):
             summary = _readme_summary(excerpt)
             if summary:
                 return summary
@@ -1618,6 +1873,35 @@ def _overview_architecture_points(sources: list[dict]) -> list[str]:
     return _dedupe(points)
 
 
+def _overview_subsystem_points(sources: list[dict]) -> list[str]:
+    points: list[str] = []
+    for source in sources:
+        relative_path = str(source.get("relative_path", "")).strip()
+        lower = relative_path.lower()
+        if _is_repo_summary_source(source):
+            entrypoints = [str(item).strip() for item in (source.get("entrypoints") or []) if str(item).strip()]
+            if any("retrieval.api_service" in item or "uvicorn" in item for item in entrypoints):
+                points.append("Backend API layer handles authenticated query execution and retrieval orchestration.")
+            if any("rag_ingestion" in item for item in entrypoints):
+                points.append("Ingestion pipeline parses repositories, builds chunks, embeds them, and stores evidence in Qdrant.")
+            services = [str(item).strip() for item in (source.get("services") or []) if str(item).strip()]
+            if services:
+                points.append(f"Infrastructure/services layer is surfaced through: {', '.join(services[:6])}.")
+        elif "retrieval/api_service.py" in lower:
+            points.append("Backend API layer is implemented in `retrieval/api_service.py`.")
+        elif "retrieval/main.py" in lower:
+            points.append("Retrieval orchestration layer is implemented in `retrieval/main.py`.")
+        elif "rag_ingestion/main.py" in lower:
+            points.append("Ingestion/indexing layer is implemented in `rag_ingestion/main.py`.")
+        elif lower.endswith("docker-compose.yml") or lower.endswith("docker-compose.yaml"):
+            points.append("Container/infrastructure wiring is defined in `docker-compose.yml`.")
+        elif lower.endswith("package.json") and lower.startswith("frontend/"):
+            points.append("Frontend application metadata is defined in `frontend/package.json`.")
+        elif lower == "readme.md" or lower == "backend/readme.md":
+            points.append(f"Repository documentation and developer entrypoint are described in `{relative_path}`.")
+    return _dedupe(points)
+
+
 def _architecture_runtime_points(sources: list[dict]) -> list[str]:
     points: list[str] = []
     for source in sources:
@@ -1654,6 +1938,16 @@ def _architecture_module_points(sources: list[dict]) -> list[str]:
                 points.append(f"Entrypoints surfaced by repo summary: {', '.join(entrypoints[:6])}.")
             architecture_notes = list(source.get("architecture_notes") or [])
             points.extend(str(note).rstrip(".") + "." for note in architecture_notes[:4])
+        elif "retrieval/api_service.py" in lower:
+            points.append("`retrieval/api_service.py` exposes the FastAPI HTTP surface and request/session/provider wiring.")
+        elif "retrieval/main.py" in lower:
+            points.append("`retrieval/main.py` orchestrates query processing, retrieval, expansion, assembly, and response mode selection.")
+        elif "rag_ingestion/main.py" in lower:
+            points.append("`rag_ingestion/main.py` runs the ingestion pipeline that parses files, generates chunks, embeds them, and stores them.")
+        elif "retrieval/searcher.py" in lower:
+            points.append("`retrieval/searcher.py` handles evidence retrieval, result fusion, and overview-candidate injection.")
+        elif "retrieval/code_answers.py" in lower:
+            points.append("`retrieval/code_answers.py` renders deterministic overview, architecture, flow, and explanation answers.")
         elif lower.endswith(("api_service.py", "main.py", "app.py")):
             points.append(f"{relative_path} provides an application/API entrypoint through `{symbol}`.")
         elif "session_indexer.py" in lower:
@@ -2081,10 +2375,24 @@ def _overview_source_priority(source: dict) -> int:
     score = 0
     if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
         score += 100
+    if relative_path == "backend/readme.md":
+        score += 58
+    if relative_path.endswith("retrieval/api_service.py"):
+        score += 46
+    if relative_path.endswith("retrieval/main.py"):
+        score += 44
+    if relative_path.endswith("rag_ingestion/main.py"):
+        score += 42
     if relative_path.startswith("readme"):
-        score += 50
+        score += 40
+    if relative_path.endswith("retrieval/searcher.py"):
+        score += 32
+    if relative_path.endswith("retrieval/code_answers.py"):
+        score += 26
     if relative_path.endswith("package.json"):
         score += 40
+    if relative_path.startswith("frontend/") and relative_path.endswith("package.json"):
+        score -= 8
     if relative_path.endswith(("requirements.txt", "pyproject.toml")):
         score += 36
     if any(part in relative_path for part in ("config", ".env", "docker", "vite", "tailwind")):
@@ -2092,6 +2400,92 @@ def _overview_source_priority(source: dict) -> int:
     if "/src/" in relative_path or relative_path.startswith("src/"):
         score += 12
     return score
+
+
+def _architecture_source_priority(source: dict) -> int:
+    relative_path = str(source.get("relative_path", "")).lower()
+    chunk_type = str(source.get("chunk_type", "")).lower()
+    file_type = str(source.get("file_type", "")).lower()
+    expansion_type = str(source.get("expansion_type", "")).lower()
+    score = 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        score += 100
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        score += 98
+    if relative_path.endswith("backend/retrieval/main.py"):
+        score += 96
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        score += 94
+    if relative_path.endswith("backend/docker-compose.yml"):
+        score += 92
+    if relative_path.endswith("backend/.env.example"):
+        score += 90
+    if relative_path.endswith("backend/docs/deployment_runbook.md"):
+        score += 88
+    if relative_path.endswith("backend/retrieval/db.py"):
+        score += 86
+    if relative_path == "backend/readme.md":
+        score += 84
+    if relative_path == "readme.md":
+        score += 40
+    if relative_path.endswith("docker-compose.yml"):
+        score += 38
+    if relative_path.endswith(".env.example"):
+        score += 36
+    if relative_path.endswith("docs/deployment_runbook.md"):
+        score += 34
+    if expansion_type == "local_fallback":
+        score -= 3
+    return score
+
+
+def _architecture_symbol_priority(source: dict) -> int:
+    relative_path = str(source.get("relative_path", "")).lower()
+    symbol_name = str(source.get("symbol_name", "")).lower()
+    chunk_type = str(source.get("chunk_type", "")).lower()
+    expansion_type = str(source.get("expansion_type", "")).lower()
+
+    score = 0
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        if symbol_name == "_query_impl":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+        elif chunk_type == "class":
+            score += 4
+    elif relative_path.endswith("backend/retrieval/main.py"):
+        if symbol_name == "run_query":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+    elif relative_path.endswith("backend/rag_ingestion/main.py"):
+        if symbol_name == "run_pipeline":
+            score += 30
+        elif chunk_type == "function":
+            score += 12
+    elif chunk_type == "function":
+        score += 4
+
+    if expansion_type == "local_fallback":
+        score -= 5
+    return score
+
+
+def _architecture_bucket(source: dict) -> str:
+    relative_path = str(source.get("relative_path", "")).lower()
+    chunk_type = str(source.get("chunk_type", "")).lower()
+    file_type = str(source.get("file_type", "")).lower()
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path in {"__repo_summary__.md", "backend/readme.md", "readme.md"}:
+        return "repo"
+    if relative_path.endswith("backend/retrieval/api_service.py"):
+        return "api"
+    if relative_path.endswith("backend/retrieval/main.py"):
+        return "orchestration"
+    if relative_path.endswith("backend/rag_ingestion/main.py"):
+        return "ingestion"
+    if relative_path.endswith(("backend/docker-compose.yml", "backend/.env.example", "backend/docs/deployment_runbook.md", "backend/retrieval/db.py")):
+        return "config"
+    return "other"
 
 
 def _is_repo_summary_source(source: dict) -> bool:
@@ -2103,7 +2497,9 @@ def _is_repo_summary_source(source: dict) -> bool:
 
 
 def _read_json_file(relative_path: str):
-    path = Path(get_repo_root()) / relative_path
+    path = _resolve_repo_file(relative_path)
+    if path is None:
+        return None
     try:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:
@@ -2111,11 +2507,40 @@ def _read_json_file(relative_path: str):
 
 
 def _read_toml_file(relative_path: str):
-    path = Path(get_repo_root()) / relative_path
+    path = _resolve_repo_file(relative_path)
+    if path is None:
+        return None
     try:
         return tomllib.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return None
+
+
+def _resolve_repo_file(relative_path: str) -> Path | None:
+    clean_relative = str(relative_path).strip()
+    if not clean_relative:
+        return None
+
+    repo_root = Path(get_repo_root()).resolve()
+    relative = Path(clean_relative)
+    candidates: list[Path] = [repo_root / relative]
+    parts = relative.parts
+    for start in range(1, len(parts)):
+        candidates.append(repo_root.joinpath(*parts[start:]))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(repo_root)
+        except (OSError, ValueError):
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            return resolved
+    return None
 
 
 def _dedupe(items: list[str]) -> list[str]:

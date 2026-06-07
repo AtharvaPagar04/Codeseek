@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
+import IndexingLiveLog from './IndexingLiveLog';
 import { useChat } from '../hooks/useChat';
 import { listProviderCredentials } from '../utils/api';
 
@@ -9,6 +10,8 @@ function getProviderFallbackModel(provider) {
   if (provider === 'groq') return 'llama-3.3-70b-versatile';
   if (provider === 'openai') return 'gpt-4o-mini';
   if (provider === 'openrouter') return 'openai/gpt-4o-mini';
+  if (provider === 'aicredits') return 'gpt-5.4-mini';
+  if (provider === 'local') return 'auto';
   return 'gemini-2.0-flash';
 }
 
@@ -20,6 +23,7 @@ export default function SessionView({
 }) {
   const [input, setInput] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [copiedSession, setCopiedSession] = useState(false);
   const [activeProvider, setActiveProvider] = useState(null);
   const [selectedModel, setSelectedModel] = useState('');
   const bottomRef = useRef(null);
@@ -67,6 +71,67 @@ export default function SessionView({
     }
   };
 
+  const handleCopySession = () => {
+    const messages = activeThread?.messages || [];
+    if (messages.length === 0) return;
+
+    const formattedMessages = messages
+      .map((msg) => {
+        const role = msg.role === 'user' ? 'User' : 'CodeSeek';
+        const content = typeof msg.content === 'string' ? msg.content.trim() : '';
+        
+        let meta = '';
+        if (msg.role !== 'user') {
+          const modelInfo = selectedModel ? `Model: ${selectedModel}` : '';
+          const tokenInfo = msg.context_tokens ? `${msg.context_tokens} tokens` : '';
+          const parts = [modelInfo, tokenInfo].filter(Boolean);
+          if (parts.length > 0) {
+            meta = ` (${parts.join(', ')})`;
+          }
+        }
+        
+        let text = `### **${role}**${meta}\n\n${content}`;
+        
+        if (msg.role !== 'user' && msg.sources && msg.sources.length > 0) {
+          const sourceLines = msg.sources
+            .map((src) => {
+              const file = src.file || src.relative_path || '';
+              const symbol = src.symbol || src.symbol_name || '';
+              
+              let lines = src.lines;
+              if (!lines && src.start_line) {
+                const start = Number(src.start_line);
+                const end = Number(src.end_line);
+                if (Number.isFinite(start) && start > 0) {
+                  if (Number.isFinite(end) && end > 0 && end !== start) {
+                    lines = `${start}-${end}`;
+                  } else {
+                    lines = String(start);
+                  }
+                }
+              }
+              
+              return `- ${file}${symbol ? ` :: ${symbol}` : ''}${lines ? ` (lines ${lines})` : ''}`;
+            })
+            .filter(Boolean);
+          if (sourceLines.length > 0) {
+            text += `\n\n**Sources:**\n${sourceLines.join('\n')}`;
+          }
+        }
+        
+        return text;
+      })
+      .join('\n\n---\n\n');
+
+    const header = `# CodeSeek Session - ${session.repo_id}\n\n`;
+    const fullText = header + formattedMessages;
+
+    navigator.clipboard.writeText(fullText).then(() => {
+      setCopiedSession(true);
+      setTimeout(() => setCopiedSession(false), 2000);
+    });
+  };
+
   const { isLoading, sendMessage } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
   const activeThread =
@@ -107,21 +172,32 @@ export default function SessionView({
 
   return (
     <div className="flex flex-col h-full min-w-0 relative">
-      {/* Floating clear-chat button — top-right corner */}
+      {/* Floating copy-session and clear-chat buttons — top-right corner */}
       {(activeThread?.messages || []).length > 0 && (
-        <button
-          onClick={() => setConfirmClear(true)}
-          title="Clear chat"
-          className="absolute top-3 right-4 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 border border-border text-text-muted hover:text-warning hover:border-warning/40 transition-all duration-150"
-          aria-label="Clear chat"
-        >
-          <ClearIcon />
-        </button>
+        <>
+          <button
+            onClick={handleCopySession}
+            title={copiedSession ? "Copied!" : "Copy whole session"}
+            className="absolute top-3 right-14 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 border border-border text-text-muted hover:text-text-primary hover:border-text-muted transition-all duration-150"
+            aria-label="Copy whole session"
+          >
+            {copiedSession ? <CheckIcon /> : <CopyIcon />}
+          </button>
+          <button
+            onClick={() => setConfirmClear(true)}
+            title="Clear chat"
+            className="absolute top-3 right-4 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 border border-border text-text-muted hover:text-warning hover:border-warning/40 transition-all duration-150"
+            aria-label="Clear chat"
+          >
+            <ClearIcon />
+          </button>
+        </>
       )}
 
       {/* Message list or empty state */}
       {!hasMessages ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-5 min-h-0">
+        <div className="flex-1 flex flex-col items-center justify-center pb-16 px-5 min-h-0">
+          <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
           {statusMessage && (
             <StatusNotice
               tone={session.status === 'failed' ? 'error' : 'info'}
@@ -166,6 +242,7 @@ export default function SessionView({
       ) : (
         <>
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
+            <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
             {statusMessage && (
               <StatusNotice
                 tone={session.status === 'failed' ? 'error' : 'info'}
@@ -390,7 +467,16 @@ const PROVIDER_MODEL_PRESETS = {
       short: '🦙 Llama 3',
       tooltip: 'Open-source instruction-tuned model.',
     }
-  ]
+  ],
+  aicredits: [
+    {
+      value: 'gpt-5.4-mini',
+      name: 'GPT-5.4 Mini',
+      label: 'Default / AI Credits',
+      short: '🪙 GPT-5.4',
+      tooltip: 'GPT-5.4 Mini via AI Credits. Fast and cost-effective.',
+    },
+  ],
 };
 
 function ModelSelector({ activeModel, onChange, activeProvider }) {
@@ -494,5 +580,22 @@ function ModelSelector({ activeModel, onChange, activeProvider }) {
         </div>
       )}
     </div>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z" />
+      <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" className="text-online" aria-hidden="true">
+      <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
+    </svg>
   );
 }

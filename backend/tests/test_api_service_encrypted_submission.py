@@ -103,7 +103,6 @@ class ApiServiceEncryptedSubmissionTests(unittest.TestCase):
                         encrypted_secret=encrypted_secret,
                         is_active=True,
                     ),
-                    authorization="Bearer backend-key",
                     session_token=session_token,
                 )
 
@@ -113,6 +112,82 @@ class ApiServiceEncryptedSubmissionTests(unittest.TestCase):
                 active = provider_store.get_active_provider_credential(user["id"])
                 self.assertIsNotNone(active)
                 self.assertEqual(active["api_key"], "gsk_encrypted")
+
+    def test_provider_credential_endpoint_accepts_local_provider_without_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "CODESEEK_DB_PATH": str(Path(tmp) / "codeseek.sqlite3"),
+                "CODESEEK_API_KEY": "backend-key",
+                "CODESEEK_APP_ENCRYPTION_KEY": "test-encryption-key",
+                "CODESEEK_SUBMISSION_PRIVATE_KEY_PEM": "",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                submission_crypto._key_material.cache_clear()
+                user = auth_store.upsert_github_user("12345", "octocat", "")
+                session_token, _ = auth_store.create_auth_session(user["id"], ttl_seconds=3600)
+
+                with patch("retrieval.api_service.background_prime_primary_model") as prime_model:
+                    prime_model.return_value = {"status": "loading"}
+                    payload = api_service.create_provider_credential_v1(
+                        api_service.ProviderCredentialCreateRequest(
+                            provider="local",
+                            label="Local Qwen",
+                            model="auto",
+                            is_active=True,
+                        ),
+                        session_token=session_token,
+                    )
+
+                credential = payload["provider_credential"]
+                self.assertEqual(credential["provider"], "local")
+                self.assertEqual(credential["label"], "Local Qwen")
+                self.assertEqual(credential["model"], "auto")
+                active = provider_store.get_active_provider_credential(user["id"])
+                self.assertIsNotNone(active)
+                self.assertEqual(active["api_key"], "")
+                prime_model.assert_called_once()
+
+    def test_provider_credential_list_includes_local_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "CODESEEK_DB_PATH": str(Path(tmp) / "codeseek.sqlite3"),
+                "CODESEEK_API_KEY": "backend-key",
+                "CODESEEK_APP_ENCRYPTION_KEY": "test-encryption-key",
+                "CODESEEK_SUBMISSION_PRIVATE_KEY_PEM": "",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                submission_crypto._key_material.cache_clear()
+                user = auth_store.upsert_github_user("12345", "octocat", "")
+                session_token, _ = auth_store.create_auth_session(user["id"], ttl_seconds=3600)
+                provider_store.create_provider_credential(
+                    user["id"],
+                    "local",
+                    "Local Qwen",
+                    "",
+                    model="auto",
+                    set_active=True,
+                )
+
+                with patch(
+                    "retrieval.api_service.get_provider_runtime_state",
+                    return_value={
+                        "provider": "local",
+                        "selected_model": "qwen2.5-coder:3b-8k",
+                        "primary_model": "qwen2.5-coder:3b-8k",
+                        "status": "loading",
+                        "detail": "warming",
+                        "primary_status": "loading",
+                        "primary_detail": "warming",
+                    },
+                ):
+                    payload = api_service.list_provider_credentials_v1(
+                        session_token=session_token,
+                    )
+
+                credential = payload["provider_credentials"][0]
+                self.assertEqual(credential["runtime_status"], "loading")
+                self.assertEqual(credential["runtime_detail"], "warming")
+                self.assertEqual(credential["runtime_selected_model"], "qwen2.5-coder:3b-8k")
 
     def test_encrypted_secret_payload_requires_ciphertext_and_key(self) -> None:
         with self.assertRaises(HTTPException) as ctx:

@@ -45,6 +45,7 @@ def _embedding_input(chunk: Chunk) -> str:
             f"Type: {chunk.chunk_type}",
             f"Symbol: {chunk.symbol_name}",
             f"Summary: {chunk.summary}",
+            f"Description: {chunk.description}",
             f"Facts: {', '.join(chunk.summary_facts[:20])}",
             f"Frameworks: {', '.join(chunk.detected_frameworks[:20])}",
             f"Dependencies: {', '.join(chunk.dependencies[:30])}",

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { connectGithubToken, exchangeGithubCode } from '../utils/api';
+import { exchangeGithubCode } from '../utils/api';
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams();
@@ -34,58 +34,12 @@ export default function AuthCallback() {
   }, []); // Run once on mount
 
   if (error) {
-    const is404 = error.includes('404');
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-base text-center px-6 gap-5">
         <div className="font-mono text-xs text-text-muted uppercase tracking-widest mb-1">Codeseek</div>
         
         <div className="max-w-md border border-border bg-surface-2 p-6 rounded flex flex-col gap-4">
           <p className="text-offline text-sm font-medium">⚠ {error}</p>
-          
-          {is404 && (
-            <p className="text-text-secondary text-xs leading-relaxed">
-              This typically means your Codeseek backend does not have a <code className="text-accent bg-surface-3 px-1 py-0.5 rounded font-mono">/auth/github</code> endpoint configured. 
-              You can connect using a GitHub Personal Access Token (PAT) instead.
-            </p>
-          )}
-
-          {is404 ? (
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const tokenInput = e.target.elements.pat.value.trim();
-                if (!tokenInput) return;
-                try {
-                  await connectGithubToken(tokenInput);
-                  navigate('/', { replace: true });
-                } catch (err) {
-                  alert(err.message || 'Verification failed. Please try a different token.');
-                }
-              }}
-              className="flex flex-col gap-3 text-left mt-2"
-            >
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="pat-callback" className="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
-                  Personal Access Token (PAT)
-                </label>
-                <input
-                  id="pat-callback"
-                  name="pat"
-                  type="password"
-                  placeholder="ghp_..."
-                  required
-                  className="bg-surface-3 border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-accent/60 transition-colors"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-2 bg-accent hover:bg-accent-dim text-base rounded text-sm font-semibold transition-colors"
-                style={{ color: '#0d0f11' }}
-              >
-                Verify &amp; Connect
-              </button>
-            </form>
-          ) : null}
         </div>
 
         <a

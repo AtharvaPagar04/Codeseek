@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import SessionView from './components/SessionView';
 import RepoPickerModal from './components/RepoPickerModal';
 import ApiTokensModal from './components/ApiTokensModal';
+import RagasValidationModal from './components/RagasValidationModal';
 import LiveBackground from './components/LiveBackground';
 import { useSessions } from './hooks/useSessions';
 import { useGitHub } from './hooks/useGitHub';
@@ -18,6 +19,9 @@ import {
   listSessionThreads,
   retrySessionIndexing,
 } from './utils/api';
+
+const NORMAL_POLL_INTERVAL_MS = 60_000;
+const INDEXING_FALLBACK_POLL_INTERVAL_MS = 15_000;
 
 function Shell() {
   const {
@@ -49,8 +53,11 @@ function Shell() {
   const [activeSessionId, setActiveSessionId] = useState(() => sessions[0]?.id ?? null);
   const [modalOpen, setModalOpen] = useState(false);
   const [apiModalOpen, setApiModalOpen] = useState(false);
+  const [ragasModalOpen, setRagasModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
   const [uiNotice, setUiNotice] = useState(null);
+  const [pendingRepo, setPendingRepo] = useState(null);
+  const [descriptionModalOpen, setDescriptionModalOpen] = useState(false);
   const pollingErrorShownRef = useRef(false);
 
   useEffect(() => {
@@ -68,8 +75,12 @@ function Shell() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
+  const isAnySessionIndexing = sessions.some((s) => s.status === 'indexing');
+
   useEffect(() => {
     let stopped = false;
+    let timeoutId = null;
+
     const tick = async () => {
       try {
         const remote = await listSessions();
@@ -80,15 +91,23 @@ function Shell() {
           console.warn('[sessions] polling failed:', err.message);
           pollingErrorShownRef.current = true;
         }
+      } finally {
+        if (!stopped) {
+          const delay = isAnySessionIndexing
+            ? INDEXING_FALLBACK_POLL_INTERVAL_MS
+            : NORMAL_POLL_INTERVAL_MS;
+          timeoutId = setTimeout(tick, delay);
+        }
       }
     };
+
     tick();
-    const id = setInterval(tick, 3000);
+
     return () => {
       stopped = true;
-      clearInterval(id);
+      if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [mergeBackendSessions]);
+  }, [mergeBackendSessions, isAnySessionIndexing]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -129,12 +148,13 @@ function Shell() {
     };
   }, [activeSessionId, activeSession?.active_thread_id, setThreadMessages]);
 
-  const handleSelectRepo = async (repo) => {
+  const doCreateSession = async (repo, enableChunkDescriptions) => {
     try {
       const existing = sessions.find((session) => session.repo_full_name === repo.full_name);
       const created = await createSession({
         repoFullName: repo.full_name,
         repoUrl: repo.clone_url || `https://github.com/${repo.full_name}.git`,
+        enableChunkDescriptions,
       });
       const newSession = addSession(created);
       setActiveSessionId(newSession.id);
@@ -149,10 +169,20 @@ function Shell() {
               message: `Created session for ${repo.full_name}. Indexing will continue in the background.`,
             }
       );
-      setModalOpen(false);
       setSidebarOpen(false);
     } catch (err) {
       setUiNotice({ tone: 'error', message: err.message || 'Failed to create session.' });
+    }
+  };
+
+  const handleSelectRepo = async (repo) => {
+    const existing = sessions.find((session) => session.repo_full_name === repo.full_name);
+    if (existing) {
+      await doCreateSession(repo, false);
+    } else {
+      setPendingRepo(repo);
+      setDescriptionModalOpen(true);
+      setModalOpen(false);
     }
   };
 
@@ -190,17 +220,18 @@ function Shell() {
   return (
     <div className="flex flex-col h-screen bg-base text-text-primary overflow-hidden relative">
       <LiveBackground />
-      <StatusBar
-        ghUser={username}
-        ghAvatarUrl={avatarUrl}
-        onConnectGitHub={() => setModalOpen(true)}
-        onDisconnectGitHub={disconnect}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        isMobile={isMobile}
-        onOpenApiTokens={() => setApiModalOpen(true)}
-        activeSession={activeSession}
-        githubNotice={authStateMessage}
-      />
+        <StatusBar
+          ghUser={username}
+          ghAvatarUrl={avatarUrl}
+          onConnectGitHub={() => setModalOpen(true)}
+          onDisconnectGitHub={disconnect}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          isMobile={isMobile}
+          onOpenApiTokens={() => setApiModalOpen(true)}
+          onOpenRagasReport={() => setRagasModalOpen(true)}
+          activeSession={activeSession}
+          githubNotice={authStateMessage}
+        />
       {uiNotice && (
         <div className="px-4 pt-3">
           <div
@@ -305,8 +336,49 @@ function Shell() {
         />
       )}
 
+      {descriptionModalOpen && pendingRepo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-surface-2 border border-border rounded-2xl shadow-xl overflow-hidden p-6">
+            <h3 className="font-mono text-sm uppercase tracking-wider text-text-primary mb-3">
+              Enable chunk descriptions?
+            </h3>
+            <p className="text-xs text-text-secondary leading-relaxed mb-6">
+              Chunk descriptions can improve retrieval quality by asking your active LLM to write short descriptions for useful code chunks. This may make indexing slower and may use provider credits. You can skip this and still index normally.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={async () => {
+                  setDescriptionModalOpen(false);
+                  const repo = pendingRepo;
+                  setPendingRepo(null);
+                  await doCreateSession(repo, false);
+                }}
+                className="px-4 py-2 text-xs font-mono rounded-xl border border-border text-text-secondary hover:text-text-primary hover:border-text-muted bg-surface-3 transition-all"
+              >
+                Skip
+              </button>
+              <button
+                onClick={async () => {
+                  setDescriptionModalOpen(false);
+                  const repo = pendingRepo;
+                  setPendingRepo(null);
+                  await doCreateSession(repo, true);
+                }}
+                className="px-4 py-2 text-xs font-mono rounded-xl bg-text-primary text-base font-semibold hover:bg-text-secondary transition-all"
+              >
+                Enable descriptions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {apiModalOpen && (
         <ApiTokensModal onClose={() => setApiModalOpen(false)} />
+      )}
+
+      {ragasModalOpen && (
+        <RagasValidationModal onClose={() => setRagasModalOpen(false)} />
       )}
     </div>
   );

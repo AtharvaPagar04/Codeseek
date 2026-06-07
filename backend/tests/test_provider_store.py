@@ -7,6 +7,31 @@ from retrieval import auth_store, provider_store
 
 
 class ProviderStoreTests(unittest.TestCase):
+    def test_create_local_provider_with_optional_secret(self) -> None:
+        with TemporaryDirectory() as tmp:
+            env = {
+                "CODESEEK_DB_PATH": str(Path(tmp) / "codeseek.sqlite3"),
+                "CODESEEK_APP_ENCRYPTION_KEY": "test-encryption-key",
+            }
+            with patch.dict("os.environ", env, clear=False):
+                user = auth_store.upsert_github_user("12345", "octocat", "")
+                local = provider_store.create_provider_credential(
+                    user["id"],
+                    "local",
+                    "Local Qwen",
+                    "",
+                    model="auto",
+                    set_active=True,
+                )
+
+                listed = provider_store.list_provider_credentials(user["id"])
+                self.assertEqual(len(listed), 1)
+                active = provider_store.get_active_provider_credential(user["id"])
+                self.assertEqual(active["id"], local["id"])
+                self.assertEqual(active["provider"], "local")
+                self.assertEqual(active["api_key"], "")
+                self.assertEqual(active["model"], "auto")
+
     def test_create_list_activate_and_delete_provider_credentials(self) -> None:
         with TemporaryDirectory() as tmp:
             env = {

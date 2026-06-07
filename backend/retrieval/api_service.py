@@ -15,7 +15,7 @@ from collections import defaultdict, deque
 import httpx
 from fastapi import APIRouter, Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from retrieval.auth_store import (
@@ -50,12 +50,23 @@ from retrieval.observability import (
     sanitize_for_log,
 )
 from retrieval.provider_store import (
+    SUPPORTED_PROVIDER_TYPES,
     create_provider_credential,
     delete_provider_credential,
     get_active_provider_credential,
     list_provider_credentials,
     set_active_provider_credential,
 )
+from retrieval.local_llm_runtime import (
+    background_prime_primary_model,
+    get_provider_runtime_state,
+)
+from retrieval.provider_health import (
+    ProviderNotConfiguredError,
+    ProviderNotReadyError,
+    require_llm_ready_for_user,
+)
+from retrieval.ragas_reports import load_ragas_validation_bundle
 from retrieval.searcher import dependency_health
 from retrieval.session_indexer import (
     create_session,
@@ -70,6 +81,10 @@ from retrieval.submission_crypto import (
     get_submission_public_key_pem,
 )
 from retrieval.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
+from retrieval.indexing_events import (
+    get_indexing_events,
+    subscribe_indexing_events,
+)
 
 RATE_LIMIT_PER_MINUTE = int(os.getenv("CODESEEK_RATE_LIMIT_PER_MINUTE", "60"))
 API_KEY_ENV = "CODESEEK_API_KEY"
@@ -124,6 +139,29 @@ CODESEEK_FRONTEND_URL = os.getenv("CODESEEK_FRONTEND_URL", "http://localhost:517
 OAUTH_STATE_COOKIE = "codeseek_oauth_state"
 
 app = FastAPI(title="Codeseek Retrieval API", version="1.0.0")
+
+import sqlite3
+
+@app.exception_handler(sqlite3.OperationalError)
+def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalError):
+    if "no such table" in str(exc).lower():
+        try:
+            from retrieval.db import init_db
+            init_db(force=True)
+        except Exception as init_exc:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": f"Database initialization failed: {init_exc}"},
+            )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Backend database is initializing. Please retry in a moment."},
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Database operational error: {exc}"},
+    )
+
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
 memory = ConversationMemory(max_turns=5)
 _request_windows: dict[str, deque[float]] = defaultdict(deque)
@@ -207,6 +245,7 @@ class SessionCreateRequest(BaseModel):
     repo_url: str | None = None
     tenant_id: str | None = None
     github_token: str | None = None
+    enable_chunk_descriptions: bool = False
 
 
 class GithubAuthCodeRequest(BaseModel):
@@ -222,6 +261,14 @@ class SubmissionPublicKeyResponse(BaseModel):
     key_id: str
     algorithm: str
     public_key_pem: str
+
+
+class RagasValidationArtifactResponse(BaseModel):
+    artifacts: dict
+    report: dict | None = None
+    family_baseline: dict | None = None
+    family_baseline_trend: dict | None = None
+    human_review_benchmark: dict | None = None
 
 
 def _ready_sessions() -> list[dict]:
@@ -287,6 +334,26 @@ def _resolve_submitted_secret(plaintext: str | None, encrypted_secret: dict | No
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Encrypted secret could not be decrypted") from exc
+
+
+def _enrich_provider_runtime(record: dict) -> dict:
+    if not record:
+        return record
+    runtime = get_provider_runtime_state(record.get("provider", ""), record.get("model", ""))
+    enriched = dict(record)
+    enriched["runtime_status"] = runtime.get("status", "")
+    enriched["runtime_detail"] = runtime.get("detail", "")
+    enriched["runtime_selected_model"] = runtime.get("selected_model", "")
+    enriched["runtime_selected_status"] = runtime.get("selected_status", "")
+    enriched["runtime_selected_detail"] = runtime.get("selected_detail", "")
+    enriched["runtime_primary_model"] = runtime.get("primary_model", "")
+    enriched["runtime_primary_status"] = runtime.get("primary_status", "")
+    enriched["runtime_primary_detail"] = runtime.get("primary_detail", "")
+    return enriched
+
+
+def _enrich_provider_runtime_list(records: list[dict]) -> list[dict]:
+    return [_enrich_provider_runtime(record) for record in records]
 
 
 @app.on_event("startup")
@@ -698,6 +765,16 @@ def metrics_v1() -> Response:
     return Response(content=body, media_type=content_type)
 
 
+@v1.get("/ragas/latest", response_model=RagasValidationArtifactResponse)
+def ragas_latest_v1(
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> RagasValidationArtifactResponse:
+    _require_auth(authorization)
+    _require_auth_user(session_token)
+    return RagasValidationArtifactResponse(**load_ragas_validation_bundle())
+
+
 @v1.post("/query")
 def query_v1(
     body: QueryRequest,
@@ -711,27 +788,25 @@ def query_v1(
 
 @v1.get("/provider-credentials")
 def list_provider_credentials_v1(
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
     user = _require_auth_user(session_token)
-    return {"provider_credentials": list_provider_credentials(user["id"])}
+    return {"provider_credentials": _enrich_provider_runtime_list(list_provider_credentials(user["id"]))}
 
 
 @v1.post("/provider-credentials")
 def create_provider_credential_v1(
     body: ProviderCredentialCreateRequest,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
     user = _require_auth_user(session_token)
     provider = body.provider.strip().lower()
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     model = (body.model or "").strip()
     label = (body.label or "").strip()
-    if not provider or not api_key or not label:
+    if provider not in SUPPORTED_PROVIDER_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+    if not provider or not label or (provider != "local" and not api_key):
         raise HTTPException(status_code=400, detail="provider, label, and api_key are required")
     existing = list_provider_credentials(user["id"])
     should_be_active = body.is_active if body.is_active is not None else not existing
@@ -743,6 +818,8 @@ def create_provider_credential_v1(
         model=model,
         set_active=should_be_active,
     )
+    if provider == "local" and should_be_active:
+        background_prime_primary_model()
     log_event(
         "api.provider_credential.created",
         new_request_id(),
@@ -751,16 +828,14 @@ def create_provider_credential_v1(
         label=label,
         is_active=should_be_active,
     )
-    return {"provider_credential": record}
+    return {"provider_credential": _enrich_provider_runtime(record)}
 
 
 @v1.post("/provider-credentials/{credential_id}/activate")
 def activate_provider_credential_v1(
     credential_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
     user = _require_auth_user(session_token)
     try:
         record = set_active_provider_credential(user["id"], credential_id)
@@ -774,16 +849,16 @@ def activate_provider_credential_v1(
     if not record:
         raise HTTPException(status_code=404, detail="Provider credential not found")
     record.pop("api_key", None)
-    return {"provider_credential": record}
+    if record.get("provider") == "local":
+        background_prime_primary_model()
+    return {"provider_credential": _enrich_provider_runtime(record)}
 
 
 @v1.delete("/provider-credentials/{credential_id}")
 def delete_provider_credential_v1(
     credential_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
     user = _require_auth_user(session_token)
     deleted = delete_provider_credential(user["id"], credential_id)
     if not deleted:
@@ -794,12 +869,10 @@ def delete_provider_credential_v1(
 @v1.post("/sessions")
 def create_session_v1(
     body: SessionCreateRequest,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     tenant_id = (body.tenant_id or DEFAULT_TENANT_ID).strip() or DEFAULT_TENANT_ID
-    auth_user = _current_auth_user(session_token)
     github_token = (body.github_token or "").strip()
     if not github_token and auth_user:
         try:
@@ -813,23 +886,45 @@ def create_session_v1(
                     detail="Your stored GitHub token cannot be decrypted (encryption key changed). Please reconnect your GitHub account in settings.",
                 )
             raise
+
+    # Validate LLM provider readiness *before* starting indexing.
+    # Normal deterministic ingestion never requires a provider.
+    provider_config: dict | None = None
+    if body.enable_chunk_descriptions:
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    import sqlite3
     try:
         session = create_session(
             repo_full_name=body.repo_full_name.strip(),
             tenant_id=tenant_id,
             repo_url=(body.repo_url or "").strip(),
             github_token=github_token,
-            user_id=auth_user["id"] if auth_user else "",
+            user_id=auth_user["id"],
+            enable_chunk_descriptions=body.enable_chunk_descriptions,
+            provider_config=provider_config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Backend database is initializing. Please retry in a moment.",
+            ) from exc
+        raise
     log_event(
         "api.session.created",
         new_request_id(),
         session_id=session["id"],
         repo_full_name=session["repo_full_name"],
         tenant_id=session["tenant_id"],
-        user_id=auth_user["id"] if auth_user else "",
+        user_id=auth_user["id"],
     )
     return {"session": session}
 
@@ -862,11 +957,9 @@ def list_github_repos_v1(
 
 @v1.get("/sessions")
 def list_sessions_v1(
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
-    auth_user = _current_auth_user(session_token)
+    auth_user = _require_auth_user(session_token)
     sessions = [s for s in list_sessions() if _session_visible_to_user(s, auth_user)]
     return {"sessions": sessions}
 
@@ -874,12 +967,10 @@ def list_sessions_v1(
 @v1.get("/sessions/{session_id}")
 def get_session_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session": session}
@@ -888,12 +979,10 @@ def get_session_v1(
 @v1.get("/sessions/{session_id}/messages")
 def list_session_messages_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"messages": list_session_messages(session_id)}
@@ -902,12 +991,10 @@ def list_session_messages_v1(
 @v1.get("/sessions/{session_id}/threads")
 def list_session_threads_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     threads = [t for t in list_threads_for_session(session_id) if _thread_visible_to_user(t, auth_user)]
@@ -917,18 +1004,16 @@ def list_session_threads_v1(
 @v1.post("/sessions/{session_id}/threads")
 def create_session_thread_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     count = len(list_threads_for_session(session_id)) + 1
     thread = create_thread(
         session_id,
-        user_id=auth_user["id"] if auth_user else "",
+        user_id=auth_user["id"],
         title=f"Thread {count}",
     )
     return {"thread": thread}
@@ -937,11 +1022,9 @@ def create_session_thread_v1(
 @v1.get("/threads/{thread_id}/messages")
 def list_thread_messages_v1(
     thread_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
-    auth_user = _current_auth_user(session_token)
+    auth_user = _require_auth_user(session_token)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -951,11 +1034,9 @@ def list_thread_messages_v1(
 @v1.delete("/threads/{thread_id}/messages")
 def clear_thread_messages_v1(
     thread_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
-    auth_user = _current_auth_user(session_token)
+    auth_user = _require_auth_user(session_token)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -966,12 +1047,10 @@ def clear_thread_messages_v1(
 @v1.delete("/sessions/{session_id}/messages")
 def clear_session_messages_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     deleted = clear_session_messages(session_id)
@@ -981,12 +1060,10 @@ def clear_session_messages_v1(
 @v1.delete("/sessions/{session_id}")
 def delete_session_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     deleted = delete_session(session_id)
@@ -998,12 +1075,10 @@ def delete_session_v1(
 @v1.post("/sessions/{session_id}/retry")
 def retry_session_v1(
     session_id: str,
-    authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
-    _require_auth(authorization)
+    auth_user = _require_auth_user(session_token)
     session = get_session(session_id)
-    auth_user = _current_auth_user(session_token)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     session = retry_indexing(session_id)
@@ -1014,9 +1089,55 @@ def retry_session_v1(
         new_request_id(),
         session_id=session["id"],
         status=session["status"],
-        user_id=auth_user["id"] if auth_user else "",
+        user_id=auth_user["id"],
     )
     return {"session": session}
+
+
+@v1.get("/sessions/{session_id}/indexing-events")
+def list_indexing_events_v1(
+    session_id: str,
+    after_id: int = 0,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    """Return stored indexing progress events for a session."""
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    events = get_indexing_events(session_id, after_id=after_id)
+    return {"events": events}
+
+
+@v1.get("/sessions/{session_id}/indexing-events/stream")
+def stream_indexing_events_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> StreamingResponse:
+    """SSE stream of live indexing progress events."""
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    import json as _json
+
+    def _event_generator():
+        for event in subscribe_indexing_events(session_id):
+            if event.get("_heartbeat"):
+                yield ": heartbeat\n\n"
+                continue
+            payload = _json.dumps(event, default=str)
+            yield f"id: {event['id']}\nevent: indexing\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _oauth_popup_html(*, success: bool, error: str = "") -> str:

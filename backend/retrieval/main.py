@@ -91,11 +91,13 @@ def run_query(
     request_id: str | None = None,
     return_meta: bool = False,
     provider_config: dict | None = None,
+    capture_eval: bool = False,
 ) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, dict]:
     """Run one retrieval query end-to-end."""
     rid = request_id or new_request_id()
     metrics = StageMetrics(request_id=rid)
     meta: dict = {"request_id": rid}
+    evaluation = meta.setdefault("evaluation", {}) if capture_eval else None
     log_event("retrieval.request.start", rid, query=raw_query)
     validate_collection_binding(get_collection_name(), get_repo_root())
     started = time.perf_counter()
@@ -117,8 +119,27 @@ def run_query(
     expanded = expand(candidates, query_info)
     metrics.add_stage("expand", started)
     started = time.perf_counter()
-    context, sources, token_count = assemble(expanded, history_block_capped)
+    assemble_result = assemble(
+        expanded,
+        history_block_capped,
+        primary_intent=primary_intent,
+        raw_query=raw_query,
+        return_blocks=capture_eval,
+    )
+    if len(assemble_result) == 4:
+        context, sources, token_count, context_blocks = assemble_result
+    else:
+        context, sources, token_count = assemble_result
+        context_blocks = []
     metrics.add_stage("assemble", started)
+    if evaluation is not None:
+        evaluation["query_info"] = query_info
+        evaluation["search_candidates"] = list(candidates)
+        evaluation["expanded_candidates"] = list(expanded)
+        evaluation["assembled_context"] = context
+        evaluation["assembled_context_blocks"] = list(context_blocks)
+        evaluation["assembled_sources"] = list(sources)
+        evaluation["deterministic_context_token_count"] = int(token_count)
     meta["source_filter"] = explain_source_filter_decision(raw_query, sources)
     # Two-layer source gating: display_sources for citations, reasoning_sources for context.
     display_sources, reasoning_sources = split_sources_two_layer(
@@ -150,6 +171,12 @@ def run_query(
                 "evidence_confidence": {"level": "weak", "reason": "no sources assembled", "count": 0},
             }
         )
+        if evaluation is not None:
+            evaluation["response_mode"] = "low_context"
+            evaluation["display_sources"] = list(shown_sources)
+            evaluation["reasoning_sources"] = list(reasoning_sources)
+            evaluation["answer_context"] = ""
+            evaluation["answer_context_blocks"] = []
         log_event(
             "retrieval.request.end",
             rid,
@@ -193,7 +220,18 @@ def run_query(
         in allowed_keys
     ]
     if llm_chunks:
-        context, _, token_count = assemble(llm_chunks, history_block_capped)
+        llm_assemble_result = assemble(
+            llm_chunks,
+            history_block_capped,
+            primary_intent=primary_intent,
+            raw_query=raw_query,
+            return_blocks=capture_eval,
+        )
+        if len(llm_assemble_result) == 4:
+            context, _, token_count, context_blocks = llm_assemble_result
+        else:
+            context, _, token_count = llm_assemble_result
+            context_blocks = []
     # For the LLM path: use the broader reasoning_sources for context assembly.
     reasoning_chunks = [
         c
@@ -216,13 +254,27 @@ def run_query(
             for s in reasoning_sources
         }
     ]
-    reasoning_context, _, reasoning_token_count = assemble_for_reasoning(
+    reasoning_assemble_result = assemble_for_reasoning(
         reasoning_chunks or (llm_chunks or expanded),
         history_block_capped,
         primary_intent=primary_intent,
         raw_query=raw_query,
         query_entities=query_info.get("entities"),
+        return_blocks=capture_eval,
     )
+    if len(reasoning_assemble_result) == 4:
+        reasoning_context, _, reasoning_token_count, reasoning_context_blocks = reasoning_assemble_result
+    else:
+        reasoning_context, _, reasoning_token_count = reasoning_assemble_result
+        reasoning_context_blocks = []
+    if evaluation is not None:
+        evaluation["display_sources"] = list(display_sources)
+        evaluation["reasoning_sources"] = list(reasoning_sources)
+        evaluation["deterministic_context"] = context
+        evaluation["deterministic_context_blocks"] = list(context_blocks)
+        evaluation["reasoning_context"] = reasoning_context
+        evaluation["reasoning_context_blocks"] = list(reasoning_context_blocks)
+        evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     if is_code_request(raw_query):
         started = time.perf_counter()
         # Weak evidence: skip deterministic code mode, fall through to LLM
@@ -252,6 +304,10 @@ def run_query(
                     "evidence_confidence": evidence_confidence,
                 }
             )
+            if evaluation is not None:
+                evaluation["response_mode"] = "code_excerpt"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
             log_event(
                 "retrieval.request.end",
                 rid,
@@ -269,7 +325,14 @@ def run_query(
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
     if is_architecture_request(raw_query):
-        answer = build_architecture_answer(raw_query, shown_sources, expanded)
+        answer, architecture_sources = build_architecture_answer(
+            raw_query,
+            shown_sources,
+            expanded,
+            return_sources=True,
+        )
+        if architecture_sources:
+            shown_sources = architecture_sources
         cited_entities = extract_cited_entities(shown_sources)
         memory.add(
             raw_query, answer,
@@ -287,6 +350,10 @@ def run_query(
                 "response_mode": "architecture_summary",
             }
         )
+        if evaluation is not None:
+            evaluation["response_mode"] = "architecture_summary"
+            evaluation["answer_context"] = context
+            evaluation["answer_context_blocks"] = list(context_blocks)
         log_event(
             "retrieval.request.end",
             rid,
@@ -321,6 +388,10 @@ def run_query(
                 "response_mode": "overview_summary",
             }
         )
+        if evaluation is not None:
+            evaluation["response_mode"] = "overview_summary"
+            evaluation["answer_context"] = context
+            evaluation["answer_context_blocks"] = list(context_blocks)
         log_event(
             "retrieval.request.end",
             rid,
@@ -362,6 +433,10 @@ def run_query(
                 "response_mode": "flow_summary",
             }
         )
+        if evaluation is not None:
+            evaluation["response_mode"] = "flow_summary"
+            evaluation["answer_context"] = context
+            evaluation["answer_context_blocks"] = list(context_blocks)
         log_event(
             "retrieval.request.end",
             rid,
@@ -403,6 +478,10 @@ def run_query(
                     "evidence_confidence": evidence_confidence,
                 }
             )
+            if evaluation is not None:
+                evaluation["response_mode"] = "symbol_deep_dive"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
             log_event(
                 "retrieval.request.end",
                 rid,
@@ -442,6 +521,10 @@ def run_query(
                     "evidence_confidence": evidence_confidence,
                 }
             )
+            if evaluation is not None:
+                evaluation["response_mode"] = "explanation_summary"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
             log_event(
                 "retrieval.request.end",
                 rid,
@@ -464,6 +547,7 @@ def run_query(
         )
     response_sources = list(shown_sources)
     extra_context_blocks: list[str] = []
+    support_blocks: list[dict] = []
     if not is_code_request(raw_query):
         supports = find_supporting_import_exports(
             raw_query,
@@ -497,8 +581,20 @@ def run_query(
             if not already_present:
                 response_sources.append(support_source)
             extra_context_blocks.append(str(support["context_block"]))
+            support_blocks.append(
+                {
+                    "block_type": "supporting_import",
+                    "text": str(support["context_block"]),
+                    "relative_path": support["relative_path"],
+                    "symbol_name": support["symbol_name"],
+                    "start_line": int(support["start_line"]),
+                    "end_line": int(support["end_line"]),
+                    "support_kind": support.get("support_kind", ""),
+                }
+            )
     llm_backend_started_ms = metrics.total_ms()
     started = time.perf_counter()
+    llm_selection: dict[str, object] = {}
     answer = generate_answer(
         raw_query,
         reasoning_context,          # broader context for synthesis
@@ -506,6 +602,9 @@ def run_query(
         allowed_sources=response_sources,  # display_sources — strict citation list
         extra_context_blocks=extra_context_blocks,
         provider_config=provider_config,
+        query_info=query_info,
+        evidence_confidence=evidence_confidence,
+        selection_meta=llm_selection,
     )
     token_count = reasoning_token_count
     metrics.add_stage("llm", started)
@@ -532,8 +631,15 @@ def run_query(
             "errors": metrics.errors,
             "response_mode": "llm",
             "evidence_confidence": evidence_confidence,
+            "llm_selection": llm_selection,
         }
     )
+    if evaluation is not None:
+        evaluation["response_mode"] = "llm"
+        evaluation["answer_context"] = reasoning_context
+        evaluation["answer_context_blocks"] = list(reasoning_context_blocks) + support_blocks
+        evaluation["support_blocks"] = list(support_blocks)
+        evaluation["llm_selection"] = dict(llm_selection)
     log_event(
         "retrieval.request.end",
         rid,
@@ -546,6 +652,9 @@ def run_query(
         display_sources=len(display_sources),
         reasoning_sources=len(reasoning_sources),
         evidence_confidence=evidence_confidence["level"],
+        llm_provider=llm_selection.get("provider", ""),
+        llm_model=llm_selection.get("model", ""),
+        llm_routing_mode=llm_selection.get("routing_mode", ""),
         source_filter=meta["source_filter"],
     )
     if return_meta:

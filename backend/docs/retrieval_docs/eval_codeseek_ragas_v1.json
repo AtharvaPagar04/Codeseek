@@ -1,0 +1,299 @@
+{
+  "name": "codeseek-ragas-v1",
+  "repo_root_hint": "/home/arch/DEV/CodeSeek/backend",
+  "cases": [
+    {
+      "id": "cs-ragas-001",
+      "query": "Where is CODESEEK_DATABASE_URL documented or used?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "The database URL is documented in `.env.example` and the deployment runbook, and it is used as the backend database connection setting.",
+      "ground_truth_sources": [
+        {"relative_path": ".env.example"},
+        {"relative_path": "docs/deployment_runbook.md"}
+      ],
+      "expected_files": [".env.example", "docs/deployment_runbook.md"],
+      "expected_answer_terms": ["CODESEEK_DATABASE_URL", ".env.example", "deployment runbook"]
+    },
+    {
+      "id": "cs-ragas-002",
+      "query": "Where is RETRIEVAL_ENABLE_LEXICAL configured?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "The lexical retrieval flag is configured in `retrieval/config.py` as `RETRIEVAL_ENABLE_LEXICAL`, with the runtime default currently disabled unless an environment override is provided.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/config.py", "symbol_name": "ENABLE_LEXICAL_RETRIEVAL"}
+      ],
+      "expected_files": ["retrieval/config.py"],
+      "expected_symbols": ["ENABLE_LEXICAL_RETRIEVAL"],
+      "expected_answer_terms": ["RETRIEVAL_ENABLE_LEXICAL", "retrieval/config.py"]
+    },
+    {
+      "id": "cs-ragas-003",
+      "query": "Which code invalidates the lexical index after ingestion?",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "llm",
+      "ground_truth": "The lexical cache is invalidated from the retrieval side after ingestion, with `retrieval/searcher.py::invalidate_lexical_index` clearing the in-process cache and the session indexing path triggering that invalidation after a successful indexing run.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "_index_job"},
+        {"relative_path": "retrieval/searcher.py", "symbol_name": "invalidate_lexical_index"}
+      ],
+      "expected_symbols": ["invalidate_lexical_index"],
+      "expected_answer_terms": ["invalidate_lexical_index", "lexical index", "ingestion"]
+    },
+    {
+      "id": "cs-ragas-004",
+      "query": "Where is the qdrant-client dependency declared?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "The `qdrant-client` dependency is declared in the backend runtime requirements file.",
+      "ground_truth_sources": [
+        {"relative_path": "requirements.txt"}
+      ],
+      "expected_files": ["requirements.txt"],
+      "expected_answer_terms": ["qdrant-client", "requirements.txt"]
+    },
+    {
+      "id": "cs-ragas-005",
+      "query": "Where is FastAPI declared as a dependency?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "FastAPI is declared in the backend runtime requirements file as one of the pinned backend dependencies.",
+      "ground_truth_sources": [
+        {"relative_path": "requirements.txt"}
+      ],
+      "expected_files": ["requirements.txt"],
+      "expected_answer_terms": ["FastAPI", "requirements.txt"]
+    },
+    {
+      "id": "cs-ragas-006",
+      "query": "Where is docker compose deployment described?",
+      "expected_intent": "ARCHITECTURE",
+      "expected_response_mode": "architecture_summary",
+      "ground_truth": "Deployment is described through the compose file, container configuration, environment template, and the deployment runbook.",
+      "ground_truth_sources": [
+        {"relative_path": "docker-compose.yml"},
+        {"relative_path": "Dockerfile"},
+        {"relative_path": ".env.example"},
+        {"relative_path": "docs/deployment_runbook.md"}
+      ],
+      "expected_files": ["docker-compose.yml", "Dockerfile", ".env.example", "docs/deployment_runbook.md"],
+      "expected_answer_terms": ["docker compose", "deployment runbook", "environment template"]
+    },
+    {
+      "id": "cs-ragas-007",
+      "query": "Where is the submission-key endpoint implemented?",
+      "expected_intent": "SYMBOL",
+      "expected_response_mode": "llm",
+      "ground_truth": "The submission-key endpoint is implemented in the API service layer.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/api_service.py"}
+      ],
+      "expected_files": ["retrieval/api_service.py"],
+      "expected_answer_terms": ["submission-key", "api service"]
+    },
+    {
+      "id": "cs-ragas-008",
+      "query": "Where is BAAI/bge-small-en-v1.5 configured?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "The embedding model name is configured in `retrieval/config.py` and used as the backend embedding default.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/config.py"}
+      ],
+      "expected_files": ["retrieval/config.py"],
+      "expected_answer_terms": ["BAAI/bge-small-en-v1.5", "retrieval/config.py"]
+    },
+    {
+      "id": "cs-ragas-009",
+      "query": "architecture overview",
+      "expected_intent": "ARCHITECTURE",
+      "expected_response_mode": "architecture_summary",
+      "ground_truth": "The backend is a retrieval-augmented code assistant with ingestion, retrieval, expansion, context assembly, deterministic answer paths, and a fallback LLM path.",
+      "ground_truth_sources": [
+        {"relative_path": "README.md"},
+        {"relative_path": "docker-compose.yml"},
+        {"relative_path": ".env.example"},
+        {"relative_path": "retrieval/main.py"}
+      ],
+      "expected_files": ["README.md", "docker-compose.yml", ".env.example", "retrieval/main.py"],
+      "expected_answer_terms": ["Architecture Summary", "Runtime Shape", "deterministic answer paths"]
+    },
+    {
+      "id": "cs-ragas-010",
+      "query": "does this repository use COBOL or Fortran language?",
+      "expected_intent": "LOW_CONTEXT",
+      "expected_response_mode": "llm",
+      "ground_truth": "No. The repository is organized around Python backend code and JS/TS frontend or fixture support, and the current retrieved context does not show COBOL or Fortran support.",
+      "ground_truth_sources": [
+        {"relative_path": "README.md"},
+        {"relative_path": "retrieval/main.py"}
+      ],
+      "expected_answer_terms": ["Python", "JS/TS", "COBOL", "Fortran"]
+    },
+    {
+      "id": "cs-ragas-011",
+      "query": "what is the purpose of CODESEEK_APP_ENCRYPTION_KEY?",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "llm",
+      "ground_truth": "The application encryption key is used to protect sensitive stored values and secret-submission flows in the backend.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/config.py"},
+        {"relative_path": ".env.example"}
+      ],
+      "expected_files": ["retrieval/config.py", ".env.example"],
+      "expected_answer_terms": ["CODESEEK_APP_ENCRYPTION_KEY", "encrypt", "secret"]
+    },
+    {
+      "id": "cs-ragas-012",
+      "query": "walk me through backend request orchestration flow",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "The request flow starts in `retrieval/main.py::run_query`, resolves query and memory state, searches and expands candidates, assembles context, filters sources, and then hands the selected evidence to the response builder or LLM path.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "_query_impl"},
+        {"relative_path": "retrieval/main.py", "symbol_name": "run_query"}
+      ],
+      "expected_symbols": ["_query_impl", "run_query"],
+      "expected_answer_terms": ["request orchestration", "run_query()", "provider configuration"]
+    },
+    {
+      "id": "cs-ragas-013",
+      "query": "explain the auth session lifecycle flow",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "The auth session lifecycle creates a session, resolves the current user from a session token, and keeps session state in the auth store helpers.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"}
+      ],
+      "expected_symbols": ["create_auth_session", "get_user_for_session_token"],
+      "expected_answer_terms": ["Auth And Session Lifecycle", "session token", "associated user"]
+    },
+    {
+      "id": "cs-ragas-014",
+      "query": "how does authentication cookie lifecycle work",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "The auth flow creates the session, resolves the user from the session token, and deletes the session during logout or cleanup.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"},
+        {"relative_path": "retrieval/auth_store.py", "symbol_name": "delete_auth_session"}
+      ],
+      "expected_symbols": ["create_auth_session", "get_user_for_session_token", "delete_auth_session"],
+      "expected_answer_terms": ["Auth And Session Lifecycle", "delete_auth_session", "logout"]
+    },
+    {
+      "id": "cs-ragas-015",
+      "query": "trace the indexing session creation flow",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "The indexing flow creates or reuses a session record and then runs the ingestion job that performs repository indexing.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "create_session"},
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "_index_job"}
+      ],
+      "expected_symbols": ["create_session", "_index_job"],
+      "expected_answer_terms": ["Indexing And Session Creation Flow", "creates or reuses a session record", "runs ingestion"]
+    },
+    {
+      "id": "cs-ragas-016",
+      "query": "how does deployment configuration work",
+      "expected_intent": "CONFIG",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "Deployment configuration is described by the compose file, Dockerfile, and environment template, with the deployment runbook explaining the runtime setup and required secrets.",
+      "ground_truth_sources": [
+        {"relative_path": "docker-compose.yml"},
+        {"relative_path": "Dockerfile"},
+        {"relative_path": ".env.example"},
+        {"relative_path": "docs/deployment_runbook.md"}
+      ],
+      "expected_files": ["docker-compose.yml", "Dockerfile", ".env.example", "docs/deployment_runbook.md"],
+      "expected_answer_terms": ["Deployment And Configuration Flow", "Docker Compose", "environment template"]
+    },
+    {
+      "id": "cs-ragas-017",
+      "query": "explain provider credential lifecycle",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "flow_summary",
+      "ground_truth": "The provider credential flow lists or creates credentials through the API layer, stores encrypted credential data, and resolves the active provider credential for query execution.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "list_provider_credentials_v1"},
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "create_provider_credential_v1"},
+        {"relative_path": "retrieval/provider_store.py", "symbol_name": "create_provider_credential"},
+        {"relative_path": "retrieval/provider_store.py", "symbol_name": "get_active_provider_credential"}
+      ],
+      "expected_symbols": [
+        "list_provider_credentials_v1",
+        "create_provider_credential_v1",
+        "create_provider_credential",
+        "get_active_provider_credential"
+      ],
+      "expected_answer_terms": ["Provider Credential Lifecycle", "active provider credential", "encrypts the API key"]
+    },
+    {
+      "id": "cs-ragas-018",
+      "query": "Which retrieval stage performs dense vector search?",
+      "expected_intent": "SYMBOL",
+      "expected_response_mode": "llm",
+      "ground_truth": "The dense vector search happens in `retrieval/searcher.py::_dense_search`, which encodes the query and sends it to Qdrant.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/searcher.py", "symbol_name": "_dense_search"}
+      ],
+      "expected_symbols": ["_dense_search"],
+      "expected_answer_terms": ["dense vector search", "_dense_search", "Qdrant"]
+    },
+    {
+      "id": "cs-ragas-019",
+      "query": "Where are retrieval results merged and deduplicated?",
+      "expected_intent": "SYMBOL",
+      "expected_response_mode": "llm",
+      "ground_truth": "Retrieval results are merged and deduplicated in `retrieval/searcher.py::_merge_results` before the final reranking and expansion stages.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/searcher.py", "symbol_name": "_merge_results"}
+      ],
+      "expected_symbols": ["_merge_results"],
+      "expected_answer_terms": ["merged", "deduplicated", "_merge_results"]
+    },
+    {
+      "id": "cs-ragas-020",
+      "query": "Where are parent and callee expansions implemented?",
+      "expected_intent": "TRACE",
+      "expected_response_mode": "llm",
+      "ground_truth": "Parent expansion is implemented in `retrieval/expander.py::_parent_chunk` and callee expansion is implemented in `retrieval/expander.py::_callee_chunks`.",
+      "ground_truth_sources": [
+        {"relative_path": "retrieval/expander.py", "symbol_name": "_parent_chunk"},
+        {"relative_path": "retrieval/expander.py", "symbol_name": "_callee_chunks"}
+      ],
+      "expected_symbols": ["_parent_chunk", "_callee_chunks"],
+      "expected_answer_terms": ["parent", "callee", "expander.py"]
+    },
+    {
+      "id": "cs-ragas-021",
+      "query": "Where is the Go parser implemented?",
+      "expected_intent": "LOW_CONTEXT",
+      "expected_response_mode": "llm",
+      "ground_truth": "Not found in the retrieved context; Go is currently listed as unsupported rather than having a parser implementation in this backend.",
+      "ground_truth_sources": [
+        {"relative_path": "docs/retrieval_docs/multi_language_support_boundaries.md"},
+        {"relative_path": "rag_ingestion/stages/language.py"}
+      ],
+      "expected_files": ["docs/retrieval_docs/multi_language_support_boundaries.md", "rag_ingestion/stages/language.py"],
+      "expected_answer_terms": ["unsupported", "Go", "parser"]
+    },
+    {
+      "id": "cs-ragas-022",
+      "query": "Where is the Rust ingestion parser defined?",
+      "expected_intent": "LOW_CONTEXT",
+      "expected_response_mode": "llm",
+      "ground_truth": "Not found in the retrieved context; the current ingestion pipeline does not include a Rust parser implementation.",
+      "ground_truth_sources": [
+        {"relative_path": "docs/retrieval_docs/multi_language_support_boundaries.md"},
+        {"relative_path": "rag_ingestion/stages/language.py"}
+      ],
+      "expected_files": ["docs/retrieval_docs/multi_language_support_boundaries.md", "rag_ingestion/stages/language.py"],
+      "expected_answer_terms": ["unsupported", "Rust", "parser"]
+    }
+  ]
+}

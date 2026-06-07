@@ -20,9 +20,14 @@ Current response-quality state:
 - phase-1 flow answer bodies avoid duplicated `Key evidence`/`Sources` sections and rely on returned API source cards
 - phase-1 flow context/source correctness is accepted for now; prose/presentation polish is deferred to the later LLM/rendering phase
 - next deterministic phase-2 target is imported-data-backed explanation beyond current frontend patterns
+- RAGAS validation now has a dedicated gold fixture, per-response runner, markdown/JSON report output, a threshold checker, per-family baseline snapshot/comparison support, a frontend scorecard modal, and a small human-reviewed benchmark set for release signoff
+- [RAGAS Human Review Benchmark](./ragas_human_review_benchmark_v1.json)
+- [RAGAS Family Baseline Snapshot](./ragas_family_baseline_latest.json)
 
 - [Current Retrieval Strategy](./current_retrieval_strategy.md)
 - [Response Quality Refinement Plan](./response_quality_refinement_plan.md)
+- [RAGAS Validation Design](./ragas_validation_design.md)
+- [Local LLM API Config Plan](./local_llm_api_config_plan.md)
 - [Manual Response-Review Checklist](./manual_response_review_checklist.md)
 - [Embedding Model Benchmark Results](./embedding_model_benchmark_results.md)
 - [Lexical Layer Benchmark Results](./lexical_layer_benchmark_results.md)

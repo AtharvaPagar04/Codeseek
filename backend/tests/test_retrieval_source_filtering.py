@@ -2,7 +2,7 @@
 
 import unittest
 
-from retrieval.source_filter import select_sources_for_display
+from retrieval.source_filter import select_sources_for_display, split_sources_two_layer
 
 
 class SourceFilteringTests(unittest.TestCase):
@@ -99,6 +99,228 @@ class SourceFilteringTests(unittest.TestCase):
 
         selected = select_sources_for_display(query, sources)
         self.assertEqual(len(selected), 6)
+
+    def test_overview_query_filters_meta_answering_helper_sources(self) -> None:
+        query = "Give me a repository overview."
+        sources = [
+            {
+                "relative_path": "backend/retrieval/searcher.py",
+                "symbol_name": "_is_overview_query",
+                "start_line": 1259,
+                "end_line": 1288,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/source_filter.py",
+                "symbol_name": "query_is_overview_summary",
+                "start_line": 529,
+                "end_line": 549,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/code_answers.py",
+                "symbol_name": "build_overview_answer",
+                "start_line": 607,
+                "end_line": 627,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        symbols = {src["symbol_name"] for src in selected}
+
+        self.assertIn("README", symbols)
+        self.assertIn("run_query", symbols)
+        self.assertNotIn("_is_overview_query", symbols)
+        self.assertNotIn("query_is_overview_summary", symbols)
+        self.assertNotIn("build_overview_answer", symbols)
+
+    def test_overview_reasoning_sources_filter_meta_helpers_too(self) -> None:
+        query = "What are the core modules in this codebase?"
+        sources = [
+            {
+                "relative_path": "backend/retrieval/searcher.py",
+                "symbol_name": "_is_overview_query",
+                "start_line": 1259,
+                "end_line": 1288,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/code_answers.py",
+                "symbol_name": "_architecture_module_points",
+                "start_line": 1645,
+                "end_line": 1665,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "expansion_type": "primary",
+            },
+        ]
+
+        display, reasoning = split_sources_two_layer(query, sources, enabled=True)
+        reasoning_symbols = {src["symbol_name"] for src in reasoning}
+        display_symbols = {src["symbol_name"] for src in display}
+
+        self.assertIn("_query_impl", reasoning_symbols)
+        self.assertIn("run_query", reasoning_symbols)
+        self.assertNotIn("_is_overview_query", reasoning_symbols)
+        self.assertNotIn("_architecture_module_points", reasoning_symbols)
+        self.assertEqual(display_symbols, reasoning_symbols)
+
+    def test_short_overview_prompt_prepends_repo_summary_and_backend_anchors(self) -> None:
+        query = "What is this project about?"
+        sources = [
+            {
+                "relative_path": "README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 20,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "frontend/package.json",
+                "symbol_name": "package_json",
+                "start_line": 1,
+                "end_line": 30,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        paths = [src["relative_path"] for src in selected[:4]]
+
+        self.assertEqual(paths[0], "__repo_summary__.md")
+        self.assertIn("backend/README.md", paths[:2])
+        self.assertIn("backend/retrieval/api_service.py", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+
+    def test_architecture_prompt_prepends_runtime_ingestion_and_config_anchors(self) -> None:
+        query = "How is this codebase structured?"
+        sources = [
+            {
+                "relative_path": "README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 20,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "start_line": 512,
+                "end_line": 678,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "start_line": 88,
+                "end_line": 553,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "start_line": 42,
+                "end_line": 108,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docker-compose.yml",
+                "symbol_name": "docker-compose.yml",
+                "start_line": 1,
+                "end_line": 60,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/.env.example",
+                "symbol_name": ".env.example",
+                "start_line": 1,
+                "end_line": 24,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        paths = [src["relative_path"] for src in selected[:6]]
+
+        self.assertEqual(paths[0], "__repo_summary__.md")
+        self.assertIn("backend/README.md", paths)
+        self.assertIn("backend/retrieval/api_service.py", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertIn("backend/rag_ingestion/main.py", paths)
+        self.assertIn("backend/docker-compose.yml", paths)
 
     def test_phase1_flow_query_keeps_core_flow_anchors(self) -> None:
         query = "walk me through backend request orchestration flow"

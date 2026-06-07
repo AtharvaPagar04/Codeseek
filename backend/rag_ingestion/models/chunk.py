@@ -28,6 +28,7 @@ class Chunk:
     file_symbols: list[str] = field(default_factory=list)
     docstring: str = ""
     summary: str = ""
+    description: str = ""
     file_type: str = ""
     summary_facts: list[str] = field(default_factory=list)
     detected_frameworks: list[str] = field(default_factory=list)

@@ -6,18 +6,49 @@ from rag_ingestion.models.file import FileRecord
 from rag_ingestion.utils.counters import PipelineCounters
 from rag_ingestion.utils.logger import log_skip
 
+
 LANGUAGE_MAP = {
     ".py": "python",
+
+    # JavaScript / TypeScript / MERN
     ".js": "javascript",
     ".jsx": "javascript",
     ".ts": "typescript",
     ".tsx": "typescript",
+
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+
+    # Docs / config
     ".md": "markdown",
+    ".mdx": "markdown",
     ".json": "json",
     ".toml": "toml",
     ".yml": "yaml",
     ".yaml": "yaml",
     ".txt": "text",
+
+    # Frontend / deployment / shell
+    ".html": "html",
+    ".css": "css",
+    ".sh": "shell",
+    ".conf": "config",
+}
+
+
+FILENAME_LANGUAGE_MAP = {
+    "dockerfile": "dockerfile",
+    "caddyfile": "caddyfile",
+    ".gitignore": "gitignore",
+}
+
+
+SPECIAL_FILE_LANGUAGE_MAP = {
+    "requirements.txt": "text",
+    "readme.md": "markdown",
+    "readme.mdx": "markdown",
+    "pyproject.toml": "toml",
+    "package.json": "json",
 }
 
 
@@ -43,17 +74,19 @@ def _detect_language(file: FileRecord) -> str | None:
     relative_path = file.relative_path.lower()
     filename = Path(file.relative_path).name.lower()
 
-    if relative_path == "dockerfile" or filename == "dockerfile":
-        return "dockerfile"
-    if filename == ".env.example":
+    if filename in FILENAME_LANGUAGE_MAP:
+        return FILENAME_LANGUAGE_MAP[filename]
+
+    if _is_env_example_file(filename):
         return "env"
-    if relative_path in {"requirements.txt", "readme.md", "readme.mdx", "pyproject.toml", "package.json"}:
-        return LANGUAGE_MAP.get(file.extension.lower()) or {
-            "requirements.txt": "text",
-            "readme.md": "markdown",
-            "readme.mdx": "markdown",
-            "pyproject.toml": "toml",
-            "package.json": "json",
-        }.get(relative_path)
+
+    if relative_path in SPECIAL_FILE_LANGUAGE_MAP:
+        return SPECIAL_FILE_LANGUAGE_MAP[relative_path]
 
     return LANGUAGE_MAP.get(file.extension.lower())
+
+
+def _is_env_example_file(filename: str) -> bool:
+    return filename == ".env.example" or filename.endswith(".env.example") or (
+        filename.startswith(".env.") and filename.endswith(".example")
+    )

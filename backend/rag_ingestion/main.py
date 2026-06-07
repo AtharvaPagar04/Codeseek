@@ -39,28 +39,60 @@ def main() -> None:
     run_pipeline(args.source, collection_name=args.collection)
 
 
-def run_pipeline(source: str, collection_name: str | None = None) -> PipelineCounters:
+def run_pipeline(
+    source: str,
+    collection_name: str | None = None,
+    enable_chunk_descriptions: bool | None = None,
+    provider_config: dict | None = None,
+    event_callback=None,
+) -> PipelineCounters:
     """Run all ingestion stages in order."""
     counters = PipelineCounters()
+
+    def emit(stage, message, level="info", progress=None, total=None, metadata=None):
+        if event_callback:
+            event_callback(
+                stage=stage, message=message, level=level,
+                progress=progress, total=total, metadata=metadata,
+            )
 
     repository = load_repository(source)
     selected_collection = collection_name or expected_collection_name(
         repository["repository_root"]
     )
     validate_collection_binding(selected_collection, repository["repository_root"])
+
+    # --- Discovery ---
     discovered_files = discover_files(repository["repository_root"], counters)
+    emit("discovery", f"Discovered {counters.files_discovered} files in the repository.",
+         progress=counters.files_discovered)
+
+    # --- Filtering ---
     filtered_files = filter_files(
         discovered_files,
         repository["repository_root"],
         counters,
     )
+    emit("filtering", f"Filtered repository — ignored {counters.files_ignored} generated or noise files.",
+         progress=len(filtered_files))
+
+    # --- Language detection ---
     language_files = detect_languages(filtered_files, counters)
+    processable = [f for f in language_files if not f.skipped]
+    emit("language",
+         f"Detected supported languages for {len(processable)} files. "
+         f"{counters.files_skipped_unsupported} files skipped as unsupported.",
+         progress=len(processable))
+
+    # --- Incremental state ---
     previous_state: dict[str, dict[str, int]] = {}
     next_state: dict[str, dict[str, int]] = {}
     if ENABLE_INCREMENTAL_FILE_SKIP:
         previous_state = load_ingestion_state(repository["repository_root"])
 
+    # --- Parse + chunk ---
     all_chunks = []
+    parsed_count = 0
     for file in language_files:
         if file.skipped:
             continue
@@ -87,15 +119,49 @@ def run_pipeline(source: str, collection_name: str | None = None) -> PipelineCou
         if ENABLE_INCREMENTAL_FILE_SKIP:
             next_state[file.relative_path] = signature
 
+        parsed_count += 1
+        if parsed_count % 10 == 0:
+            emit("parser", f"Parsed {parsed_count} files so far…",
+                 progress=parsed_count, total=len(processable))
+
+    emit("parser", f"Parsed {counters.files_parsed_ok} files successfully.",
+         progress=counters.files_parsed_ok, total=len(processable), level="success")
+
+    # --- Repo summary ---
     repo_summary = build_repo_summary_chunk(all_chunks, repository)
     if repo_summary is not None:
         build_metadata(repo_summary)
         all_chunks.append(repo_summary)
         counters.chunks_generated += 1
 
+    emit("chunker", f"Generated {counters.chunks_generated} searchable chunks.",
+         progress=counters.chunks_generated, total=counters.chunks_generated)
+
     if all_chunks:
+        # --- Descriptions ---
+        from rag_ingestion.stages.description import describe_chunks
+        all_chunks = describe_chunks(
+            all_chunks,
+            enabled=enable_chunk_descriptions,
+            provider_config=provider_config,
+            event_callback=event_callback,
+        )
+
+        # --- Embedding ---
+        emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters)
+        emit("embedding",
+             f"Generated embeddings for {counters.embeddings_generated} chunks.",
+             level="success", progress=counters.embeddings_generated,
+             total=len(all_chunks))
+
+        # --- Storage ---
+        emit("storage", f"Storing {len(embedded_chunks)} chunks in vector database…")
         store_chunks(embedded_chunks, counters, collection_name=selected_collection)
+        emit("storage",
+             f"Stored {counters.embeddings_stored} chunks in Qdrant.",
+             level="success", progress=counters.embeddings_stored,
+             total=counters.embeddings_stored)
 
     if ENABLE_INCREMENTAL_FILE_SKIP:
         if not RECREATE_COLLECTION_EACH_RUN:

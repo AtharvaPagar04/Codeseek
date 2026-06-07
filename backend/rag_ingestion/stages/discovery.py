@@ -12,6 +12,10 @@ def discover_files(
 ) -> list[FileRecord]:
     """Walk a repository and return every file as a FileRecord."""
     root = Path(repository_root).resolve()
+
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Repository root does not exist or is not a directory: {root}")
+
     files: list[FileRecord] = []
 
     for dirpath, _dirnames, filenames in os.walk(root):
@@ -19,6 +23,7 @@ def discover_files(
             path = Path(dirpath) / filename
             relative_path = path.relative_to(root).as_posix()
             stat = path.stat()
+
             files.append(
                 FileRecord(
                     path=str(path.resolve()),
