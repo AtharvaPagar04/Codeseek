@@ -12,9 +12,15 @@ const PROVIDER_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'aicredits', label: 'AI Credits' },
+  { value: 'local', label: 'Local LLM' },
 ];
 
 const PROVIDER_MODELS = {
+  local: [
+    { value: 'auto', label: 'Auto (3B warmup, 7B on demand)' },
+    { value: 'qwen2.5-coder:3b-8k', label: 'Qwen2.5 Coder 3B 8K' },
+    { value: 'qwen-coder-7b-8192', label: 'Qwen Coder 7B 8192' },
+  ],
   gemini: [
     { value: 'default', label: 'Default (gemini-2.0-flash)' },
     { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
@@ -58,13 +64,17 @@ export default function ApiTokensModal({ onClose }) {
 
   useEffect(() => {
     let cancelled = false;
-    listProviderCredentials()
-      .then((data) => {
+
+    const loadTokens = async () => {
+      try {
+        const data = await listProviderCredentials();
         if (!cancelled) setTokens(data);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load provider configurations.');
-      });
+      }
+    };
+
+    loadTokens();
     return () => {
       cancelled = true;
     };
@@ -86,16 +96,14 @@ export default function ApiTokensModal({ onClose }) {
     const key = tokenInput.trim();
     const label = labelInput.trim() || `${providerLabel(providerInput)} Config`;
     const provider = providerInput;
+    const isLocalProvider = provider === 'local';
 
-    if (!key) {
+    if (!key && !isLocalProvider) {
       setError('Token value cannot be empty.');
       return;
     }
 
-    let finalModel = '';
-    if (modelSelect !== 'default') {
-      finalModel = modelSelect;
-    }
+    const finalModel = modelSelect === 'default' ? '' : modelSelect;
 
     const isDuplicate = tokens.some((t) => t.label === label && t.provider === provider);
     if (isDuplicate) {
@@ -216,6 +224,20 @@ export default function ApiTokensModal({ onClose }) {
                       </>
                     )}
                   </div>
+                  {activeToken?.provider === 'local' && (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                    <span className={`text-2xs font-mono px-2 py-0.5 rounded-full border ${
+                        localStatusClass(activeToken)
+                      }`}>
+                        {localStatusLabel(activeToken)}
+                      </span>
+                      {activeToken.runtime_detail && (
+                        <span className="text-2xs text-text-muted font-mono">
+                          {activeToken.runtime_detail}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <span className="shrink-0 text-2xs bg-online/15 text-online border border-online/30 px-1.5 py-0.5 rounded-full font-mono font-medium">
                   Active
@@ -258,6 +280,20 @@ export default function ApiTokensModal({ onClose }) {
                             </>
                           )}
                         </div>
+                        {t.provider === 'local' && (
+                          <div className="mt-1 flex items-center gap-2 flex-wrap">
+                            <span className={`text-2xs font-mono px-2 py-0.5 rounded-full border ${
+                              localStatusClass(t)
+                            }`}>
+                              {localStatusLabel(t)}
+                            </span>
+                            {t.runtime_detail && (
+                              <span className="text-2xs text-text-muted font-mono">
+                                {t.runtime_detail}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -325,7 +361,6 @@ export default function ApiTokensModal({ onClose }) {
                     setLabelInput('');
                     setProviderInput(PROVIDER_OPTIONS[0].value);
                     setModelSelect('default');
-                    setCustomModelVal('');
                   }}
                   className="text-text-muted hover:text-text-primary transition-colors text-sm leading-none"
                   title="Cancel"
@@ -337,18 +372,23 @@ export default function ApiTokensModal({ onClose }) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="token-value" className="text-2xs font-mono text-text-muted uppercase">
-                    API Key
+                    {providerInput === 'local' ? 'Local Access Token' : 'API Key'}
                   </label>
                   <input
                     id="token-value"
                     type="password"
-                    placeholder="Provider API key"
+                    placeholder={providerInput === 'local' ? 'Optional local token' : 'Provider API key'}
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
-                    required
+                    required={providerInput !== 'local'}
                     autoFocus
                     className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted transition-colors"
                   />
+                  {providerInput === 'local' && (
+                    <p className="text-[11px] leading-relaxed text-text-muted">
+                      Leave empty if your local server does not require an auth token.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-1">
@@ -376,8 +416,7 @@ export default function ApiTokensModal({ onClose }) {
                     value={providerInput}
                     onChange={(e) => {
                       setProviderInput(e.target.value);
-                      setModelSelect('default');
-                      setCustomModelVal('');
+                      setModelSelect(e.target.value === 'local' ? 'auto' : 'default');
                     }}
                     className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted transition-colors"
                   >
@@ -405,6 +444,11 @@ export default function ApiTokensModal({ onClose }) {
                       </option>
                     ))}
                   </select>
+                  {providerInput === 'local' && (
+                    <p className="text-[11px] leading-relaxed text-text-muted">
+                      Auto routes regular queries to Qwen Coder 3B and escalates complex queries to Qwen Coder 7B.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -429,6 +473,40 @@ export default function ApiTokensModal({ onClose }) {
 
 function providerLabel(provider) {
   return PROVIDER_OPTIONS.find((option) => option.value === provider)?.label || 'Provider';
+}
+
+function localStatusLabel(token) {
+  const runtimeStatus = `${token?.runtime_status || ''}`.toLowerCase();
+  const selectedStatus = `${token?.runtime_selected_status || ''}`.toLowerCase();
+  const primaryStatus = `${token?.runtime_primary_status || ''}`.toLowerCase();
+  const selected = token?.runtime_selected_model || token?.model || '';
+  if (selected === 'qwen-coder-7b-8192') {
+    if (selectedStatus === 'ready') return '7B ready';
+    if (selectedStatus === 'loading') return 'Loading 7B';
+    if (primaryStatus === 'loading') return 'Warming 3B';
+    if (primaryStatus === 'ready') return '3B ready';
+    return '7B idle';
+  }
+  if (runtimeStatus === 'ready') {
+    return '3B ready';
+  }
+  if (runtimeStatus === 'loading' || primaryStatus === 'loading') {
+    return 'Warming 3B';
+  }
+  if (runtimeStatus === 'error' || primaryStatus === 'error') return 'Load failed';
+  if (runtimeStatus === 'idle') return 'Idle';
+  return 'Unknown';
+}
+
+function localStatusClass(token) {
+  const runtimeStatus = `${token?.runtime_status || ''}`.toLowerCase();
+  const selectedStatus = `${token?.runtime_selected_status || ''}`.toLowerCase();
+  const primaryStatus = `${token?.runtime_primary_status || ''}`.toLowerCase();
+  const status = primaryStatus === 'loading' ? 'loading' : runtimeStatus;
+  if (status === 'ready' || selectedStatus === 'ready') return 'bg-online/15 text-online border-online/30';
+  if (status === 'loading' || selectedStatus === 'loading') return 'bg-warning/15 text-warning border-warning/30';
+  if (status === 'error' || selectedStatus === 'error' || primaryStatus === 'error') return 'bg-offline/15 text-offline border-offline/30';
+  return 'bg-surface-2 text-text-muted border-border';
 }
 
 function TrashIcon() {

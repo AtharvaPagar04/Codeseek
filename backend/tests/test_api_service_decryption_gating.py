@@ -80,7 +80,6 @@ class ApiServiceDecryptionGatingTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as ctx:
                     api_service.activate_provider_credential_v1(
                         credential_id=cred_id,
-                        authorization="Bearer backend-key",
                         session_token=session_token,
                     )
                 self.assertEqual(ctx.exception.status_code, 400)
@@ -108,7 +107,6 @@ class ApiServiceDecryptionGatingTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as ctx:
                     api_service.create_session_v1(
                         body=api_service.SessionCreateRequest(repo_full_name="owner/repo"),
-                        authorization="Bearer backend-key",
                         session_token=session_token,
                     )
                 self.assertEqual(ctx.exception.status_code, 400)

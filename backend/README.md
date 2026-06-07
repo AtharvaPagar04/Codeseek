@@ -44,6 +44,24 @@ CODESEEK_DB_BACKEND=postgres
 CODESEEK_DATABASE_URL=postgresql://codeseek:codeseek@localhost:5432/codeseek
 ```
 
+To use the local LLM provider from the API Config modal, set the local inference
+endpoint and model defaults in your environment:
+
+```bash
+RETRIEVAL_LOCAL_LLM_BASE_URL=http://localhost:11434/v1
+RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS=20.0
+RETRIEVAL_LOCAL_LLM_PRIMARY_MODEL=qwen2.5-coder:3b-8k
+RETRIEVAL_LOCAL_LLM_COMPLEX_MODEL=qwen-coder-7b-8192
+```
+
+Then open API Config in the frontend, add a `Local LLM` provider, and leave the
+token empty if your local server does not require auth.
+
+The local Ollama models are expected to live under `/var/lib/ollama`.
+When the local provider is activated, CodeSeek warms `qwen2.5-coder:3b-8k` in
+the background. If a query resolves to `qwen-coder-7b-8192`, the backend waits
+until that model has finished initializing before generating the answer.
+
 3. Start infrastructure:
 
 ```bash

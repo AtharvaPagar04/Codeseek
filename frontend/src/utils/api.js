@@ -185,7 +185,7 @@ export const querySession = async ({ question, session_id, thread_id = '' }) => 
   return sendQuery({ question, session_id, thread_id: thread_id || undefined });
 };
 
-export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local', githubToken = '' }) => {
+export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local', githubToken = '', enableChunkDescriptions = false }) => {
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
@@ -197,6 +197,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
           repo_url: repoUrl,
           tenant_id: tenantId,
           github_token: githubToken,
+          enable_chunk_descriptions: enableChunkDescriptions,
         }),
       }),
     'Session create'
@@ -350,6 +351,21 @@ export const fetchHealth = async () => {
   }
 };
 
+export const fetchRagasValidationBundle = async () => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/ragas/latest`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Load RAGAS validation bundle'
+  );
+  if (!res.ok) {
+    await throwApiError('Load RAGAS validation bundle', res);
+  }
+  return res.json();
+};
+
 /**
  * POST /auth/github
  * Exchange GitHub OAuth code via the backend and create a server-side session.
@@ -417,7 +433,12 @@ export const listProviderCredentials = async () => {
 };
 
 export const createProviderCredential = async ({ provider, label, apiKey, model = '', isActive }) => {
-  const encryptedSecret = await encryptSecretForSubmission(apiKey);
+  const normalizedProvider = `${provider || ''}`.trim().toLowerCase();
+  const normalizedApiKey = `${apiKey || ''}`.trim();
+  const encryptedSecret =
+    normalizedProvider === 'local' && !normalizedApiKey
+      ? null
+      : await encryptSecretForSubmission(normalizedApiKey);
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/provider-credentials`, {
@@ -425,9 +446,9 @@ export const createProviderCredential = async ({ provider, label, apiKey, model 
         credentials: 'include',
         headers: authHeaders(),
         body: JSON.stringify({
-          provider,
+          provider: normalizedProvider || provider,
           label,
-          encrypted_secret: encryptedSecret,
+          encrypted_secret: encryptedSecret || undefined,
           model,
           is_active: isActive,
         }),

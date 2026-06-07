@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import MessageBubble from './MessageBubble';
 import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
+import IndexingLiveLog from './IndexingLiveLog';
 import { useChat } from '../hooks/useChat';
 import { listProviderCredentials } from '../utils/api';
 
@@ -10,6 +11,7 @@ function getProviderFallbackModel(provider) {
   if (provider === 'openai') return 'gpt-4o-mini';
   if (provider === 'openrouter') return 'openai/gpt-4o-mini';
   if (provider === 'aicredits') return 'gpt-5.4-mini';
+  if (provider === 'local') return 'auto';
   return 'gemini-2.0-flash';
 }
 
@@ -194,7 +196,8 @@ export default function SessionView({
 
       {/* Message list or empty state */}
       {!hasMessages ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-5 min-h-0">
+        <div className="flex-1 flex flex-col items-center justify-center pb-16 px-5 min-h-0">
+          <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
           {statusMessage && (
             <StatusNotice
               tone={session.status === 'failed' ? 'error' : 'info'}
@@ -239,6 +242,7 @@ export default function SessionView({
       ) : (
         <>
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
+            <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
             {statusMessage && (
               <StatusNotice
                 tone={session.status === 'failed' ? 'error' : 'info'}

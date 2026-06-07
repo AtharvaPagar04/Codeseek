@@ -1487,11 +1487,14 @@ def _is_test_path(relative_path: str) -> bool:
 
 def dependency_health() -> dict[str, str]:
     """Best-effort readiness for retrieval dependencies."""
-    model = _get_model()
-    if model is None:
-        model_status = "degraded"
+    if not ENABLE_DENSE_RETRIEVAL:
+        model_status = "disabled"
     else:
-        model_status = "ok"
+        model = _get_model()
+        if model is None:
+            model_status = "degraded"
+        else:
+            model_status = "ok"
 
     client = _get_client()
     qdrant_ready = _qdrant_call(lambda: client.get_collections())

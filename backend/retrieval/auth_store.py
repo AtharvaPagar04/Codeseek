@@ -133,18 +133,37 @@ def get_user_for_session_token(token: str) -> dict | None:
         return None
     token_hash = _hash_token(raw)
     now = _now_iso()
+    import sqlite3
     with db_cursor() as (_conn, cursor):
-        row = cursor.execute(
-            """
-            SELECT
-                u.id, u.github_user_id, u.username, u.avatar_url, u.created_at, u.updated_at,
-                s.id AS auth_session_id
-            FROM auth_sessions s
-            JOIN users u ON u.id = s.user_id
-            WHERE s.session_token_hash = ? AND s.expires_at > ?
-            """,
-            (token_hash, now),
-        ).fetchone()
+        try:
+            row = cursor.execute(
+                """
+                SELECT
+                    u.id, u.github_user_id, u.username, u.avatar_url, u.created_at, u.updated_at,
+                    s.id AS auth_session_id
+                FROM auth_sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.session_token_hash = ? AND s.expires_at > ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                from retrieval.db import init_db
+                init_db(force=True)
+                row = cursor.execute(
+                    """
+                    SELECT
+                        u.id, u.github_user_id, u.username, u.avatar_url, u.created_at, u.updated_at,
+                        s.id AS auth_session_id
+                    FROM auth_sessions s
+                    JOIN users u ON u.id = s.user_id
+                    WHERE s.session_token_hash = ? AND s.expires_at > ?
+                    """,
+                    (token_hash, now),
+                ).fetchone()
+            else:
+                raise
         if not row:
             return None
         cursor.execute(

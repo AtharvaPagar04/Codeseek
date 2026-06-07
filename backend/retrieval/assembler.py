@@ -15,7 +15,17 @@ from retrieval.config import (
     get_repo_root,
 )
 
-_enc = tiktoken.get_encoding("cl100k_base")
+try:
+    _enc = tiktoken.get_encoding("cl100k_base")
+except Exception:  # pragma: no cover - offline fallback for test environments
+    class _FallbackEncoding:
+        def encode(self, text: str) -> list[int]:
+            return list(text.encode("utf-8"))
+
+        def decode(self, tokens: list[int]) -> str:
+            return bytes(tokens).decode("utf-8", errors="ignore")
+
+    _enc = _FallbackEncoding()
 
 
 @lru_cache(maxsize=FILE_CACHE_MAX_SIZE)
@@ -32,7 +42,8 @@ def assemble(
     history_block: str,
     primary_intent: str | None = None,
     raw_query: str = "",
-) -> tuple[str, list[dict], int]:
+    return_blocks: bool = False,
+) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, list[dict]]:
     """Create context blocks under token budget and return cited sources."""
     ranked = sorted(
         chunks,
@@ -44,6 +55,7 @@ def assemble(
 
     blocks = []
     sources = []
+    block_records: list[dict] = []
     used = 0
 
     for chunk in ranked:
@@ -59,18 +71,15 @@ def assemble(
             block_tokens = len(_enc.encode(block))
         blocks.append(block)
         used += block_tokens
-        sources.append(
-            {
-                "relative_path": chunk.get("relative_path", ""),
-                "symbol_name": chunk.get("symbol_name", ""),
-                "start_line": int(chunk.get("start_line", 0)),
-                "end_line": int(chunk.get("end_line", 0)),
-                "expansion_type": chunk.get("expansion_type", "primary"),
-            }
-        )
+        source_record = _source_record(chunk)
+        sources.append(source_record)
+        if return_blocks:
+            block_records.append(_block_record(chunk, content, block))
         if used >= budget:
             break
 
+    if return_blocks:
+        return "\n\n".join(blocks), sources, used, block_records
     return "\n\n".join(blocks), sources, used
 
 
@@ -106,7 +115,8 @@ def assemble_for_reasoning(
     primary_intent: str | None = None,
     raw_query: str = "",
     query_entities: dict | None = None,
-) -> tuple[str, list[dict], int]:
+    return_blocks: bool = False,
+) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, list[dict]]:
     """Assemble LLM context from the broader reasoning_sources set.
 
     Identical to assemble() in structure but uses the intent-aware budget from
@@ -135,6 +145,7 @@ def assemble_for_reasoning(
 
     blocks: list[str] = []
     sources: list[dict] = []
+    block_records: list[dict] = []
     used = 0
 
     for chunk in ranked:
@@ -150,18 +161,15 @@ def assemble_for_reasoning(
             block_tokens = len(_enc.encode(block))
         blocks.append(block)
         used += block_tokens
-        sources.append(
-            {
-                "relative_path": chunk.get("relative_path", ""),
-                "symbol_name": chunk.get("symbol_name", ""),
-                "start_line": int(chunk.get("start_line", 0)),
-                "end_line": int(chunk.get("end_line", 0)),
-                "expansion_type": chunk.get("expansion_type", "primary"),
-            }
-        )
+        source_record = _source_record(chunk)
+        sources.append(source_record)
+        if return_blocks:
+            block_records.append(_block_record(chunk, content, block))
         if used >= budget:
             break
 
+    if return_blocks:
+        return "\n\n".join(blocks), sources, used, block_records
     return "\n\n".join(blocks), sources, used
 
 
@@ -379,3 +387,32 @@ def _truncate_to_budget(text: str, remaining_tokens: int) -> str:
         return text
     trimmed = _enc.decode(tokens[:remaining_tokens])
     return trimmed + "\n[content truncated to fit context budget]"
+
+
+def _source_record(chunk: dict) -> dict:
+    return {
+        "relative_path": chunk.get("relative_path", ""),
+        "symbol_name": chunk.get("symbol_name", ""),
+        "qualified_symbol": chunk.get("qualified_symbol", ""),
+        "chunk_type": chunk.get("chunk_type", ""),
+        "signature": chunk.get("signature", ""),
+        "summary": chunk.get("summary", ""),
+        "start_line": int(chunk.get("start_line", 0)),
+        "end_line": int(chunk.get("end_line", 0)),
+        "expansion_type": chunk.get("expansion_type", "primary"),
+        "score": float(chunk.get("retrieval_score", chunk.get("exact_entity_score", 0.0)) or 0.0),
+    }
+
+
+def _block_record(chunk: dict, content: str, text: str) -> dict:
+    source = _source_record(chunk)
+    source.update(
+        {
+            "content": content,
+            "text": text,
+            "calls": list(chunk.get("calls") or []),
+            "imports": list(chunk.get("imports") or []),
+            "chunk_id": chunk.get("chunk_id", ""),
+        }
+    )
+    return source

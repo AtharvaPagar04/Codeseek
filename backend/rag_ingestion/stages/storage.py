@@ -114,6 +114,7 @@ def _payload(chunk: Chunk) -> dict:
         "file_symbols": chunk.file_symbols,
         "docstring": chunk.docstring,
         "summary": chunk.summary,
+        "description": chunk.description,
         "file_type": chunk.file_type,
         "summary_facts": chunk.summary_facts,
         "detected_frameworks": chunk.detected_frameworks,

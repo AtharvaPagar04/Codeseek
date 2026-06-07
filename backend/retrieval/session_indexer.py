@@ -26,6 +26,8 @@ WORKSPACE_ROOT = Path(
 _lock = threading.RLock()
 _jobs: dict[str, threading.Thread] = {}
 _session_tokens: dict[str, str] = {}
+# Per-session provider credentials stored in memory only (never persisted to DB).
+_session_provider_configs: dict[str, dict] = {}
 
 
 def _now() -> str:
@@ -47,7 +49,7 @@ def _load_state() -> dict:
             SELECT
                 id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
-                chunks_generated, embeddings_stored, idempotent_reuse
+                chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions
             FROM repo_sessions
             ORDER BY created_at ASC
             """
@@ -66,8 +68,8 @@ def _save_state(state: dict) -> None:
                 INSERT INTO repo_sessions (
                     id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                     created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
-                    chunks_generated, embeddings_stored, idempotent_reuse
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _session_insert_values(session),
             )
@@ -97,6 +99,7 @@ def delete_session(session_id: str) -> bool:
         state["sessions"] = next_sessions
         _save_state(state)
         _session_tokens.pop(session_id, None)
+        _session_provider_configs.pop(session_id, None)
 
         collection = session_to_delete.get("collection")
         if collection:
@@ -121,6 +124,8 @@ def create_session(
     repo_url: str = "",
     github_token: str = "",
     user_id: str = "",
+    enable_chunk_descriptions: bool = False,
+    provider_config: dict | None = None,
 ) -> dict:
     owner, _, name = repo_full_name.partition("/")
     if not owner or not name:
@@ -146,6 +151,7 @@ def create_session(
         "chunks_generated": 0,
         "embeddings_stored": 0,
         "idempotent_reuse": False,
+        "enable_chunk_descriptions": enable_chunk_descriptions,
     }
     with _lock:
         state = _load_state()
@@ -158,6 +164,8 @@ def create_session(
         if existing:
             if github_token.strip():
                 _session_tokens[existing["id"]] = github_token.strip()
+            if provider_config:
+                _session_provider_configs[existing["id"]] = provider_config
             ensure_default_thread(
                 existing["id"],
                 user_id=user_id,
@@ -168,6 +176,8 @@ def create_session(
         _save_state(state)
         if github_token.strip():
             _session_tokens[session["id"]] = github_token.strip()
+        if provider_config:
+            _session_provider_configs[session["id"]] = provider_config
     ensure_default_thread(
         session["id"],
         user_id=user_id,
@@ -234,7 +244,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                 SET tenant_id = ?, user_id = ?, repo_full_name = ?, repo_url = ?, repo_root = ?, collection = ?,
                     status = ?, error = ?, created_at = ?, updated_at = ?, job_started_at = ?,
                     job_finished_at = ?, last_indexed_commit = ?, chunks_generated = ?,
-                    embeddings_stored = ?, idempotent_reuse = ?
+                    embeddings_stored = ?, idempotent_reuse = ?, enable_chunk_descriptions = ?
                 WHERE id = ?
                 """,
                 (
@@ -254,6 +264,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     int(session["chunks_generated"]),
                     int(session["embeddings_stored"]),
                     1 if session["idempotent_reuse"] else 0,
+                    1 if session.get("enable_chunk_descriptions") else 0,
                     session_id,
                 ),
             )
@@ -337,17 +348,29 @@ def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> 
 
 
 def _index_job(session_id: str) -> None:
+    from retrieval.indexing_events import emit_indexing_event
+
     session = get_session(session_id)
     if not session:
         return
     _update_session(session_id, status="indexing", job_started_at=_now(), error="")
+    emit_indexing_event(session_id, "queued", "Indexing job started.")
+
     try:
         repo_root = Path(session["repo_root"])
         github_token = _session_tokens.get(session_id, "")
+
+        emit_indexing_event(session_id, "loader", "Cloning or updating repository…")
         commit = _clone_or_pull(session["repo_url"], repo_root, github_token=github_token)
+
         all_sessions = list_sessions()
         reusable = _find_reusable_session(all_sessions, session, commit)
         if reusable:
+            emit_indexing_event(
+                session_id, "complete",
+                "Repository already indexed at this commit. Reusing existing index.",
+                level="success",
+            )
             _update_session(
                 session_id,
                 status="ready",
@@ -359,11 +382,33 @@ def _index_job(session_id: str) -> None:
                 idempotent_reuse=True,
             )
             return
-        counters = run_pipeline(str(repo_root), collection_name=session["collection"])
+
+        emit_indexing_event(session_id, "loader", "Preparing repository for indexing.")
+
+        def _emit(stage, message, level="info", progress=None, total=None, metadata=None):
+            emit_indexing_event(
+                session_id, stage, message,
+                level=level, progress=progress, total=total, metadata=metadata,
+            )
+
+        counters = run_pipeline(
+            str(repo_root),
+            collection_name=session["collection"],
+            enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
+            provider_config=_session_provider_configs.get(session_id),
+            event_callback=_emit,
+        )
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
         if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
             raise RuntimeError("Ingestion completed but no embeddings were stored")
+
+        emit_indexing_event(
+            session_id, "complete",
+            f"Indexing complete — {stored} chunks stored.",
+            level="success",
+            progress=stored, total=stored,
+        )
         _update_session(
             session_id,
             status="ready",
@@ -374,6 +419,14 @@ def _index_job(session_id: str) -> None:
             idempotent_reuse=False,
         )
     except Exception as exc:
+        try:
+            emit_indexing_event(
+                session_id, "failed",
+                f"Indexing failed: {exc}",
+                level="error",
+            )
+        except Exception:
+            pass
         _update_session(
             session_id,
             status="failed",
@@ -383,6 +436,11 @@ def _index_job(session_id: str) -> None:
 
 
 def _row_to_session(row) -> dict:
+    try:
+        enable_desc = bool(row["enable_chunk_descriptions"])
+    except (KeyError, IndexError, TypeError):
+        enable_desc = False
+
     return {
         "id": row["id"],
         "tenant_id": row["tenant_id"],
@@ -401,6 +459,7 @@ def _row_to_session(row) -> dict:
         "chunks_generated": int(row["chunks_generated"] or 0),
         "embeddings_stored": int(row["embeddings_stored"] or 0),
         "idempotent_reuse": bool(row["idempotent_reuse"]),
+        "enable_chunk_descriptions": enable_desc,
     }
 
 
@@ -423,4 +482,5 @@ def _session_insert_values(session: dict) -> tuple:
         int(session["chunks_generated"]),
         int(session["embeddings_stored"]),
         1 if session["idempotent_reuse"] else 0,
+        1 if session.get("enable_chunk_descriptions") else 0,
     )

@@ -9,13 +9,10 @@ export default function RepoPickerModal({
   onClose,
   onConnectGitHub,
   onLoadRepos,
-  onSaveToken,
   oauthLoading = false,
   oauthError = null,
 }) {
   const [filter, setFilter] = useState('');
-  const [patLoading, setPatLoading] = useState(false);
-  const [patError, setPatError] = useState(null);
   const inputRef = useRef(null);
   const overlayRef = useRef(null);
 
@@ -53,85 +50,28 @@ export default function RepoPickerModal({
         </div>
 
         {!isConnected ? (
-          // Not connected state with OAuth button & PAT fallback
-          <div className="flex flex-col py-6 px-6 gap-5">
-            <div className="flex flex-col items-center text-center gap-3">
-              <p className="text-text-secondary text-sm">
-                Connect your GitHub account to create sessions.
-              </p>
-              <button
-                onClick={onConnectGitHub}
-                disabled={oauthLoading}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-text-primary bg-surface-3 border border-border rounded-xl hover:bg-surface-2 hover:border-text-muted transition-colors font-semibold disabled:opacity-60 disabled:cursor-wait"
-              >
-                {oauthLoading ? (
-                  <>
-                    <span className="w-3.5 h-3.5 rounded-full border-2 border-text-muted border-t-text-primary animate-spin" />
-                    Connecting…
-                  </>
-                ) : (
-                  <>Connect via GitHub</>
-                )}
-              </button>
-              {oauthError && (
-                <p className="text-xs text-offline/90 font-mono text-center">⚠ {oauthError}</p>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3 select-none">
-              <div className="h-px bg-border flex-1" />
-              <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">or connect via token</span>
-              <div className="h-px bg-border flex-1" />
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const tokenInput = e.target.elements.pat.value.trim();
-                if (!tokenInput) return;
-                setPatLoading(true);
-                setPatError(null);
-                try {
-                  await onSaveToken(tokenInput);
-                } catch (err) {
-                  setPatError(err.message || 'Invalid GitHub token.');
-                } finally {
-                  setPatLoading(false);
-                }
-              }}
-              className="flex flex-col gap-3"
+          // Not connected state
+          <div className="flex flex-col items-center py-8 px-6 gap-3">
+            <p className="text-text-secondary text-sm text-center">
+              Connect your GitHub account to create sessions.
+            </p>
+            <button
+              onClick={onConnectGitHub}
+              disabled={oauthLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-text-primary bg-surface-3 border border-border rounded-xl hover:bg-surface-2 hover:border-text-muted transition-colors font-semibold disabled:opacity-60 disabled:cursor-wait"
             >
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="pat" className="text-[10px] font-mono text-text-secondary uppercase tracking-wider">
-                  Personal Access Token (PAT)
-                </label>
-                <input
-                  id="pat"
-                  name="pat"
-                  type="password"
-                  placeholder="ghp_..."
-                  required
-                  className="bg-surface-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted transition-colors"
-                />
-              </div>
-
-              {patError && (
-                <p className="text-xs text-offline/90 font-mono">⚠ {patError}</p>
+              {oauthLoading ? (
+                <>
+                  <span className="w-3.5 h-3.5 rounded-full border-2 border-text-muted border-t-text-primary animate-spin" />
+                  Connecting…
+                </>
+              ) : (
+                <>Connect via GitHub</>
               )}
-
-              <button
-                type="submit"
-                disabled={patLoading}
-                className="w-full py-2 bg-text-primary hover:bg-text-secondary text-base rounded-lg text-sm font-medium disabled:opacity-50 transition-colors font-semibold"
-                style={{ color: '#0a0a0a' }}
-              >
-                {patLoading ? 'Verifying Token...' : 'Connect with Token'}
-              </button>
-              
-              <p className="text-[10px] text-text-muted leading-normal">
-                Use either a classic PAT with the <code className="text-text-primary bg-surface-3 px-1 py-0.5 rounded font-mono">repo</code> scope or a fine-grained PAT with repository access granted to the repos you want to index.
-              </p>
-            </form>
+            </button>
+            {oauthError && (
+              <p className="text-xs text-offline/90 font-mono text-center">⚠ {oauthError}</p>
+            )}
           </div>
         ) : (
           <>

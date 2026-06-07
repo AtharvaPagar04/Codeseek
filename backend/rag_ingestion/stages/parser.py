@@ -1,5 +1,6 @@
 """Code parsing stage."""
 
+import os
 from pathlib import Path
 
 from rag_ingestion.models.file import FileRecord
@@ -7,9 +8,67 @@ from rag_ingestion.models.parsed import ParsedFile, ParsedSymbol
 from rag_ingestion.utils.counters import PipelineCounters
 from rag_ingestion.utils.logger import log_skip
 
+# Known JavaScript/TypeScript config files that should be treated as
+# file-level documents (no AST symbol extraction needed).
+CONFIG_FILENAMES = {
+    "postcss.config.js",
+    "postcss.config.mjs",
+    "postcss.config.cjs",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "eslint.config.cjs",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.cjs",
+    "next.config.ts",
+    "tailwind.config.js",
+    "tailwind.config.mjs",
+    "tailwind.config.cjs",
+    "tailwind.config.ts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.cjs",
+    "vite.config.ts",
+    "webpack.config.js",
+    "webpack.config.mjs",
+    "webpack.config.cjs",
+    "babel.config.js",
+    "babel.config.mjs",
+    "babel.config.cjs",
+    "jest.config.js",
+    "jest.config.mjs",
+    "jest.config.cjs",
+    "jest.config.ts",
+    "rollup.config.js",
+    "rollup.config.mjs",
+    "rollup.config.cjs",
+    "vitest.config.js",
+    "vitest.config.mjs",
+    "vitest.config.ts",
+    "tsconfig.json",
+}
+
+
+def _is_file_level_config(file: FileRecord) -> bool:
+    """Return True if the file is a known config that should skip AST parsing."""
+    name = os.path.basename(file.relative_path)
+    return name in CONFIG_FILENAMES
+
 
 def parse_file(file: FileRecord, counters: PipelineCounters) -> ParsedFile:
     """Parse a source file and extract imports and symbols."""
+
+    # Known config files → successful file-level parse (no AST needed).
+    if _is_file_level_config(file):
+        counters.files_parsed_ok += 1
+        return ParsedFile(
+            relative_path=file.relative_path,
+            language=file.language,
+            parse_status="ok",
+            imports=[],
+            symbols=[],
+        )
+
     try:
         source = Path(file.path).read_bytes()
         if file.language in {"python", "javascript", "typescript"}:
@@ -61,7 +120,7 @@ def _load_language(extension: str, language_class):
 
         return language_class(tree_sitter_python.language())
 
-    if extension in {".js", ".jsx"}:
+    if extension in {".js", ".jsx", ".mjs", ".cjs"}:
         import tree_sitter_javascript
 
         return language_class(tree_sitter_javascript.language())
@@ -119,6 +178,25 @@ def _extract_symbols(root, source: bytes, language: str) -> list[ParsedSymbol]:
                     visit(child, class_name)
                 return
 
+        if language in {"javascript", "typescript"} and _is_variable_function_node(node):
+            name = _variable_function_name(node, source)
+            function_node = _variable_function_value(node)
+            if name and function_node is not None:
+                symbols.append(
+                    ParsedSymbol(
+                        symbol_name=name,
+                        symbol_type="method" if parent_symbol else "function",
+                        parent_symbol=parent_symbol,
+                        signature=_signature(node, source),
+                        start_line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        parameters=_parameters(function_node, source),
+                        docstring="",
+                        calls=_calls(node, source),
+                    )
+                )
+                return
+
         if _is_function_node(node):
             name = _node_name(node, source)
             if name:
@@ -136,6 +214,8 @@ def _extract_symbols(root, source: bytes, language: str) -> list[ParsedSymbol]:
                     )
                 )
                 return
+
+        
 
         for child in node.children:
             visit(child, parent_symbol)
@@ -155,7 +235,53 @@ def _is_function_node(node) -> bool:
         "method_definition",
         "generator_function_declaration",
     }
+def _is_variable_function_node(node) -> bool:
+    if node.type != "variable_declarator":
+        return False
 
+    value = _variable_function_value(node)
+    if value is None:
+        return False
+
+    return value.type in {
+        "arrow_function",
+        "function",
+        "function_expression",
+        "generator_function",
+    }
+
+
+def _variable_function_name(node, source: bytes) -> str:
+    name_node = node.child_by_field_name("name")
+    if name_node is not None:
+        return _node_text(name_node, source).strip()
+
+    for child in node.children:
+        if child.type in {"identifier", "property_identifier"}:
+            return _node_text(child, source).strip()
+
+    return ""
+
+
+def _variable_function_value(node):
+    value_node = node.child_by_field_name("value")
+    if value_node is not None:
+        return value_node
+
+    seen_equals = False
+    for child in node.children:
+        if child.type == "=":
+            seen_equals = True
+            continue
+        if seen_equals and child.type in {
+            "arrow_function",
+            "function",
+            "function_expression",
+            "generator_function",
+        }:
+            return child
+
+    return None
 
 def _node_name(node, source: bytes) -> str:
     name_node = node.child_by_field_name("name")
@@ -167,20 +293,79 @@ def _node_name(node, source: bytes) -> str:
             return _node_text(child, source).strip()
     return ""
 
-
 def _parameters(node, source: bytes) -> list[str]:
     parameters_node = node.child_by_field_name("parameters")
-    if parameters_node is None:
-        return []
 
+    if parameters_node is not None:
+        return _extract_parameter_names(parameters_node, source)
+
+    # JavaScript/TypeScript arrow function with single parameter:
+    # const fn = x => x + 1
+    if node.type == "arrow_function":
+        parameters: list[str] = []
+        for child in node.children:
+            if child.type == "=>":
+                break
+            if child.type in {"identifier", "required_parameter", "optional_parameter"}:
+                text = _node_text(child, source).strip()
+                name = _clean_parameter_name(text)
+                if name:
+                    parameters.append(name)
+        return parameters
+
+    return []
+
+
+def _extract_parameter_names(node, source: bytes) -> list[str]:
     parameters: list[str] = []
-    for child in parameters_node.children:
-        if child.type in {"identifier", "typed_parameter"}:
+
+    def visit(child) -> None:
+        if child.type in {
+            "identifier",
+            "typed_parameter",
+            "required_parameter",
+            "optional_parameter",
+        }:
             text = _node_text(child, source).strip()
-            if text and text not in {"self", ","}:
-                parameters.append(text.split(":", 1)[0].strip())
+            name = _clean_parameter_name(text)
+            if name and name not in parameters:
+                parameters.append(name)
+            return
+
+        for grandchild in child.children:
+            visit(grandchild)
+
+    for child in node.children:
+        visit(child)
+
     return parameters
 
+
+def _clean_parameter_name(text: str) -> str:
+    text = text.strip()
+
+    if not text or text in {"self", ",", "(", ")"}:
+        return ""
+
+    # TypeScript / Python style:
+    # user: User -> user
+    if ":" in text:
+        text = text.split(":", 1)[0].strip()
+
+    # Default value:
+    # page = 1 -> page
+    if "=" in text:
+        text = text.split("=", 1)[0].strip()
+
+    # Rest parameter:
+    # ...args -> args
+    text = text.lstrip(".")
+
+    # Basic cleanup for destructuring; skip complex destructured params.
+    if text.startswith("{") or text.startswith("["):
+        return ""
+
+    return text
 
 def _class_methods(node, source: bytes) -> list[str]:
     methods: list[str] = []

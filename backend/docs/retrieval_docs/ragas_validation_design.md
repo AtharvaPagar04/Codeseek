@@ -608,15 +608,15 @@ The checklist below is ordered so the implementation can be built incrementally 
 
 ### WS1 Dataset and Fixture Contract
 
-- [ ] define the first dedicated RAGAS fixture file, for example `docs/retrieval_docs/eval_codeseek_ragas_v1.json`
-- [ ] extend the current eval-case schema with:
+- [x] define the first dedicated RAGAS fixture file, for example `docs/retrieval_docs/eval_codeseek_ragas_v1.json`
+- [x] extend the current eval-case schema with:
   - `ground_truth`
   - `ground_truth_sources`
   - `expected_intent`
   - optional `expected_context_terms`
   - optional `notes`
-- [ ] keep backward compatibility with the current `retrieval_eval.py` fixture shape so one case file can support both deterministic evals and RAGAS evals
-- [ ] write 20-40 initial gold cases covering:
+- [x] keep backward compatibility with the current `retrieval_eval.py` fixture shape so one case file can support both deterministic evals and RAGAS evals
+- [x] write 20-40 initial gold cases covering:
   - `SYMBOL`
   - `TRACE`
   - `DEPENDENCY`
@@ -625,50 +625,50 @@ The checklist below is ordered so the implementation can be built incrementally 
   - `CONFIG`
   - `FOLLOWUP`
   - `LOW_CONTEXT`
-- [ ] make sure each gold case has a short but explicit ground-truth answer rather than only file expectations
-- [ ] make sure each gold case includes source-level evidence identifiers, not only file paths, when the answer depends on a specific function or symbol
-- [ ] add at least 3 negative or absent-evidence cases so low-context behavior is measured intentionally
-- [ ] document case-writing rules in this file or a companion fixture README so future additions stay consistent
+- [x] make sure each gold case has a short but explicit ground-truth answer rather than only file expectations
+- [x] make sure each gold case includes source-level evidence identifiers, not only file paths, when the answer depends on a specific function or symbol
+- [x] add at least 3 negative or absent-evidence cases so low-context behavior is measured intentionally
+- [x] document case-writing rules in this file or a companion fixture README so future additions stay consistent
 
 ### WS2 Pipeline Instrumentation for Context Capture
 
-- [ ] add a dedicated capture path in `retrieval/main.py` so eval mode can return the exact assembled contexts used by the final answer path
-- [ ] capture deterministic-path assembled context separately from LLM reasoning context
-- [ ] capture `search_candidates`, `expanded_candidates`, `assembled_sources`, `display_sources`, and `reasoning_sources` in a stable serialized form
-- [ ] preserve file/symbol/line metadata for every captured source item
-- [ ] include `response_mode`, `primary_intent`, `resolved_query`, and `entities` in the returned eval metadata
-- [ ] include `context_token_count` and `reasoning_context_token_count` in the returned eval metadata
-- [ ] mark context capture explicitly when incomplete with a field such as `context_capture_status`
-- [ ] avoid changing normal API output shape for non-eval calls
-- [ ] add tests proving that eval capture returns the same context that the answer path actually used
+- [x] add a dedicated capture path in `retrieval/main.py` so eval mode can return the exact assembled contexts used by the final answer path
+- [x] capture deterministic-path assembled context separately from LLM reasoning context
+- [x] capture `search_candidates`, `expanded_candidates`, `assembled_sources`, `display_sources`, and `reasoning_sources` in a stable serialized form
+- [x] preserve file/symbol/line metadata for every captured source item
+- [x] include `response_mode`, `primary_intent`, `resolved_query`, and `entities` in the returned eval metadata
+- [x] include `context_token_count` and `reasoning_context_token_count` in the returned eval metadata
+- [x] mark context capture explicitly when incomplete with a field such as `context_capture_status`
+- [x] avoid changing normal API output shape for non-eval calls
+- [x] add tests proving that eval capture returns the same context that the answer path actually used
 
 ### WS3 RAGAS Runner Implementation
 
-- [ ] create `backend/scripts/ragas_eval.py`
-- [ ] load the extended fixture schema from disk
-- [ ] run queries through `run_query(..., return_meta=True)` so the real pipeline is evaluated rather than a mocked shortcut
-- [ ] build the RAGAS dataset rows from:
+- [x] create `backend/scripts/ragas_eval.py`
+- [x] load the extended fixture schema from disk
+- [x] run queries through `run_query(..., return_meta=True)` so the real pipeline is evaluated rather than a mocked shortcut
+- [x] build the RAGAS dataset rows from:
   - `question`
   - `answer`
   - `contexts`
   - `ground_truth`
-- [ ] ensure the `contexts` field contains actual assembled source excerpts or assembled text blocks, not only metadata summaries
-- [ ] support per-case skipping when a required field is missing, with explicit reason logging
-- [ ] support provider-backed runs and provider-less runs without changing the fixture format
-- [ ] write a machine-readable output file, for example `docs/retrieval_docs/eval_results_ragas_latest.json`
-- [ ] print a concise CLI summary with aggregate metrics and counts of low-scoring responses
+- [x] ensure the `contexts` field contains actual assembled source excerpts or assembled text blocks, not only metadata summaries
+- [x] support per-case skipping when a required field is missing, with explicit reason logging
+- [x] support provider-backed runs and provider-less runs without changing the fixture format
+- [x] write a machine-readable output file, for example `docs/retrieval_docs/eval_results_ragas_latest.json`
+- [x] print a concise CLI summary with aggregate metrics and counts of low-scoring responses
 
 ### WS4 Per-Response Scorecard Output
 
-- [ ] define the final per-response JSON schema for the report
-- [ ] include request identity fields:
+- [x] define the final per-response JSON schema for the report
+- [x] include request identity fields:
   - `case_id`
   - `query`
   - `request_id`
   - `timestamp_utc`
   - `repo_root`
   - `collection_name`
-- [ ] include query understanding fields:
+- [x] include query understanding fields:
   - `raw_query`
   - `resolved_query`
   - `primary_intent`
@@ -676,7 +676,7 @@ The checklist below is ordered so the implementation can be built incrementally 
   - `intent_scores`
   - `entities`
   - `is_followup`
-- [ ] include pipeline metadata fields:
+- [x] include pipeline metadata fields:
   - `response_mode`
   - `latency_profile`
   - `stage_latency_ms`
@@ -684,99 +684,174 @@ The checklist below is ordered so the implementation can be built incrementally 
   - `provider_latency_ms`
   - `evidence_confidence`
   - `source_filter`
-- [ ] include the full answer text and evaluated contexts in every response entry
-- [ ] include the ground-truth answer and ground-truth sources in every response entry
-- [ ] include all RAGAS metric values in every response entry
-- [ ] include `failure_stage_hint` in every response entry, even if the value is `none`
-- [ ] keep the schema stable enough that follow-up tools can diff two runs automatically
+- [x] include the full answer text and evaluated contexts in every response entry
+- [x] include the ground-truth answer and ground-truth sources in every response entry
+- [x] include all RAGAS metric values in every response entry
+- [x] include `failure_stage_hint` in every response entry, even if the value is `none`
+- [x] keep the schema stable enough that follow-up tools can diff two runs automatically
 
 ### WS5 Metric Semantics and Edge Cases
 
-- [ ] wire `context_precision`
-- [ ] wire `context_recall`
-- [ ] wire `faithfulness`
-- [ ] wire `answer_relevancy`
-- [ ] wire `answer_correctness` only for cases with valid ground truth
-- [ ] support three output states per metric:
+- [x] wire `context_precision`
+- [x] wire `context_recall`
+- [x] wire `faithfulness`
+- [x] wire `answer_relevancy`
+- [x] wire `answer_correctness` only for cases with valid ground truth
+- [x] support three output states per metric:
   - numeric score
   - `not_applicable`
   - `error`
-- [ ] define how deterministic response modes should be scored when some RAGAS metrics are not meaningful
-- [ ] define how `low_context` responses should be scored and whether they should be excluded from some averages
-- [ ] define how provider failures, timeouts, or empty contexts should appear in the final report
-- [ ] add explicit metric-computation error messages to the output JSON instead of silently dropping failed cases
+- [x] define how deterministic response modes should be scored when some RAGAS metrics are not meaningful
+- [x] define how `low_context` responses should be scored and whether they should be excluded from some averages
+- [x] define how provider failures, timeouts, or empty contexts should appear in the final report
+- [x] add explicit metric-computation error messages to the output JSON instead of silently dropping failed cases
 
 ### WS6 Failure Attribution and Triage Hints
 
-- [ ] implement automatic `failure_stage_hint` assignment rules
-- [ ] classify likely search failures when ground-truth sources are absent from `search_candidates`
-- [ ] classify likely expansion failures when search finds enough evidence but expansion loses structural support
-- [ ] classify likely assembly failures when strong candidates exist but do not survive the token budget
-- [ ] classify likely source-filter failures when the reasoning set is strong but display sources are misleadingly thin
-- [ ] classify likely answer-generation failures when context quality is good but `faithfulness` or `answer_relevancy` is poor
-- [ ] classify likely `ground_truth_gap` cases when the mismatch appears to come from the dataset itself
-- [ ] document that these hints are triage aids, not absolute truth
+- [x] implement automatic `failure_stage_hint` assignment rules
+- [x] classify likely search failures when ground-truth sources are absent from `search_candidates`
+- [x] classify likely expansion failures when search finds enough evidence but expansion loses structural support
+- [x] classify likely assembly failures when strong candidates exist but do not survive the token budget
+- [x] classify likely source-filter failures when the reasoning set is strong but display sources are misleadingly thin
+- [x] classify likely answer-generation failures when context quality is good but `faithfulness` or `answer_relevancy` is poor
+- [x] classify likely `ground_truth_gap` cases when the mismatch appears to come from the dataset itself
+- [x] document that these hints are triage aids, not absolute truth
 
 ### WS7 Aggregate Views and Breakdown Reporting
 
-- [ ] compute overall averages for each RAGAS metric
-- [ ] compute averages by `primary_intent`
-- [ ] compute averages by `response_mode`
-- [ ] compute averages by `latency_profile`
-- [ ] count responses below warning thresholds per metric
-- [ ] list the lowest-scoring responses for:
+- [x] compute overall averages for each RAGAS metric
+- [x] compute averages by `primary_intent`
+- [x] compute averages by `response_mode`
+- [x] compute averages by `latency_profile`
+- [x] count responses below warning thresholds per metric
+- [x] list the lowest-scoring responses for:
   - `context_precision`
   - `context_recall`
   - `faithfulness`
   - `answer_relevancy`
   - `answer_correctness`
-- [ ] include a small pass/fail summary based on warning thresholds
-- [ ] preserve per-response detail even when aggregate summaries are printed
+- [x] include a small pass/fail summary based on warning thresholds
+- [x] preserve per-response detail even when aggregate summaries are printed
 
 ### WS8 Thresholds and Rollout Policy
 
-- [ ] encode initial reporting thresholds for aggregate metrics
-- [ ] encode per-response warning thresholds
-- [ ] keep the first rollout in report-only mode rather than blocking CI immediately
-- [ ] define the conditions required before any hard CI gate is introduced
-- [ ] document how to review a bad run:
+- [x] encode initial reporting thresholds for aggregate metrics
+- [x] encode per-response warning thresholds
+- [x] keep the first rollout in report-only mode rather than blocking CI immediately
+- [x] define the conditions required before any hard CI gate is introduced
+- [x] document how to review a bad run:
   - inspect low-scoring responses first
   - inspect failure-stage hints second
   - inspect aggregate trends last
-- [ ] document when a low score is acceptable, especially for absent-evidence and low-context cases
+- [x] document when a low score is acceptable, especially for absent-evidence and low-context cases
 
 ### WS9 Tests and Validation of the Validation Layer
 
-- [ ] add unit tests for fixture parsing
-- [ ] add unit tests for scorecard serialization
-- [ ] add unit tests for `failure_stage_hint` assignment
-- [ ] add unit tests for metric-state handling:
+- [x] add unit tests for fixture parsing
+- [x] add unit tests for scorecard serialization
+- [x] add unit tests for `failure_stage_hint` assignment
+- [x] add unit tests for metric-state handling:
   - numeric
   - `not_applicable`
   - `error`
-- [ ] add tests proving that the captured `contexts` match the final answer path inputs
-- [ ] add tests for deterministic response modes
-- [ ] add tests for `llm` response mode
-- [ ] add tests for `low_context` response mode
-- [ ] run the current deterministic retrieval eval suite before and after integration to verify no regression in the existing evaluator
+- [x] add tests proving that the captured `contexts` match the final answer path inputs
+- [x] add tests for deterministic response modes
+- [x] add tests for `llm` response mode
+- [x] add tests for `low_context` response mode
+- [x] run the current deterministic retrieval eval suite before and after integration to verify no regression in the existing evaluator
 
 ### WS10 Documentation and Operating Procedure
 
-- [ ] add a short runbook section showing how to execute `scripts/ragas_eval.py`
-- [ ] document the expected output file location
-- [ ] document how to add a new gold case
-- [ ] document how to interpret each RAGAS metric in CodeSeek terms
-- [ ] document how to investigate a low-scoring response using the scorecard fields
-- [ ] document when to use:
+- [x] add a short runbook section showing how to execute `scripts/ragas_eval.py`
+- [x] document the expected output file location
+- [x] document how to add a new gold case
+- [x] document how to interpret each RAGAS metric in CodeSeek terms
+- [x] document how to investigate a low-scoring response using the scorecard fields
+- [x] document when to use:
   - `retrieval_eval.py`
   - `ragas_eval.py`
   - the manual response-review checklist
-- [ ] keep this design doc updated when the implementation diverges from the planned schema or workflow
+- [x] keep this design doc updated when the implementation diverges from the planned schema or workflow
+
+### Runbook
+
+Use the new runner from the backend root:
+
+```bash
+./.venv/bin/python scripts/ragas_eval.py \
+  --eval-file docs/retrieval_docs/eval_codeseek_ragas_v1.json \
+  --output-json docs/retrieval_docs/eval_results_ragas_latest.json \
+  --output-md docs/retrieval_docs/eval_results_ragas_latest.md
+```
+
+If the dense embedding model is not cached locally, use the offline-safe variant:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 RETRIEVAL_ENABLE_DENSE=0 RETRIEVAL_ENABLE_LEXICAL=1 \
+  ./.venv/bin/python scripts/ragas_eval.py \
+  --eval-file docs/retrieval_docs/eval_codeseek_ragas_v1.json \
+  --output-json docs/retrieval_docs/eval_results_ragas_latest.json \
+  --output-md docs/retrieval_docs/eval_results_ragas_latest.md \
+  --family-baseline-out docs/retrieval_docs/ragas_family_baseline_latest.json
+```
+
+Check thresholds against the generated JSON report:
+
+```bash
+./.venv/bin/python scripts/check_ragas_metrics.py \
+  --report docs/retrieval_docs/eval_results_ragas_latest.json
+```
+
+Check the curated human-reviewed benchmark:
+
+```bash
+./.venv/bin/python scripts/check_ragas_human_review.py \
+  --report docs/retrieval_docs/eval_results_ragas_latest.json \
+  --benchmark docs/retrieval_docs/ragas_human_review_benchmark_v1.json
+```
+
+Capture or compare historical family baselines:
+
+```bash
+./.venv/bin/python scripts/ragas_eval.py \
+  --eval-file docs/retrieval_docs/eval_codeseek_ragas_v1.json \
+  --output-json docs/retrieval_docs/eval_results_ragas_latest.json \
+  --output-md docs/retrieval_docs/eval_results_ragas_latest.md \
+  --family-baseline-out docs/retrieval_docs/ragas_family_baseline_latest.json
+```
+
+```bash
+./.venv/bin/python scripts/ragas_eval.py \
+  --eval-file docs/retrieval_docs/eval_codeseek_ragas_v1.json \
+  --output-json docs/retrieval_docs/eval_results_ragas_latest.json \
+  --output-md docs/retrieval_docs/eval_results_ragas_latest.md \
+  --family-baseline docs/retrieval_docs/ragas_family_baseline_latest.json
+```
+
+The baseline snapshot can be created with `--family-baseline-out` and then reused with `--family-baseline` to compare family-level drift across runs.
+
+The frontend exposes the latest scorecard bundle through `GET /api/v1/ragas/latest` and the main app shows it behind the `RAGAS` button in the top bar.
+
+The baseline snapshot stores per-family averages for `primary_intent` and `response_mode` so later runs can compare family-specific drift without hand-built spreadsheets.
+
+To add a new gold case:
+
+- copy an existing case shape from `eval_codeseek_ragas_v1.json`
+- add a concise `ground_truth`
+- add `ground_truth_sources` with file and symbol anchors when possible
+- keep `expected_intent` and `expected_response_mode` aligned with the actual route you expect CodeSeek to take
+- add `notes` when the case has a special interpretation or a known edge condition
+
+Use the deterministic eval suite when you only need retrieval regression coverage:
+
+- `scripts/retrieval_eval.py` for fast hit@k, MRR, citation coverage, and latency checks
+- `scripts/ragas_eval.py` for per-response grounding and answer-quality scoring
+- `manual_response_review_checklist.md` for final human review of formatting, tone, and usefulness
 
 ### WS11 Optional Future Extensions
 
-- [ ] add HTML or markdown report rendering on top of the JSON artifact once the JSON schema is stable
-- [ ] add trend comparison between two RAGAS runs so regressions can be reviewed without manual diffing
-- [ ] add per-family historical baselines after enough runs exist
-- [ ] add UI surfacing for per-response validation details only after the backend report format is stable
-- [ ] consider a small curated human-reviewed benchmark set for release signoff if automated scores and manual quality audits diverge
+- [x] add HTML or markdown report rendering on top of the JSON artifact once the JSON schema is stable
+- [x] add trend comparison between two RAGAS runs so regressions can be reviewed without manual diffing
+- [x] add per-family historical baselines after enough runs exist
+- [x] add UI surfacing for per-response validation details only after the backend report format is stable
+- [x] consider a small curated human-reviewed benchmark set for release signoff if automated scores and manual quality audits diverge
