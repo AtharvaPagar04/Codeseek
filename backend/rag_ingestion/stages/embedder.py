@@ -22,6 +22,8 @@ KNOWN_LABELS = {
     "Qualified Symbol",
     "Parent Symbol",
     "Signature",
+    "Labels",
+    "Code Intent",
     "Summary",
     "Description",
     "Purpose",
@@ -127,6 +129,8 @@ def _embedding_input(chunk: Chunk) -> str:
     lines += _line("Qualified Symbol", chunk.qualified_symbol)
     lines += _line("Parent Symbol", chunk.parent_symbol)
     lines += _line("Signature", chunk.signature)
+    lines += _list_line("Labels", getattr(chunk, "labels", []))
+    lines += _line("Code Intent", getattr(chunk, "code_intent", ""))
     lines += _line("Summary", chunk.summary)
     lines += _line("Description", chunk.description)
     lines += _line("Purpose", chunk.purpose)

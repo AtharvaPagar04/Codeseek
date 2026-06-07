@@ -9,6 +9,9 @@ from pathlib import Path
 
 from qdrant_client import QdrantClient
 
+from rag_ingestion.label_constants import LABEL_REGISTRY, MAX_TOTAL_LABELS
+
+
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 EMBEDDING_DIM = 384
@@ -304,6 +307,48 @@ def main() -> int:
         if not payload.get("purpose") and not payload.get("summary_facts"):
             warnings.append(f"README has no purpose/summary_facts: {payload.get('relative_path')}")
 
+    # Labels validation
+    labeled = sum(1 for p in points if p.payload.get("labels"))
+    code_intent_present = sum(1 for p in points if p.payload.get("code_intent"))
+
+    label_counts = Counter()
+    for p in points:
+        for label in p.payload.get("labels", []):
+            label_counts[label] += 1
+
+    unknown_labels = set()
+    over_limit = []
+    snippet_on_non_code = []
+    invalid_label_type = []
+    for p in points:
+        labels = p.payload.get("labels")
+        if labels is None or not isinstance(labels, list) or not all(isinstance(lb, str) for lb in labels):
+            invalid_label_type.append(p.id)
+            continue
+            
+        for label in labels:
+            if label not in LABEL_REGISTRY:
+                unknown_labels.add(label)
+        if len(labels) > MAX_TOTAL_LABELS:
+            over_limit.append(p.id)
+        if "question_use:code-snippet" in labels:
+            if "artifact:source-code" not in labels:
+                snippet_on_non_code.append(p.id)
+
+    if unknown_labels:
+        errors.append(f"unknown labels found in points: {unknown_labels}")
+    if over_limit:
+        errors.append(f"{len(over_limit)} chunks are over the total label limit of {MAX_TOTAL_LABELS}")
+    if snippet_on_non_code:
+        errors.append(f"{len(snippet_on_non_code)} chunks have question_use:code-snippet on non-source-code artifacts")
+    if invalid_label_type:
+        errors.append(f"{len(invalid_label_type)} chunks have invalid labels type (not list of strings)")
+
+    auth_points = [p for p in points if "auth_store" in (p.payload.get("relative_path") or "")]
+    for p in auth_points:
+        if "domain:auth" not in (p.payload.get("labels") or []):
+            errors.append(f"Missing domain:auth in {p.payload.get('relative_path')}")
+
     # Print report
     print("=" * 72)
     print("Manual Vector DB Stored Data Audit")
@@ -336,6 +381,20 @@ def main() -> int:
     print(f"  content_excerpt:  {content_excerpts}/{len(points)}")
     print(f"  summary_facts:    {summary_facts}/{len(points)}")
     print(f"  repo_summary:     {repo_summary_count}")
+    print(f"  labels:           {labeled}/{len(points)}")
+    print(f"  code_intent:      {code_intent_present}/{len(points)}")
+    print()
+
+    print("Top labels:")
+    for label, count in label_counts.most_common(15):
+        print(f"    {label}: {count}")
+    print()
+
+    print("Label verification:")
+    print(f"  Unknown labels:                      {unknown_labels or 'none'}")
+    print(f"  Chunks over label limit:             {len(over_limit)}")
+    print(f"  code-snippet on non-source chunks:   {len(snippet_on_non_code)}")
+    print(f"  Chunks with invalid labels type:     {len(invalid_label_type)}")
     print()
 
     print("Important evidence found:")

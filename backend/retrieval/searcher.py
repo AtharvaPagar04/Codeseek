@@ -30,6 +30,7 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
+from retrieval.query_intent import classify_query_intent, compute_label_boost
 
 _client = None
 _model = None
@@ -765,29 +766,32 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
 
 
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[dict]:
-    """Apply a small lexical boost so specific queries rank matching symbols/files higher."""
+    """Apply unified label-aware and lexical scoring to rank candidates."""
+    query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
-    if not tokens:
-        return candidates
 
     rescored = []
     for item in candidates:
-        overlap = _overlap_score(tokens, item)
+        vector_score = float(item.get("retrieval_score", 0.0))
+        exact_match_score = min(float(item.get("exact_entity_score", 0.0)) / 4.0, 1.0)
+        label_boost = compute_label_boost(item.get("labels", []), query_profile)
+
+        overlap = _overlap_score(tokens, item) if tokens else 0
+        path_symbol_boost = min(float(overlap) / 3.0, 1.0)
+
+        final_score = (
+            0.70 * vector_score
+            + 0.15 * exact_match_score
+            + 0.10 * label_boost
+            + 0.05 * path_symbol_boost
+        )
+
         boosted = dict(item)
-        boosted["_lexical_overlap"] = overlap
+        boosted["retrieval_score"] = final_score
+        boosted["final_score"] = final_score
         rescored.append(boosted)
 
-    rescored.sort(
-        key=lambda item: (
-            not item.get("exact_retrieval_hit", False),
-            not item.get("multi_layer_hit", False),
-            -float(item.get("retrieval_score", 0.0)),
-            -float(item.get("fusion_score", 0.0)),
-            -int(item.get("_lexical_overlap", 0)),
-        )
-    )
-    for item in rescored:
-        item.pop("_lexical_overlap", None)
+    rescored.sort(key=lambda item: -float(item.get("final_score", 0.0)))
     return rescored
 
 

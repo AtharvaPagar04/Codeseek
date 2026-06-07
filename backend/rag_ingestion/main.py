@@ -1,6 +1,10 @@
 """Entry point for the RAG ingestion pipeline."""
 
 import argparse
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
@@ -156,9 +160,34 @@ def run_pipeline(
             event_callback=event_callback,
         )
 
+        # --- Labeling ---
+        from rag_ingestion.config import ENABLE_CHUNK_LABELS
+        if ENABLE_CHUNK_LABELS:
+            from rag_ingestion.stages.labeler import label_chunks
+            repo_name = repository.get("repository_name", "")
+            repo_root = repository.get("repository_root", "")
+            all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
+            
+            labeled_count = sum(1 for c in all_chunks if getattr(c, "labels", None))
+            logger.info(
+                "Labeled %s/%s chunks before embedding",
+                labeled_count,
+                len(all_chunks),
+            )
+            for chunk in all_chunks[:5]:
+                logger.debug(
+                    "Labeled chunk sample: path=%s type=%s labels=%s code_intent=%s",
+                    chunk.relative_path,
+                    chunk.chunk_type,
+                    chunk.labels,
+                    chunk.code_intent,
+                )
+
+
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters)
+
         emit("embedding",
              f"Generated embeddings for {counters.embeddings_generated} chunks.",
              level="success", progress=counters.embeddings_generated,

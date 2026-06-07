@@ -138,5 +138,9 @@ def _payload(chunk: Chunk) -> dict:
         "setup_steps": chunk.setup_steps,
         "usage_commands": chunk.usage_commands,
         "architecture_notes": chunk.architecture_notes,
+        "labels": getattr(chunk, "labels", []),
+        "code_intent": getattr(chunk, "code_intent", ""),
+        # label_confidences is intentionally excluded — ingestion-only, not persisted
         "content_excerpt": chunk.content[:CONTENT_EXCERPT_CHARS],
     }
+
