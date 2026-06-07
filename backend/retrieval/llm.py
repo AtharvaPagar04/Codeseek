@@ -336,6 +336,7 @@ def _resolve_local_model(
 ) -> tuple[str, str]:
     normalized = requested_model.strip().lower()
     if normalized in {
+        "qwen2.5-coder:3b-5k",
         "qwen2.5-coder:3b-8k",
         "qwen-coder-7b-8192",
         "qwen-coder-3b",

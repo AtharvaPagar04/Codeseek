@@ -46,7 +46,7 @@ def store_chunks(
 def delete_chunks_for_paths(
     relative_paths: list[str], collection_name: str | None = None
 ) -> None:
-    """Delete points whose payload.relative_path belongs to removed files."""
+    """Delete points whose payload.relative_path belongs to removed or modified files."""
     if not relative_paths:
         return
 
@@ -138,5 +138,9 @@ def _payload(chunk: Chunk) -> dict:
         "setup_steps": chunk.setup_steps,
         "usage_commands": chunk.usage_commands,
         "architecture_notes": chunk.architecture_notes,
+        "labels": getattr(chunk, "labels", []),
+        "code_intent": getattr(chunk, "code_intent", ""),
+        # label_confidences is intentionally excluded — ingestion-only, not persisted
         "content_excerpt": chunk.content[:CONTENT_EXCERPT_CHARS],
     }
+
