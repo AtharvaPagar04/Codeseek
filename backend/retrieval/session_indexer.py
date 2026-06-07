@@ -34,6 +34,38 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def compute_repo_freshness_status(session: dict) -> str:
+    status = session.get("status", "unknown")
+    if status == "indexing":
+        return "indexing"
+    if status == "failed":
+        return "failed"
+    current_sha = session.get("current_commit_sha", "")
+    if not current_sha:
+        return "unknown"
+    if bool(session.get("repo_dirty")):
+        return "dirty_worktree"
+    if session.get("last_indexed_commit", "") == current_sha:
+        return "up_to_date"
+    return "out_of_date"
+
+
+def _populate_repo_status(session: dict) -> dict:
+    session["repo_status"] = {
+        "status": compute_repo_freshness_status(session),
+        "indexed_commit_sha": session.get("last_indexed_commit", ""),
+        "current_commit_sha": session.get("current_commit_sha", ""),
+        "current_branch": session.get("current_branch", ""),
+        "dirty_worktree": bool(session.get("repo_dirty", False)),
+        "checked_at": session.get("repo_status_checked_at", ""),
+        "indexed_at": session.get("job_finished_at", ""),
+        "files_indexed": int(session.get("files_indexed", 0)),
+        "chunks_generated": int(session.get("chunks_generated", 0)),
+        "embeddings_stored": int(session.get("embeddings_stored", 0)),
+    }
+    return session
+
+
 def _slug(value: str) -> str:
     out = []
     for ch in value.lower():
@@ -49,7 +81,9 @@ def _load_state() -> dict:
             SELECT
                 id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
-                chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions
+                chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
+                refine_labels_with_llm, current_commit_sha, current_branch, repo_dirty,
+                repo_status_checked_at, files_indexed
             FROM repo_sessions
             ORDER BY created_at ASC
             """
@@ -68,8 +102,10 @@ def _save_state(state: dict) -> None:
                 INSERT INTO repo_sessions (
                     id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                     created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
-                    chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
+                    refine_labels_with_llm, current_commit_sha, current_branch, repo_dirty,
+                    repo_status_checked_at, files_indexed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _session_insert_values(session),
             )
@@ -152,7 +188,13 @@ def create_session(
         "embeddings_stored": 0,
         "idempotent_reuse": False,
         "enable_chunk_descriptions": enable_chunk_descriptions,
+        "current_commit_sha": "",
+        "current_branch": "",
+        "repo_dirty": False,
+        "repo_status_checked_at": "",
+        "files_indexed": 0,
     }
+    _populate_repo_status(session)
     with _lock:
         state = _load_state()
         existing = _find_existing_session(
@@ -244,7 +286,9 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                 SET tenant_id = ?, user_id = ?, repo_full_name = ?, repo_url = ?, repo_root = ?, collection = ?,
                     status = ?, error = ?, created_at = ?, updated_at = ?, job_started_at = ?,
                     job_finished_at = ?, last_indexed_commit = ?, chunks_generated = ?,
-                    embeddings_stored = ?, idempotent_reuse = ?, enable_chunk_descriptions = ?
+                    embeddings_stored = ?, idempotent_reuse = ?, enable_chunk_descriptions = ?,
+                    refine_labels_with_llm = ?, current_commit_sha = ?, current_branch = ?,
+                    repo_dirty = ?, repo_status_checked_at = ?, files_indexed = ?
                 WHERE id = ?
                 """,
                 (
@@ -265,10 +309,16 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     int(session["embeddings_stored"]),
                     1 if session["idempotent_reuse"] else 0,
                     1 if session.get("enable_chunk_descriptions") else 0,
+                    1 if session.get("refine_labels_with_llm") else 0,
+                    session.get("current_commit_sha", ""),
+                    session.get("current_branch", ""),
+                    1 if session.get("repo_dirty") else 0,
+                    session.get("repo_status_checked_at", ""),
+                    int(session.get("files_indexed", 0)),
                     session_id,
                 ),
             )
-        return session
+        return _populate_repo_status(session)
     return None
 
 
@@ -391,11 +441,22 @@ def _index_job(session_id: str) -> None:
                 level=level, progress=progress, total=total, metadata=metadata,
             )
 
+        provider_config = _session_provider_configs.get(session_id)
+        if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
+            try:
+                from retrieval.provider_health import require_llm_ready_for_user
+                user_id = session.get("user_id", "")
+                if user_id:
+                    provider_config = require_llm_ready_for_user(user_id)
+            except Exception as e:
+                print(f"Warning: could not resolve LLM provider credential for session indexing: {e}")
+
         counters = run_pipeline(
             str(repo_root),
             collection_name=session["collection"],
             enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
-            provider_config=_session_provider_configs.get(session_id),
+            enable_llm_label_refinement=bool(session.get("refine_labels_with_llm", False)),
+            provider_config=provider_config,
             event_callback=_emit,
         )
         invalidate_lexical_index(session["collection"])
@@ -441,7 +502,18 @@ def _row_to_session(row) -> dict:
     except (KeyError, IndexError, TypeError):
         enable_desc = False
 
-    return {
+    try:
+        refine_labels = bool(row["refine_labels_with_llm"])
+    except (KeyError, IndexError, TypeError):
+        refine_labels = False
+
+    def _get_val(k, default):
+        try:
+            return row[k]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    session = {
         "id": row["id"],
         "tenant_id": row["tenant_id"],
         "user_id": row["user_id"],
@@ -460,7 +532,17 @@ def _row_to_session(row) -> dict:
         "embeddings_stored": int(row["embeddings_stored"] or 0),
         "idempotent_reuse": bool(row["idempotent_reuse"]),
         "enable_chunk_descriptions": enable_desc,
+        "refine_labels_with_llm": refine_labels,
+        "indexing_options": {
+            "refine_labels_with_llm": refine_labels,
+        },
+        "current_commit_sha": _get_val("current_commit_sha", ""),
+        "current_branch": _get_val("current_branch", ""),
+        "repo_dirty": bool(_get_val("repo_dirty", False)),
+        "repo_status_checked_at": _get_val("repo_status_checked_at", ""),
+        "files_indexed": int(_get_val("files_indexed", 0)),
     }
+    return _populate_repo_status(session)
 
 
 def _session_insert_values(session: dict) -> tuple:
@@ -483,4 +565,329 @@ def _session_insert_values(session: dict) -> tuple:
         int(session["embeddings_stored"]),
         1 if session["idempotent_reuse"] else 0,
         1 if session.get("enable_chunk_descriptions") else 0,
+        1 if session.get("refine_labels_with_llm") else 0,
+        session.get("current_commit_sha", ""),
+        session.get("current_branch", ""),
+        1 if session.get("repo_dirty") else 0,
+        session.get("repo_status_checked_at", ""),
+        int(session.get("files_indexed", 0)),
     )
+
+
+def get_session_indexing_options(session_id: str, user_id: str) -> dict:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if session.get("user_id", "") != user_id:
+        raise PermissionError("Access denied")
+    return {
+        "refine_labels_with_llm": bool(session.get("refine_labels_with_llm", False))
+    }
+
+
+def update_session_indexing_options(
+    session_id: str,
+    user_id: str,
+    *,
+    refine_labels_with_llm: bool,
+) -> dict:
+    with _lock:
+        session = get_session(session_id)
+        if not session:
+            raise ValueError("Session not found")
+        if session.get("user_id", "") != user_id:
+            raise PermissionError("Access denied")
+        _update_session(session_id, refine_labels_with_llm=refine_labels_with_llm)
+        return {
+            "refine_labels_with_llm": refine_labels_with_llm
+        }
+
+
+def _run_git_command(repo_root: str, args: list[str], *, timeout: int = 20, github_token: str = "") -> str:
+    env = dict(os.environ)
+    token = github_token.strip() or os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    if token:
+        env["GIT_ASKPASS"] = "echo"
+        env["GITHUB_TOKEN"] = token
+
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Git command timeout: git {' '.join(args)}") from e
+
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or proc.stdout.strip() or "git command failed"
+        if token and token in err:
+            err = err.replace(token, "*****")
+        raise RuntimeError(f"Git command failed: git {' '.join(args)}: {err}")
+    return proc.stdout.strip()
+
+
+def _get_local_git_status(repo_root: str, github_token: str = "") -> dict:
+    current_commit_sha = _run_git_command(repo_root, ["rev-parse", "HEAD"], github_token=github_token)
+    current_branch = _run_git_command(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], github_token=github_token)
+    status_porcelain = _run_git_command(repo_root, ["status", "--porcelain"], github_token=github_token)
+    dirty_worktree = bool(status_porcelain.strip())
+    return {
+        "current_commit_sha": current_commit_sha,
+        "current_branch": current_branch,
+        "dirty_worktree": dirty_worktree,
+    }
+
+
+def _refresh_remote_state(repo_root: str, github_token: str = "") -> None:
+    _run_git_command(repo_root, ["fetch", "--all", "--prune"], github_token=github_token)
+
+
+def _pull_latest(repo_root: str, github_token: str = "") -> dict:
+    _run_git_command(repo_root, ["fetch", "--all", "--prune"], github_token=github_token)
+    try:
+        _run_git_command(repo_root, ["pull", "--ff-only"], github_token=github_token)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Git pull failed: {exc}. A non-fast-forward update or force-push may have occurred. "
+            f"A clean re-clone/re-creation of the session is recommended."
+        ) from exc
+    return _get_local_git_status(repo_root, github_token=github_token)
+
+
+def get_session_repo_status(session_id: str, user_id: str) -> dict:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if session.get("user_id", "") != user_id:
+        raise PermissionError("Access denied")
+
+    repo_root = session.get("repo_root", "")
+    if not repo_root or not Path(repo_root).exists() or not (Path(repo_root) / ".git").exists():
+        session["current_commit_sha"] = ""
+        session["current_branch"] = ""
+        session["repo_dirty"] = False
+        session["repo_status_checked_at"] = _now()
+        _update_session(
+            session_id,
+            current_commit_sha="",
+            current_branch="",
+            repo_dirty=False,
+            repo_status_checked_at=session["repo_status_checked_at"],
+        )
+        return {
+            "session_id": session_id,
+            "repo_status": {
+                "status": "unknown",
+                "indexed_commit_sha": session.get("last_indexed_commit", ""),
+                "current_commit_sha": "",
+                "current_branch": "",
+                "dirty_worktree": False,
+                "checked_at": session["repo_status_checked_at"],
+                "indexed_at": session.get("job_finished_at", ""),
+                "files_indexed": int(session.get("files_indexed", 0)),
+                "chunks_generated": int(session.get("chunks_generated", 0)),
+                "embeddings_stored": int(session.get("embeddings_stored", 0)),
+            }
+        }
+
+    github_token = _session_tokens.get(session_id, "")
+    try:
+        _refresh_remote_state(repo_root, github_token=github_token)
+    except Exception as e:
+        print(f"Warning: git fetch failed during freshness check: {e}")
+
+    local_status = _get_local_git_status(repo_root, github_token=github_token)
+
+    current_commit_sha = local_status["current_commit_sha"]
+    try:
+        upstream_branch = _run_git_command(repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], github_token=github_token)
+        if upstream_branch:
+            current_commit_sha = _run_git_command(repo_root, ["rev-parse", "@{u}"], github_token=github_token)
+    except Exception:
+        pass
+
+    session["current_commit_sha"] = current_commit_sha
+    session["current_branch"] = local_status["current_branch"]
+    session["repo_dirty"] = local_status["dirty_worktree"]
+    session["repo_status_checked_at"] = _now()
+
+    _update_session(
+        session_id,
+        current_commit_sha=session["current_commit_sha"],
+        current_branch=session["current_branch"],
+        repo_dirty=session["repo_dirty"],
+        repo_status_checked_at=session["repo_status_checked_at"],
+    )
+
+    updated_session = get_session(session_id)
+    return {
+        "session_id": session_id,
+        "repo_status": updated_session["repo_status"]
+    }
+
+
+def index_latest_version(session_id: str, user_id: str) -> dict:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if session.get("user_id", "") != user_id:
+        raise PermissionError("Access denied")
+    if session.get("status") == "indexing":
+        raise ValueError("Session is already indexing")
+
+    _update_session(
+        session_id,
+        status="indexing",
+        error="",
+        job_started_at="",
+        job_finished_at="",
+    )
+
+    worker = threading.Thread(
+        target=_index_latest_job,
+        args=(session_id, user_id),
+        daemon=True,
+    )
+    with _lock:
+        _jobs[session_id] = worker
+    worker.start()
+
+    return {
+        "session_id": session_id,
+        "status": "indexing",
+        "message": "Indexing latest repository version."
+    }
+
+
+def _index_latest_job(session_id: str, user_id: str) -> None:
+    from retrieval.indexing_events import emit_indexing_event
+
+    session = get_session(session_id)
+    if not session:
+        return
+
+    _update_session(session_id, status="indexing", job_started_at=_now(), error="")
+    emit_indexing_event(session_id, "queued", "Indexing latest repository version.")
+
+    prev_status = session.get("status", "ready")
+    prev_last_indexed_commit = session.get("last_indexed_commit", "")
+    prev_chunks_generated = session.get("chunks_generated", 0)
+    prev_embeddings_stored = session.get("embeddings_stored", 0)
+    prev_files_indexed = session.get("files_indexed", 0)
+
+    try:
+        repo_root = Path(session["repo_root"])
+        github_token = _session_tokens.get(session_id, "")
+
+        emit_indexing_event(session_id, "loader", "Checking local repository state...")
+        local_status = _get_local_git_status(str(repo_root), github_token=github_token)
+
+        is_github_cloned = False
+        try:
+            is_github_cloned = repo_root.resolve().is_relative_to(WORKSPACE_ROOT.resolve())
+        except ValueError:
+            pass
+
+        if local_status["dirty_worktree"] and is_github_cloned:
+            raise RuntimeError(
+                "The repository workspace has uncommitted/dirty changes and cannot be pulled safely. "
+                "Please recreate or clean the repository workspace."
+            )
+
+        emit_indexing_event(session_id, "loader", "Pulling latest changes from remote repository...")
+        local_status = _pull_latest(str(repo_root), github_token=github_token)
+
+        current_commit_sha = local_status["current_commit_sha"]
+        try:
+            upstream_branch = _run_git_command(
+                str(repo_root),
+                ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                github_token=github_token,
+            )
+            if upstream_branch:
+                current_commit_sha = _run_git_command(
+                    str(repo_root),
+                    ["rev-parse", "@{u}"],
+                    github_token=github_token,
+                )
+        except Exception:
+            pass
+
+        emit_indexing_event(session_id, "loader", "Preparing repository for full re-indexing.")
+
+        def _emit(stage, message, level="info", progress=None, total=None, metadata=None):
+            emit_indexing_event(
+                session_id, stage, message,
+                level=level, progress=progress, total=total, metadata=metadata,
+            )
+
+        provider_config = _session_provider_configs.get(session_id)
+        if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
+            try:
+                from retrieval.provider_health import require_llm_ready_for_user
+                if user_id:
+                    provider_config = require_llm_ready_for_user(user_id)
+            except Exception as e:
+                print(f"Warning: could not resolve LLM provider credential: {e}")
+
+        counters = run_pipeline(
+            str(repo_root),
+            collection_name=session["collection"],
+            enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
+            enable_llm_label_refinement=bool(session.get("refine_labels_with_llm", False)),
+            provider_config=provider_config,
+            event_callback=_emit,
+            recreate_collection=True,
+        )
+        invalidate_lexical_index(session["collection"])
+        stored = int(getattr(counters, "embeddings_stored", 0))
+        if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
+            raise RuntimeError("Ingestion completed but no embeddings were stored")
+
+        emit_indexing_event(
+            session_id, "complete",
+            f"Indexing complete — {stored} chunks stored.",
+            level="success",
+            progress=stored, total=stored,
+        )
+
+        _update_session(
+            session_id,
+            status="ready",
+            job_finished_at=_now(),
+            last_indexed_commit=current_commit_sha,
+            current_commit_sha=current_commit_sha,
+            current_branch=local_status["current_branch"],
+            repo_dirty=local_status["dirty_worktree"],
+            repo_status_checked_at=_now(),
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)),
+            embeddings_stored=stored,
+            idempotent_reuse=False,
+            error="",
+        )
+    except Exception as exc:
+        try:
+            emit_indexing_event(
+                session_id, "failed",
+                f"Indexing failed: {exc}",
+                level="error",
+            )
+        except Exception:
+            pass
+
+        _update_session(
+            session_id,
+            status="failed",
+            job_finished_at=_now(),
+            error=str(exc),
+            last_indexed_commit=prev_last_indexed_commit,
+            chunks_generated=prev_chunks_generated,
+            embeddings_stored=prev_embeddings_stored,
+            files_indexed=prev_files_indexed,
+        )
+

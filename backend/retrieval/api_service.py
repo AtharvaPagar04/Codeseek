@@ -248,6 +248,10 @@ class SessionCreateRequest(BaseModel):
     enable_chunk_descriptions: bool = False
 
 
+class SessionIndexingOptionsUpdateRequest(BaseModel):
+    refine_labels_with_llm: bool
+
+
 class GithubAuthCodeRequest(BaseModel):
     code: str
 
@@ -976,6 +980,41 @@ def get_session_v1(
     return {"session": session}
 
 
+@v1.get("/sessions/{session_id}/indexing-options")
+def get_session_indexing_options_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_indexing_options
+        options = get_session_indexing_options(session_id, auth_user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return {"session_id": session_id, "indexing_options": options}
+
+
+@v1.patch("/sessions/{session_id}/indexing-options")
+def patch_session_indexing_options_v1(
+    session_id: str,
+    body: SessionIndexingOptionsUpdateRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import update_session_indexing_options
+        options = update_session_indexing_options(
+            session_id, auth_user["id"], refine_labels_with_llm=body.refine_labels_with_llm
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return {"session_id": session_id, "indexing_options": options}
+
+
 @v1.get("/sessions/{session_id}/messages")
 def list_session_messages_v1(
     session_id: str,
@@ -1081,6 +1120,17 @@ def retry_session_v1(
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+            from retrieval.session_indexer import _session_provider_configs
+            _session_provider_configs[session["id"]] = provider_config
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     session = retry_indexing(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1092,6 +1142,61 @@ def retry_session_v1(
         user_id=auth_user["id"],
     )
     return {"session": session}
+
+
+@v1.get("/sessions/{session_id}/repo-status")
+def get_session_repo_status_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_repo_status
+        status_info = get_session_repo_status(session_id, auth_user["id"])
+        return status_info
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@v1.post("/sessions/{session_id}/index-latest")
+def index_latest_session_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("status") == "indexing":
+        raise HTTPException(status_code=409, detail="Session is already indexing")
+
+    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+            from retrieval.session_indexer import _session_provider_configs
+            _session_provider_configs[session["id"]] = provider_config
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        from retrieval.session_indexer import index_latest_version
+        res = index_latest_version(session_id, auth_user["id"])
+        log_event(
+            "api.session.index_latest",
+            new_request_id(),
+            session_id=session_id,
+            user_id=auth_user["id"],
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @v1.get("/sessions/{session_id}/indexing-events")

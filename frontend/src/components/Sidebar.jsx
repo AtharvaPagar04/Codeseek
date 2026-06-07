@@ -1,6 +1,13 @@
 import SessionItem from './SessionItem';
 
-export default function Sidebar({ sessions, activeSessionId, onSelectSession, onDeleteSession, onNewSession }) {
+export default function Sidebar({
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onDeleteSession,
+  onNewSession,
+  onUpdateIndexingOptions,
+}) {
   return (
     <aside className="flex flex-col h-full bg-surface/80 backdrop-blur-md border-r border-border w-full">
       {/* Session list — scrollable */}
@@ -19,6 +26,7 @@ export default function Sidebar({ sessions, activeSessionId, onSelectSession, on
               isActive={session.id === activeSessionId}
               onSelect={() => onSelectSession(session.id)}
               onDelete={onDeleteSession}
+              onUpdateIndexingOptions={onUpdateIndexingOptions}
             />
           ))
         )}

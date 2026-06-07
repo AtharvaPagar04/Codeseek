@@ -4,7 +4,7 @@ import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
 import IndexingLiveLog from './IndexingLiveLog';
 import { useChat } from '../hooks/useChat';
-import { listProviderCredentials } from '../utils/api';
+import { listProviderCredentials, fetchSessionRepoStatus, indexLatestVersion } from '../utils/api';
 
 function getProviderFallbackModel(provider) {
   if (provider === 'groq') return 'llama-3.3-70b-versatile';
@@ -20,14 +20,24 @@ export default function SessionView({
   appendMessage,
   onClearMessages,
   onRetryIndexing,
+  updateSession,
+  onUpdateIndexingOptions,
 }) {
   const [input, setInput] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
   const [copiedSession, setCopiedSession] = useState(false);
   const [activeProvider, setActiveProvider] = useState(null);
   const [selectedModel, setSelectedModel] = useState('');
+  const [checkingStatus, setCheckingStatus] = useState(false);
+  const [dismissedFreshnessPrompt, setDismissedFreshnessPrompt] = useState(false);
+  const [showUpToDatePopup, setShowUpToDatePopup] = useState(false);
+  const [showRefineConfirm, setShowRefineConfirm] = useState(false);
+  const [showAlreadyRefinedPopup, setShowAlreadyRefinedPopup] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isUpdatingRefine, setIsUpdatingRefine] = useState(false);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+  const menuRef = useRef(null);
 
   const fetchActiveProvider = async () => {
     try {
@@ -39,6 +49,19 @@ export default function SessionView({
     }
   };
 
+  const fetchRepoStatus = async () => {
+    if (session.status === 'indexing') return;
+    setCheckingStatus(true);
+    try {
+      const data = await fetchSessionRepoStatus(session.id);
+      updateSession?.(session.id, { repo_status: data.repo_status });
+    } catch (err) {
+      console.warn('Failed to fetch repo status:', err);
+    } finally {
+      setCheckingStatus(false);
+    }
+  };
+
   useEffect(() => {
     fetchActiveProvider();
     window.addEventListener('CODESEEK_PROVIDER_CHANGED', fetchActiveProvider);
@@ -46,6 +69,10 @@ export default function SessionView({
       window.removeEventListener('CODESEEK_PROVIDER_CHANGED', fetchActiveProvider);
     };
   }, [session.id]);
+
+  useEffect(() => {
+    fetchRepoStatus();
+  }, [session.id, session.status]);
 
   useEffect(() => {
     if (!activeProvider) {
@@ -70,6 +97,24 @@ export default function SessionView({
       localStorage.setItem(`CODESEEK_MODEL_OVERRIDE_${activeProvider.provider}`, model);
     }
   };
+
+  useEffect(() => {
+    setDismissedFreshnessPrompt(false);
+    setMenuOpen(false);
+    setShowUpToDatePopup(false);
+    setShowRefineConfirm(false);
+    setShowAlreadyRefinedPopup(false);
+  }, [session.id]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   const handleCopySession = () => {
     const messages = activeThread?.messages || [];
@@ -132,6 +177,45 @@ export default function SessionView({
     });
   };
 
+  const handleIndexLatest = async (force = false) => {
+    if (!force && repoStatus?.status === 'up_to_date') {
+      setShowUpToDatePopup(true);
+      return;
+    }
+    try {
+      updateSession?.(session.id, { status: 'indexing' });
+      await indexLatestVersion(session.id);
+    } catch (err) {
+      console.error('Failed to trigger index latest:', err);
+      updateSession?.(session.id, { status: 'failed', error: err.message });
+    }
+  };
+
+  const handleConfirmRefine = async () => {
+    setShowRefineConfirm(false);
+    if (isUpdatingRefine) return;
+    setIsUpdatingRefine(true);
+    try {
+      if (onUpdateIndexingOptions) {
+        await onUpdateIndexingOptions(session.id, { refine_labels_with_llm: true });
+      }
+      await handleIndexLatest(true);
+    } catch (err) {
+      console.warn('Failed to refine and re-index:', err);
+    } finally {
+      setIsUpdatingRefine(false);
+    }
+  };
+
+  const handleRefineClick = () => {
+    setMenuOpen(false);
+    if (session.refine_labels_with_llm || session.enable_chunk_descriptions) {
+      setShowAlreadyRefinedPopup(true);
+    } else {
+      setShowRefineConfirm(true);
+    }
+  };
+
   const { isLoading, sendMessage } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
   const activeThread =
@@ -169,43 +253,129 @@ export default function SessionView({
   }, [input]);
 
   const hasMessages = (activeThread?.messages || []).length > 0;
+  const repoStatus = session.repo_status;
 
   return (
     <div className="flex flex-col h-full min-w-0 relative">
-      {/* Floating copy-session and clear-chat buttons — top-right corner */}
-      {(activeThread?.messages || []).length > 0 && (
-        <>
-          <button
-            onClick={handleCopySession}
-            title={copiedSession ? "Copied!" : "Copy whole session"}
-            className="absolute top-3 right-14 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 border border-border text-text-muted hover:text-text-primary hover:border-text-muted transition-all duration-150"
-            aria-label="Copy whole session"
-          >
-            {copiedSession ? <CheckIcon /> : <CopyIcon />}
-          </button>
-          <button
-            onClick={() => setConfirmClear(true)}
-            title="Clear chat"
-            className="absolute top-3 right-4 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-surface-2 border border-border text-text-muted hover:text-warning hover:border-warning/40 transition-all duration-150"
-            aria-label="Clear chat"
-          >
-            <ClearIcon />
-          </button>
-        </>
-      )}
+      {/* Sleek Top Header Bar */}
+      <div className="shrink-0 flex items-center justify-between px-6 py-3 bg-surface-2/40 border-b border-border backdrop-blur-md z-10">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="font-mono text-sm font-semibold tracking-wide text-text-primary truncate">
+            {session.repo_full_name}
+          </span>
+          {(session.status === 'indexing' || (repoStatus?.status && repoStatus.status !== 'up_to_date')) && (
+            <FreshnessBadge status={session.status === 'indexing' ? 'indexing' : repoStatus.status} />
+          )}
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {repoStatus && repoStatus.status !== 'up_to_date' && (
+            <div className="hidden md:flex items-center gap-4 text-text-muted text-[11px] font-mono mr-4 select-none">
+              <span>Indexed: <code className="text-text-secondary">{repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}</code></span>
+              {repoStatus.status === 'out_of_date' && (
+                <span>Latest: <code className="text-warning">{repoStatus.current_commit_sha?.slice(0, 7)}</code></span>
+              )}
+              {repoStatus.files_indexed > 0 && (
+                <span>Files: <code className="text-text-secondary">{repoStatus.files_indexed}</code></span>
+              )}
+            </div>
+          )}
+          
+          {hasMessages && (
+            <div className="flex items-center gap-1.5 border-r border-border pr-3 mr-1">
+              <button
+                onClick={handleCopySession}
+                title={copiedSession ? "Copied!" : "Copy whole session"}
+                className="w-7 h-7 flex items-center justify-center rounded-full bg-surface-3 border border-border text-text-muted hover:text-text-primary hover:border-text-muted transition-all duration-150"
+                aria-label="Copy whole session"
+              >
+                {copiedSession ? <CheckIcon /> : <CopyIcon />}
+              </button>
+              <button
+                onClick={() => setConfirmClear(true)}
+                title="Clear chat"
+                className="w-7 h-7 flex items-center justify-center rounded-full bg-surface-3 border border-border text-text-muted hover:text-warning hover:border-warning/40 transition-all duration-150"
+                aria-label="Clear chat"
+              >
+                <ClearIcon />
+              </button>
+            </div>
+          )}
+
+          {/* 3-dot Action Menu — Always Visible */}
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              title="Session Options"
+              className="w-7 h-7 flex items-center justify-center rounded-full bg-surface-3 border border-border text-text-muted hover:text-text-primary hover:border-text-muted transition-all duration-150"
+              aria-label="Session Options"
+            >
+              <ThreeDotsIcon />
+            </button>
+            
+            {menuOpen && (
+              <div
+                className="absolute right-0 mt-2 w-56 rounded-xl border border-border bg-surface-2 p-1 shadow-xl animate-fadeIn z-30 flex flex-col"
+                style={{ boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)' }}
+              >
+                {/* Status info */}
+                <div className="px-3 py-2 border-b border-border text-[11px] font-mono text-text-muted select-none">
+                  <div className="flex items-center justify-between mb-1">
+                    <span>Status:</span>
+                    <span className={
+                      repoStatus?.status === 'up_to_date' ? 'text-online' :
+                      repoStatus?.status === 'out_of_date' ? 'text-warning' : 'text-text-muted'
+                    }>
+                      {repoStatus?.status === 'up_to_date' ? 'Up to date' :
+                       repoStatus?.status === 'out_of_date' ? 'Out of date' :
+                       repoStatus?.status ? repoStatus.status.replace('_', ' ') : 'Unknown'}
+                    </span>
+                  </div>
+                  {repoStatus?.indexed_commit_sha && (
+                    <div className="truncate">Indexed: <span className="text-text-secondary">{repoStatus.indexed_commit_sha.slice(0, 7)}</span></div>
+                  )}
+                  {repoStatus?.current_commit_sha && repoStatus?.status === 'out_of_date' && (
+                    <div className="truncate">Latest: <span className="text-warning">{repoStatus.current_commit_sha.slice(0, 7)}</span></div>
+                  )}
+                </div>
+
+                {/* Dropdown Items */}
+                <div className="p-1 space-y-0.5">
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      handleIndexLatest();
+                    }}
+                    disabled={session.status === 'indexing' || checkingStatus}
+                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary disabled:opacity-40 transition-colors flex items-center gap-2"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
+                    </svg>
+                    <span>{session.status === 'indexing' ? 'Indexing...' : 'Index Latest Version'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleRefineClick}
+                    disabled={session.status === 'indexing' || isUpdatingRefine}
+                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary disabled:opacity-40 transition-colors flex items-center gap-2"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                    <span>Refine Labels with LLM</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Message list or empty state */}
       {!hasMessages ? (
         <div className="flex-1 flex flex-col items-center justify-center pb-16 px-5 min-h-0">
-          <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
-          {statusMessage && (
-            <StatusNotice
-              tone={session.status === 'failed' ? 'error' : 'info'}
-              message={statusMessage}
-              actionLabel={session.status === 'failed' ? 'Retry indexing' : ''}
-              onAction={session.status === 'failed' ? () => onRetryIndexing?.(session.id) : undefined}
-            />
-          )}
+          <IndexingLiveLog session={session} onRetryIndexing={onRetryIndexing} />
           <EmptyState
             repoName={session.repo_id}
           />
@@ -242,15 +412,7 @@ export default function SessionView({
       ) : (
         <>
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
-            <IndexingLiveLog sessionId={session.id} isIndexing={session.status === 'indexing'} />
-            {statusMessage && (
-              <StatusNotice
-                tone={session.status === 'failed' ? 'error' : 'info'}
-                message={statusMessage}
-                actionLabel={session.status === 'failed' ? 'Retry indexing' : ''}
-                onAction={session.status === 'failed' ? () => onRetryIndexing?.(session.id) : undefined}
-              />
-            )}
+            <IndexingLiveLog session={session} onRetryIndexing={onRetryIndexing} />
             {(activeThread?.messages || []).map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
@@ -303,6 +465,121 @@ export default function SessionView({
           }}
           onCancel={() => setConfirmClear(false)}
         />
+      )}
+
+      {repoStatus?.status === 'out_of_date' && !dismissedFreshnessPrompt && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+          <div className="w-full max-w-sm bg-surface-2 border border-border rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-warning">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-text-primary font-sans">Repository Out of Date</h3>
+            </div>
+            <p className="text-xs text-text-secondary leading-relaxed font-sans">
+              The indexed commits do not match the latest version available on the remote repository.
+            </p>
+            <div className="bg-surface-3 p-3 rounded-lg border border-border text-[11px] font-mono space-y-1 text-text-muted">
+              <div>Indexed SHA: <span className="text-text-primary">{repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}</span></div>
+              <div>Latest SHA: <span className="text-warning">{repoStatus.current_commit_sha?.slice(0, 7) || 'N/A'}</span></div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setDismissedFreshnessPrompt(true)}
+                className="px-4 py-2 text-xs font-semibold text-text-muted hover:text-text-primary transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setDismissedFreshnessPrompt(true);
+                  handleIndexLatest();
+                }}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary transition-colors"
+              >
+                Index Latest Version
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUpToDatePopup && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+          <div className="w-full max-w-sm bg-surface-2 border border-border rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-online">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-text-primary font-sans">Latest Repository</h3>
+            </div>
+            <p className="text-xs text-text-secondary leading-relaxed font-sans">
+              The indexed repository is already at the latest version. Re-indexing is not required.
+            </p>
+            <div className="flex items-center justify-end pt-2">
+              <button
+                onClick={() => setShowUpToDatePopup(false)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRefineConfirm && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+          <div className="w-full max-w-sm bg-surface-2 border border-border rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-warning">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-text-primary font-sans">Refine Labels with LLM</h3>
+            </div>
+            <p className="text-xs text-text-secondary leading-relaxed font-sans">
+              Are you sure? Enabling LLM label refinement will trigger a full re-indexing of this repository. This process may consume a significant amount of LLM API tokens.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowRefineConfirm(false)}
+                className="px-4 py-2 text-xs font-semibold text-text-muted hover:text-text-primary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRefine}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary transition-colors"
+              >
+                Refine & Re-index
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAlreadyRefinedPopup && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+          <div className="w-full max-w-sm bg-surface-2 border border-border rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-online">
+              <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-text-primary font-sans">Already Refined</h3>
+            </div>
+            <p className="text-xs text-text-secondary leading-relaxed font-sans">
+              This repository has already been indexed with LLM label refinement.
+            </p>
+            <div className="flex items-center justify-end pt-2">
+              <button
+                onClick={() => setShowAlreadyRefinedPopup(false)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -596,6 +873,77 @@ function CheckIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" className="text-online" aria-hidden="true">
       <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
+    </svg>
+  );
+}
+
+function FreshnessBadge({ status }) {
+  if (!status) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-border bg-surface-2 text-text-muted select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50 animate-pulse" />
+        Checking...
+      </span>
+    );
+  }
+  
+  if (status === 'up_to_date') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-online/30 bg-online/10 text-online select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-online" />
+        Up to date
+      </span>
+    );
+  }
+  
+  if (status === 'out_of_date') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-warning/30 bg-warning/10 text-warning select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+        Out of date
+      </span>
+    );
+  }
+  
+  if (status === 'dirty_worktree') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-offline/30 bg-offline/10 text-offline select-none" title="Uncommitted changes in local workspace">
+        <span className="w-1.5 h-1.5 rounded-full bg-offline" />
+        Dirty worktree
+      </span>
+    );
+  }
+  
+  if (status === 'indexing') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-online/30 bg-online/10 text-online select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-online animate-pulse" />
+        Indexing...
+      </span>
+    );
+  }
+
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-offline/30 bg-offline/10 text-offline select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-offline" />
+        Failed
+      </span>
+    );
+  }
+  
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-border bg-surface-2 text-text-muted select-none">
+      <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" />
+      Unknown
+    </span>
+  );
+}
+
+function ThreeDotsIcon() {
+  return (
+    <svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor" aria-hidden="true">
+      <path d="M2 10a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0-6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" />
     </svg>
   );
 }

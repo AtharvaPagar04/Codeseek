@@ -51,7 +51,12 @@ function getRelativeTime(iso) {
   }
 }
 
-export default function SessionItem({ session, isActive, onSelect, onDelete }) {
+export default function SessionItem({
+  session,
+  isActive,
+  onSelect,
+  onDelete,
+}) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const badge = statusBadge(session);
 
@@ -94,16 +99,18 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
             {badge.label}
           </span>
 
-          {/* Delete button — visible on hover */}
-          <button
-            onClick={handleDelete}
-            type="button"
-            title="Delete session"
-            className="opacity-0 group-hover:opacity-100 shrink-0 text-text-muted hover:text-offline transition-all mt-0.5"
-            aria-label="Delete session"
-          >
-            <TrashIcon />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Delete button — visible on hover */}
+            <button
+              onClick={handleDelete}
+              type="button"
+              title="Delete session"
+              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-offline transition-all mt-0.5"
+              aria-label="Delete session"
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </div>
 
         <div className="text-2xs text-text-muted mt-1">

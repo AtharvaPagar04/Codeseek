@@ -57,10 +57,25 @@ def run_pipeline(
     source: str,
     collection_name: str | None = None,
     enable_chunk_descriptions: bool | None = None,
+    enable_llm_label_refinement: bool | None = None,
     provider_config: dict | None = None,
     event_callback=None,
+    recreate_collection: bool | None = None,
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
+    from rag_ingestion.config import ENABLE_LLM_LABEL_REFINEMENT
+    should_refine_labels = (
+        ENABLE_LLM_LABEL_REFINEMENT
+        if enable_llm_label_refinement is None
+        else enable_llm_label_refinement
+    )
+    should_recreate_collection = (
+        RECREATE_COLLECTION_EACH_RUN
+        if recreate_collection is None
+        else recreate_collection
+    )
+    logger.info("LLM label refinement enabled for session: %s", should_refine_labels)
+
     counters = PipelineCounters()
 
     def emit(stage, message, level="info", progress=None, total=None, metadata=None):
@@ -102,7 +117,8 @@ def run_pipeline(
     previous_state: dict[str, dict[str, int]] = {}
     next_state: dict[str, dict[str, int]] = {}
     modified_paths: list[str] = []  # files that were re-parsed (changed) in incremental mode
-    if ENABLE_INCREMENTAL_FILE_SKIP:
+    use_incremental_skip = ENABLE_INCREMENTAL_FILE_SKIP and not should_recreate_collection
+    if use_incremental_skip:
         previous_state = load_ingestion_state(repository["repository_root"])
 
     # --- Parse + chunk ---
@@ -112,7 +128,7 @@ def run_pipeline(
         if file.skipped:
             continue
         signature = build_file_signature(file)
-        file_was_unchanged = ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
+        file_was_unchanged = use_incremental_skip and is_file_unchanged(
             file.relative_path, signature, previous_state
         )
         if file_was_unchanged:
@@ -123,7 +139,7 @@ def run_pipeline(
             log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
 
         # Only track as modified if the file actually changed (not a forced evidence refresh)
-        if (ENABLE_INCREMENTAL_FILE_SKIP and not RECREATE_COLLECTION_EACH_RUN
+        if (use_incremental_skip and not should_recreate_collection
                 and not file_was_unchanged
                 and file.relative_path in previous_state):
             modified_paths.append(file.relative_path)
@@ -182,7 +198,7 @@ def run_pipeline(
             log_gpu_memory_snapshot("after ollama unload post-descriptions")
 
         # --- Labeling ---
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS
+        from rag_ingestion.config import ENABLE_CHUNK_LABELS, ENABLE_LLM_LABEL_REFINEMENT
         if ENABLE_CHUNK_LABELS:
             from rag_ingestion.stages.labeler import label_chunks
             repo_name = repository.get("repository_name", "")
@@ -202,6 +218,15 @@ def run_pipeline(
                     chunk.chunk_type,
                     chunk.labels,
                     chunk.code_intent,
+                )
+
+            # --- Optional LLM label refinement (Group 12, disabled by default) ---
+            if should_refine_labels:
+                from rag_ingestion.stages.labeler import refine_chunk_labels_with_llm
+                all_chunks = refine_chunk_labels_with_llm(
+                    all_chunks,
+                    provider_config=provider_config,
+                    event_callback=event_callback,
                 )
 
         # --- Embedding ---
@@ -224,7 +249,12 @@ def run_pipeline(
             delete_chunks_for_paths(modified_paths, collection_name=selected_collection)
 
         emit("storage", f"Storing {len(embedded_chunks)} chunks in Qdrant…")
-        store_chunks(embedded_chunks, counters, collection_name=selected_collection)
+        store_chunks(
+            embedded_chunks,
+            counters,
+            collection_name=selected_collection,
+            recreate_collection=should_recreate_collection,
+        )
         emit("storage",
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
              level="success", progress=counters.embeddings_stored,
@@ -242,7 +272,7 @@ def run_pipeline(
             log_gpu_memory_snapshot("after indexing complete")
 
     if ENABLE_INCREMENTAL_FILE_SKIP:
-        if not RECREATE_COLLECTION_EACH_RUN:
+        if not should_recreate_collection:
             removed_paths = sorted(set(previous_state) - set(next_state))
             if removed_paths:
                 emit("storage", f"Deleting chunks for {len(removed_paths)} removed file(s)…")
