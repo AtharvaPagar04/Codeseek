@@ -8,13 +8,23 @@ logger = logging.getLogger(__name__)
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
+    ENABLE_GPU_CLEANUP_AFTER_STAGES,
     ENABLE_INCREMENTAL_FILE_SKIP,
+    LOCAL_LLM_UNLOAD_MODEL,
     RECREATE_COLLECTION_EACH_RUN,
+    UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING,
+    UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS,
+    UNLOAD_LOCAL_LLM_AFTER_INDEXING,
+)
+from rag_ingestion.utils.gpu_cleanup import (
+    clear_python_cuda_cache,
+    log_gpu_memory_snapshot,
+    unload_ollama_model,
 )
 from retrieval.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
-from rag_ingestion.stages.embedder import embed_chunks
+from rag_ingestion.stages.embedder import embed_chunks, unload_embedding_model
 from rag_ingestion.stages.filtering import filter_files
 from rag_ingestion.stages.language import detect_languages
 from rag_ingestion.stages.loader import load_repository
@@ -160,6 +170,17 @@ def run_pipeline(
             event_callback=event_callback,
         )
 
+        # --- GPU cleanup after description generation ---
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after chunk description generation")
+            log_gpu_memory_snapshot("after chunk description generation")
+
+        # --- Optional: unload Ollama model after descriptions (before embedding) ---
+        if UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS and LOCAL_LLM_UNLOAD_MODEL:
+            unload_ollama_model(LOCAL_LLM_UNLOAD_MODEL)
+            clear_python_cuda_cache("after ollama unload post-descriptions")
+            log_gpu_memory_snapshot("after ollama unload post-descriptions")
+
         # --- Labeling ---
         from rag_ingestion.config import ENABLE_CHUNK_LABELS
         if ENABLE_CHUNK_LABELS:
@@ -167,7 +188,7 @@ def run_pipeline(
             repo_name = repository.get("repository_name", "")
             repo_root = repository.get("repository_root", "")
             all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
-            
+
             labeled_count = sum(1 for c in all_chunks if getattr(c, "labels", None))
             logger.info(
                 "Labeled %s/%s chunks before embedding",
@@ -183,7 +204,6 @@ def run_pipeline(
                     chunk.code_intent,
                 )
 
-
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters)
@@ -192,6 +212,11 @@ def run_pipeline(
              f"Generated embeddings for {counters.embeddings_generated} chunks.",
              level="success", progress=counters.embeddings_generated,
              total=len(all_chunks))
+
+        # --- GPU cleanup after embedding ---
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after embedding generation")
+            log_gpu_memory_snapshot("after embedding generation")
 
         # --- Storage: delete stale chunks for modified files first ---
         if modified_paths:
@@ -204,6 +229,17 @@ def run_pipeline(
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
              level="success", progress=counters.embeddings_stored,
              total=counters.embeddings_stored)
+
+        # --- Final cleanup: unload models and free VRAM ---
+        if UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING:
+            unload_embedding_model()
+
+        if UNLOAD_LOCAL_LLM_AFTER_INDEXING and LOCAL_LLM_UNLOAD_MODEL:
+            unload_ollama_model(LOCAL_LLM_UNLOAD_MODEL)
+
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after indexing complete")
+            log_gpu_memory_snapshot("after indexing complete")
 
     if ENABLE_INCREMENTAL_FILE_SKIP:
         if not RECREATE_COLLECTION_EACH_RUN:
