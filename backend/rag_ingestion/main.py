@@ -87,6 +87,7 @@ def run_pipeline(
     # --- Incremental state ---
     previous_state: dict[str, dict[str, int]] = {}
     next_state: dict[str, dict[str, int]] = {}
+    modified_paths: list[str] = []  # files that were re-parsed (changed) in incremental mode
     if ENABLE_INCREMENTAL_FILE_SKIP:
         previous_state = load_ingestion_state(repository["repository_root"])
 
@@ -97,14 +98,21 @@ def run_pipeline(
         if file.skipped:
             continue
         signature = build_file_signature(file)
-        if ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
+        file_was_unchanged = ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
             file.relative_path, signature, previous_state
-        ):
+        )
+        if file_was_unchanged:
             next_state[file.relative_path] = signature
             if not is_repo_summary_evidence_path(file.relative_path):
                 log_skip(file.relative_path, "unchanged_file", "skipped")
                 continue
             log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
+
+        # Only track as modified if the file actually changed (not a forced evidence refresh)
+        if (ENABLE_INCREMENTAL_FILE_SKIP and not RECREATE_COLLECTION_EACH_RUN
+                and not file_was_unchanged
+                and file.relative_path in previous_state):
+            modified_paths.append(file.relative_path)
 
         parsed = parse_file(file, counters)
         chunks = generate_chunks(parsed, file)
@@ -118,6 +126,7 @@ def run_pipeline(
         all_chunks.extend(chunks)
         if ENABLE_INCREMENTAL_FILE_SKIP:
             next_state[file.relative_path] = signature
+
 
         parsed_count += 1
         if parsed_count % 10 == 0:
@@ -155,8 +164,12 @@ def run_pipeline(
              level="success", progress=counters.embeddings_generated,
              total=len(all_chunks))
 
-        # --- Storage ---
-        emit("storage", f"Storing {len(embedded_chunks)} chunks in vector database…")
+        # --- Storage: delete stale chunks for modified files first ---
+        if modified_paths:
+            emit("storage", f"Deleting stale chunks for {len(modified_paths)} modified file(s)…")
+            delete_chunks_for_paths(modified_paths, collection_name=selected_collection)
+
+        emit("storage", f"Storing {len(embedded_chunks)} chunks in Qdrant…")
         store_chunks(embedded_chunks, counters, collection_name=selected_collection)
         emit("storage",
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
@@ -167,7 +180,11 @@ def run_pipeline(
         if not RECREATE_COLLECTION_EACH_RUN:
             removed_paths = sorted(set(previous_state) - set(next_state))
             if removed_paths:
+                emit("storage", f"Deleting chunks for {len(removed_paths)} removed file(s)…")
                 delete_chunks_for_paths(removed_paths, collection_name=selected_collection)
+                emit("storage",
+                     f"Deleted chunks for {len(removed_paths)} removed file(s).",
+                     level="success")
         save_ingestion_state(repository["repository_root"], next_state)
 
     _print_report(repository, counters, collection_name=selected_collection or COLLECTION_NAME)

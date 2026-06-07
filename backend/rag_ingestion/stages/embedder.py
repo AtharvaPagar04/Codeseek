@@ -1,10 +1,56 @@
 """Embedding generation stage."""
 
-from rag_ingestion.config import BATCH_SIZE, EMBEDDING_MODEL
+from __future__ import annotations
+
+from rag_ingestion.config import (
+    BATCH_SIZE,
+    EMBEDDING_MODEL,
+    EMBEDDING_INPUT_MAX_CODE_CHARS,
+    EMBEDDING_INPUT_MAX_TOTAL_CHARS,
+)
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
 
 _model = None
+
+KNOWN_LABELS = {
+    "File",
+    "Language",
+    "Type",
+    "File Type",
+    "Symbol",
+    "Qualified Symbol",
+    "Parent Symbol",
+    "Signature",
+    "Summary",
+    "Description",
+    "Purpose",
+    "Facts",
+    "Frameworks",
+    "Dependencies",
+    "Dev Dependencies",
+    "Scripts",
+    "Services",
+    "Ports",
+    "Environment Keys",
+    "Feature Flags",
+    "Provider Keys",
+    "Entrypoints",
+    "Config Tools",
+    "Build System",
+    "Base Image",
+    "Workdir",
+    "Package Manager",
+    "Volumes",
+    "Service Dependencies",
+    "Setup Steps",
+    "Usage Commands",
+    "Architecture Notes",
+    "Parameters",
+    "Methods",
+    "File Symbols",
+    "Docstring",
+}
 
 
 def embed_chunks(
@@ -37,22 +83,88 @@ def _get_model():
     return _model
 
 
+def _line(label: str, value: str | None) -> list[str]:
+    if not value or not str(value).strip():
+        return []
+    return [f"{label}: {str(value).strip()}"]
+
+
+def _list_line(label: str, values: list[str], limit: int = 20) -> list[str]:
+    if not values:
+        return []
+    cleaned = [str(v).strip() for v in values if v and str(v).strip()]
+    if not cleaned:
+        return []
+    return [f"{label}: {', '.join(cleaned[:limit])}"]
+
+
+def _dict_line(label: str, values: dict, limit: int = 20) -> list[str]:
+    if not values:
+        return []
+    parts = []
+    for k, v in list(values.items())[:limit]:
+        if not k or v is None:
+            continue
+        if isinstance(v, list):
+            if not v:
+                continue
+            parts.append(f"{k} depends on {', '.join(str(item) for item in v if item)}")
+        else:
+            parts.append(f"{k}={v}")
+    if not parts:
+        return []
+    return [f"{label}: {'; '.join(parts)}"]
+
+
 def _embedding_input(chunk: Chunk) -> str:
-    return "\n".join(
-        [
-            f"File: {chunk.relative_path}",
-            f"Language: {chunk.language}",
-            f"Type: {chunk.chunk_type}",
-            f"Symbol: {chunk.symbol_name}",
-            f"Summary: {chunk.summary}",
-            f"Description: {chunk.description}",
-            f"Facts: {', '.join(chunk.summary_facts[:20])}",
-            f"Frameworks: {', '.join(chunk.detected_frameworks[:20])}",
-            f"Dependencies: {', '.join(chunk.dependencies[:30])}",
-            f"Services: {', '.join(chunk.services[:20])}",
-            f"Environment keys: {', '.join(chunk.env_keys[:30])}",
-            f"Docstring: {chunk.docstring}",
-            "Code:",
-            chunk.content,
-        ]
-    )
+    lines = []
+    
+    lines += _line("File", chunk.relative_path)
+    lines += _line("Language", chunk.language)
+    lines += _line("Type", chunk.chunk_type)
+    lines += _line("File Type", chunk.file_type)
+    lines += _line("Symbol", chunk.symbol_name)
+    lines += _line("Qualified Symbol", chunk.qualified_symbol)
+    lines += _line("Parent Symbol", chunk.parent_symbol)
+    lines += _line("Signature", chunk.signature)
+    lines += _line("Summary", chunk.summary)
+    lines += _line("Description", chunk.description)
+    lines += _line("Purpose", chunk.purpose)
+    lines += _list_line("Facts", chunk.summary_facts)
+    lines += _list_line("Frameworks", chunk.detected_frameworks)
+    lines += _list_line("Dependencies", chunk.dependencies, limit=30)
+    lines += _list_line("Dev Dependencies", chunk.dev_dependencies)
+    lines += _dict_line("Scripts", chunk.scripts)
+    lines += _list_line("Services", chunk.services)
+    lines += _list_line("Ports", chunk.ports)
+    lines += _list_line("Environment Keys", chunk.env_keys, limit=30)
+    lines += _list_line("Feature Flags", chunk.feature_flags)
+    lines += _list_line("Provider Keys", chunk.provider_keys)
+    lines += _list_line("Entrypoints", chunk.entrypoints)
+    lines += _list_line("Config Tools", chunk.config_tools)
+    lines += _line("Build System", chunk.build_system)
+    lines += _line("Base Image", chunk.base_image)
+    lines += _line("Workdir", chunk.workdir)
+    lines += _line("Package Manager", chunk.package_manager)
+    lines += _list_line("Volumes", chunk.volumes)
+    lines += _dict_line("Service Dependencies", chunk.service_dependencies)
+    lines += _list_line("Setup Steps", chunk.setup_steps)
+    lines += _list_line("Usage Commands", chunk.usage_commands)
+    lines += _list_line("Architecture Notes", chunk.architecture_notes)
+    lines += _list_line("Parameters", chunk.parameters)
+    lines += _list_line("Methods", chunk.methods)
+    lines += _list_line("File Symbols", chunk.file_symbols)
+    lines += _line("Docstring", chunk.docstring)
+    
+    code = chunk.content or ""
+    if code.strip():
+        if len(code) > EMBEDDING_INPUT_MAX_CODE_CHARS:
+            code = code[:EMBEDDING_INPUT_MAX_CODE_CHARS] + "... [truncated]"
+        lines.append("Code:")
+        lines.append(code)
+        
+    final_input = "\n".join(lines)
+    if len(final_input) > EMBEDDING_INPUT_MAX_TOTAL_CHARS:
+        final_input = final_input[:EMBEDDING_INPUT_MAX_TOTAL_CHARS] + "... [truncated]"
+        
+    return final_input

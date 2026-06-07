@@ -46,7 +46,7 @@ def store_chunks(
 def delete_chunks_for_paths(
     relative_paths: list[str], collection_name: str | None = None
 ) -> None:
-    """Delete points whose payload.relative_path belongs to removed files."""
+    """Delete points whose payload.relative_path belongs to removed or modified files."""
     if not relative_paths:
         return
 

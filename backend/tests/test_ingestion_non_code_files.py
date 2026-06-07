@@ -293,6 +293,17 @@ class IngestionNonCodeFilesTests(unittest.TestCase):
         self.assertEqual(summary.chunk_type, "repo_summary")
         self.assertEqual(summary.relative_path, "__repo_summary__.md")
         self.assertEqual(summary.file_type, "repo_summary")
+        self.assertEqual(summary.start_line, 0)
+        self.assertEqual(summary.end_line, 0)
+        self.assertEqual(summary.chunk_part, 1)
+        self.assertEqual(summary.total_parts, 1)
+
+        # Build metadata and assert deterministic ID + qualified symbol
+        from rag_ingestion.stages.metadata import build_metadata
+        build_metadata(summary)
+        self.assertTrue(bool(summary.chunk_id))
+        self.assertEqual(summary.qualified_symbol, "__repo_summary__.md::__file__")
+
         self.assertIn("Purpose: CodeSeek answers repository questions with cited evidence", summary.summary)
         self.assertEqual(summary.services, ["api", "qdrant"])
         self.assertIn("React", summary.detected_frameworks)
