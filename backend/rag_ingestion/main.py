@@ -152,6 +152,12 @@ def run_pipeline(
             build_metadata(chunk)
             chunk.summary = generate_summary(chunk)
 
+        # Copy file_type to all chunks of the same file
+        file_type = next((c.file_type for c in chunks if c.file_type), "")
+        if file_type:
+            for chunk in chunks:
+                chunk.file_type = file_type
+
         counters.chunks_generated += len(chunks)
         all_chunks.extend(chunks)
         if ENABLE_INCREMENTAL_FILE_SKIP:

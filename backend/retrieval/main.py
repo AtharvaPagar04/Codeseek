@@ -685,6 +685,20 @@ def _resolve_query_info(
     )
     query_info["topic_shift"] = topic_shift
 
+    # Calculate is_followup and is_low_context using state
+    from retrieval.query_intent import identify_followup_or_low_context
+    conversation_state = {
+        "previous_files": recent_entity_set.get("files", []),
+        "previous_symbols": recent_entity_set.get("symbols", []),
+        "previous_query": memory.latest_query()
+    }
+    is_followup_detected, is_low_context_detected = identify_followup_or_low_context(raw_query, conversation_state)
+
+    query_info["is_followup"] = bool(is_followup_detected and not topic_shift)
+    query_info["conversation_state"] = conversation_state
+    if is_low_context_detected:
+        query_info["primary_intent"] = "LOW_CONTEXT"
+
     # If topic shift detected, skip follow-up rewriting so old entities
     # don't pollute a genuinely new question.
     if topic_shift:
@@ -708,6 +722,10 @@ def _resolve_query_info(
         previous_resolved_query=anchor_query,
     )
     combined_info = process_query(rewritten)
+    combined_info["is_followup"] = bool(is_followup_detected and not topic_shift)
+    if is_low_context_detected:
+        combined_info["primary_intent"] = "LOW_CONTEXT"
+
     combined_info["follow_up_to"] = previous_query
     combined_info["follow_up_resolved_to"] = anchor_query
     combined_info["user_query"] = raw_query.strip()
@@ -721,6 +739,7 @@ def _resolve_query_info(
         added = original_entities.get(key, []) or []
         merged[key] = _merge_entity_lists(existing, added)
     combined_info["entities"] = merged
+    combined_info["conversation_state"] = conversation_state
     return combined_info
 
 

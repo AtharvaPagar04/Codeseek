@@ -115,7 +115,13 @@ def search(query_info: dict) -> list[dict]:
     exact_entity_results = _exact_entity_search(entities)
     dependency_results = _dependency_search(entities) if intent == "DEPENDENCY" else []
 
-    merged = _merge_results(dense_results, lexical_results, filter_results, exact_entity_results, dependency_results)
+    conversation_state = query_info.get("conversation_state") or {}
+    previous_files = conversation_state.get("previous_files", [])
+    history_results = []
+    if (query_info.get("is_followup") or primary_intent == "FOLLOWUP") and previous_files:
+        history_results = _inject_previous_files_candidates(previous_files)
+
+    merged = _merge_results(dense_results, lexical_results, filter_results, exact_entity_results, dependency_results, history_results)
     # Inject repo-summary and structured overview evidence for any query whose
     # primary intent is broad/structural.  The phrase-based gate is kept as a
     # fast-path fallback for cases where intent scoring disagrees.
@@ -124,7 +130,7 @@ def search(query_info: dict) -> list[dict]:
     if primary_intent == "ARCHITECTURE" or _is_architecture_query(raw_query):
         merged = _inject_architecture_file_candidates(merged, entities)
     merged = _inject_import_backing_candidates(raw_query, merged)
-    merged = _rerank_with_query_tokens(raw_query, merged)
+    merged = _rerank_with_query_tokens(raw_query, merged, query_info)
     return merged[:TOP_K_AFTER_MERGE]
 
 
@@ -455,9 +461,12 @@ def _entity_exact_terms(entities: dict) -> list[str]:
         elif isinstance(value, list):
             terms.extend(str(item) for item in value)
     cleaned = []
+    generic_skips = {"api", "backend", "frontend", "web", "worker", "service", "services"}
     for term in terms:
         value = term.strip()
         if len(value) < 3:
+            continue
+        if value.lower() in generic_skips:
             continue
         cleaned.append(value)
     return sorted(set(cleaned), key=str.lower)
@@ -681,6 +690,31 @@ def _bm25_score(query_tokens: list[str], document_tokens: list[str], index: _Lex
     return score
 
 
+def _inject_previous_files_candidates(previous_files: list[str]) -> list[tuple[dict, float, str]]:
+    if not previous_files:
+        return []
+    client = _get_client()
+    collection = get_collection_name()
+    from qdrant_client.models import Filter, FieldCondition, MatchAny
+    response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        scroll_filter=Filter(
+            must=[FieldCondition(key="relative_path", match=MatchAny(any=previous_files))]
+        ),
+        limit=150,
+        with_payload=True,
+    ))
+    if not response:
+        return []
+    hits, _ = response
+    results = []
+    for hit in hits:
+        payload = dict(hit.payload or {})
+        payload["support_kind"] = "conversation_history"
+        results.append((payload, 0.0, "history"))
+    return results
+
+
 def _merge_results(*layers):
     records = {}
     layer_hits = defaultdict(set)
@@ -699,7 +733,7 @@ def _merge_results(*layers):
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
             if source in {"dense", "lexical", "metadata"}:
                 records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
-            if source in {"filter", "calls", "exact_entity"}:
+            if source in {"filter", "calls", "exact_entity", "history"}:
                 records[chunk_id]["exact_retrieval_hit"] = True
             layer_hits[chunk_id].add(source)
 
@@ -765,26 +799,221 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
     return candidates + backing_hits
 
 
-def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[dict]:
+def artifact_penalty_for_intent(relative_path: str, intent: str) -> float:
+    path = (relative_path or "").lower()
+
+    if intent in {"CONFIG", "OVERVIEW", "ARCHITECTURE"}:
+        return 1.0
+
+    # Tests and fixtures
+    if (
+        "/tests/fixtures/" in path
+        or path.startswith("tests/fixtures/")
+        or path.startswith("backend/tests/fixtures/")
+    ):
+        return 0.55
+    if (
+        "/tests/" in path
+        or path.startswith("tests/")
+        or path.startswith("backend/tests/")
+    ):
+        return 0.55
+
+    # Evals reports
+    if path.startswith("evals/reports/") or "/evals/reports/" in path:
+        return 0.55
+
+    # Docs / markdown
+    if path.startswith("backend/docs/") or "/backend/docs/" in path or path.endswith(".md"):
+        return 0.70
+
+    # Config / manifests
+    if path.endswith((
+        "docker-compose.yml",
+        "requirements.txt",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    )):
+        return 0.65
+
+    # JSON files
+    if path.endswith(".json"):
+        return 0.70
+
+    return 1.0
+
+
+def symbol_definition_boost(candidate: dict, extracted_symbols: list[str], query: str) -> float:
+    if not extracted_symbols:
+        return 0.0
+
+    q = (query or "").lower()
+    is_definition_query = any(
+        term in q
+        for term in ["defined", "definition", "declared", "implemented", "located", "where is"]
+    )
+
+    if not is_definition_query:
+        return 0.0
+
+    symbol_name = (candidate.get("symbol_name") or "").lower()
+    qualified_symbol = (candidate.get("qualified_symbol") or "").lower()
+    content = (
+        candidate.get("content")
+        or candidate.get("content_excerpt")
+        or candidate.get("summary")
+        or ""
+    ).lower()
+
+    for sym in extracted_symbols:
+        s = (sym or "").lower()
+        if not s:
+            continue
+
+        if symbol_name == s:
+            return 0.25
+
+        if qualified_symbol.endswith("." + s) or qualified_symbol.endswith("::" + s):
+            return 0.22
+
+        if f"def {s}" in content or f"class {s}" in content or f"{s} =" in content or f"{s}:" in content:
+            return 0.18
+
+    return 0.0
+
+
+def content_exact_match_boost(candidate: dict, extracted_symbols: list[str], query_terms: list[str]) -> float:
+    content = (
+        candidate.get("content")
+        or candidate.get("content_excerpt")
+        or candidate.get("summary")
+        or ""
+    ).lower()
+
+    score = 0.0
+
+    for sym in extracted_symbols:
+        s = (sym or "").lower()
+        if s and s in content:
+            score += 0.08
+
+    return min(score, 0.20)
+
+
+def framework_source_boost(candidate: dict, query: str) -> float:
+    q = (query or "").lower()
+
+    if "fastapi" not in q and "app initialized" not in q and "app initialization" not in q:
+        return 0.0
+
+    path = (candidate.get("relative_path") or "").lower()
+    content = (
+        candidate.get("content")
+        or candidate.get("content_excerpt")
+        or candidate.get("summary")
+        or ""
+    ).lower()
+
+    if path.startswith("backend/tests/") or "/tests/fixtures/" in path:
+        return 0.0
+
+    if "fastapi(" in content or "app = fastapi" in content or "api = fastapi" in content:
+        return 0.20
+
+    return 0.0
+
+
+def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     """Apply unified label-aware and lexical scoring to rank candidates."""
+    from pathlib import Path
     query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
+
+    from retrieval.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
+    label_intent = query_profile.get("intent", "general_context")
+    extracted_entities = query_info.get("entities") if query_info else None
+    extracted_symbols = extracted_entities.get("symbols", []) if extracted_entities else []
+    is_followup = query_info.get("is_followup", False) if query_info else False
+    is_low_context = (query_info.get("primary_intent") == "LOW_CONTEXT") if query_info else False
+
+    reranker_intent = map_label_intent_to_reranker_intent(
+        label_intent,
+        query=raw_query,
+        is_followup=is_followup,
+        is_low_context=is_low_context,
+        extracted_entities=extracted_entities
+    )
+
+    conversation_state = query_info.get("conversation_state") if query_info else None
+    previous_files = conversation_state.get("previous_files", []) if conversation_state else []
+    previous_symbols = conversation_state.get("previous_symbols", []) if conversation_state else []
 
     rescored = []
     for item in candidates:
         vector_score = float(item.get("retrieval_score", 0.0))
+        if item.get("exact_retrieval_hit"):
+            vector_score = max(vector_score, 0.70)
+        elif vector_score == 0.0 and item.get("fusion_score", 0.0) > 0.0:
+            vector_score = min(0.65, 0.50 + 5.0 * float(item.get("fusion_score", 0.0)))
+
         exact_match_score = min(float(item.get("exact_entity_score", 0.0)) / 4.0, 1.0)
         label_boost = compute_label_boost(item.get("labels", []), query_profile)
 
         overlap = _overlap_score(tokens, item) if tokens else 0
         path_symbol_boost = min(float(overlap) / 3.0, 1.0)
 
+        file_type_boost = 0.0
+        relative_path = item.get("relative_path", "")
+        filename = Path(relative_path).name.lower()
+        clean_filename = filename.rsplit(".", 1)[0]
+        if reranker_intent == "FILE" and item.get("chunk_type") == "file":
+            file_type_boost = 0.20
+        if clean_filename in raw_query.lower() or (clean_filename == "db" and "database" in raw_query.lower()):
+            file_type_boost += 0.20
+
+        followup_boost = 0.0
+        if reranker_intent == "FOLLOWUP" or is_followup:
+            candidate_path = item.get("relative_path", "")
+            if candidate_path in previous_files:
+                followup_boost += 0.35
+            if item.get("symbol_name") in previous_symbols:
+                followup_boost += 0.35
+            candidate_dir = Path(candidate_path).parent.as_posix()
+            for prev_file in previous_files:
+                prev_dir = Path(prev_file).parent.as_posix()
+                if candidate_dir == prev_dir and candidate_dir not in (".", ""):
+                    followup_boost += 0.15
+                    break
+
+        dependency_boost = 0.0
+        if (reranker_intent == "DEPENDENCY" or label_intent == "DEPENDENCY" or is_dependency_trace_query(raw_query)) and item.get("support_kind") == "dependency_edge":
+            dependency_boost = 0.25
+
+        sym_def_boost = symbol_definition_boost(item, extracted_symbols, raw_query) if reranker_intent in {"FILE", "SYMBOL"} else 0.0
+
+        content_match_boost = 0.0
+        if reranker_intent in {"FILE", "SYMBOL", "DEPENDENCY"}:
+            content_match_boost = content_exact_match_boost(item, extracted_symbols, list(tokens))
+
+        fw_boost = 0.0
+        if reranker_intent in {"FILE", "SYMBOL"}:
+            fw_boost = framework_source_boost(item, raw_query)
+
         final_score = (
             0.70 * vector_score
             + 0.15 * exact_match_score
             + 0.10 * label_boost
             + 0.05 * path_symbol_boost
+            + file_type_boost
+            + followup_boost
+            + dependency_boost
+            + sym_def_boost
+            + content_match_boost
+            + fw_boost
         )
+
+        final_score *= artifact_penalty_for_intent(relative_path, reranker_intent)
 
         boosted = dict(item)
         boosted["retrieval_score"] = final_score
@@ -792,7 +1021,20 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict]) -> list[di
         rescored.append(boosted)
 
     rescored.sort(key=lambda item: -float(item.get("final_score", 0.0)))
-    return rescored
+
+    diverse_results = []
+    file_counts = {}
+    for item in rescored:
+        rel_path = item.get("relative_path", "")
+        if rel_path == "__repo_summary__.md" or item.get("chunk_type") == "repo_summary":
+            diverse_results.append(item)
+            continue
+        count = file_counts.get(rel_path, 0)
+        if count < 2:
+            diverse_results.append(item)
+            file_counts[rel_path] = count + 1
+
+    return diverse_results
 
 
 def _inject_overview_candidates(candidates: list[dict]) -> list[dict]:

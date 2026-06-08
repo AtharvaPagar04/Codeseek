@@ -29,20 +29,21 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     file_symbols = [symbol.symbol_name for symbol in parsed.symbols]
-    if not parsed.symbols:
-        return [
-            Chunk(
-                file_path=file.path,
-                relative_path=file.relative_path,
-                language=file.language,
-                chunk_type="file",
-                start_line=1 if lines else 0,
-                end_line=len(lines),
-                imports=parsed.imports,
-                file_symbols=file_symbols,
-                content="".join(lines),
-            )
-        ]
+    
+    # Always include a file-level chunk to cover module-level imports, comments, docstrings, and global definitions.
+    chunks.append(
+        Chunk(
+            file_path=file.path,
+            relative_path=file.relative_path,
+            language=file.language,
+            chunk_type="file",
+            start_line=1 if lines else 0,
+            end_line=len(lines),
+            imports=parsed.imports,
+            file_symbols=file_symbols,
+            content="".join(lines),
+        )
+    )
 
     for symbol in parsed.symbols:
         content = "".join(lines[symbol.start_line - 1 : symbol.end_line])
