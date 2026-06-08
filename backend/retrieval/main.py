@@ -13,6 +13,7 @@ from retrieval.code_answers import (
     build_flow_answer,
     build_overview_answer,
     build_symbol_deep_dive_answer,
+    build_source_location_answer,
     find_supporting_import_exports,
     is_code_request,
     is_architecture_request,
@@ -44,6 +45,7 @@ from retrieval.searcher import search
 from retrieval.source_filter import (
     explain_source_filter_decision,
     score_evidence_confidence,
+    has_strong_source_location_evidence,
     select_sources_for_display,
     split_sources_two_layer,
 )
@@ -229,7 +231,7 @@ def run_query(
         raw_query, sources, enabled=ENABLE_TWO_LAYER_SOURCES
     )
     shown_sources = display_sources
-    evidence_confidence = score_evidence_confidence(raw_query, shown_sources)
+    evidence_confidence = score_evidence_confidence(raw_query, shown_sources, query_info=query_info)
     if is_flow_explanation_request(raw_query):
         flow_sources = select_sources_for_display(raw_query, expanded)
         if flow_sources:
@@ -585,6 +587,61 @@ def run_query(
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
+
+    # Phase 2.5: source-location queries with strong evidence
+    if has_strong_source_location_evidence(raw_query, shown_sources, query_info):
+        started = time.perf_counter()
+        answer = build_source_location_answer(raw_query, shown_sources, query_info)
+        metrics.add_stage("source_location_answer", started)
+        cited_entities = extract_cited_entities(shown_sources)
+        memory.add(
+            raw_query, answer,
+            resolved_query=_resolved_query_text(query_info, raw_query),
+            entities=cited_entities,
+            primary_intent=primary_intent,
+        )
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "backend_latency_ms": metrics.total_ms(),
+                "provider_latency_ms": 0,
+                "errors": metrics.errors,
+                "response_mode": "source_location",
+                "evidence_confidence": evidence_confidence,
+            }
+        )
+        if evaluation is not None:
+            evaluation["response_mode"] = "source_location"
+            evaluation["answer_context"] = context
+            evaluation["answer_context_blocks"] = list(context_blocks)
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(shown_sources),
+            source_filter=meta["source_filter"],
+            response_mode="source_location",
+            evidence_confidence=evidence_confidence["level"],
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
+        )
+        if return_meta:
+            return answer, shown_sources, token_count, meta
+        return answer, shown_sources, token_count
+
     # Phase 3: single-symbol deep-dive — runs before generic explanation
     if is_symbol_deep_dive_request(raw_query) and evidence_confidence["level"] != "weak":
         started = time.perf_counter()

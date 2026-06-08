@@ -82,6 +82,39 @@ OLLAMA_BASE_URL=http://localhost:11434 \
 * Keep the evaluation limit small (`--limit`) at first to keep local inference times low.
 * Local evaluator evaluations require Ragas to wrap LangChain Ollama endpoints defensively. If a metric fails or returns `NaN`, the run will report a `PARTIAL` or `ERROR` status.
 
+## Local Ollama Stability Options
+
+To improve execution stability when using local models (e.g., Ollama), RAGAS evaluation supports granular timeout, concurrency (worker count), retry controls, and metric selection.
+
+### Command Line Arguments
+- `--ragas-timeout SECONDS`: The timeout in seconds for evaluation requests. (Defaults: 600s for Ollama, 180s for OpenAI).
+- `--ragas-max-workers N`: The maximum number of concurrent threads/workers to run evaluation. (Defaults: 1 for Ollama to run serially, 4 for OpenAI).
+- `--ragas-max-retries N`: The maximum number of retries for failed metric evaluation calls. (Defaults: 1 for Ollama, 3 for OpenAI).
+- `--metrics METRIC_LIST`: A comma-separated list of metrics to execute. Supported values: `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`. (Default: `faithfulness,answer_relevancy,context_precision`).
+
+### Environment Variables
+These settings can also be configured using the following environment variables:
+- `RAGAS_TIMEOUT_SECONDS`
+- `RAGAS_MAX_WORKERS`
+- `RAGAS_MAX_RETRIES`
+- `RAGAS_METRICS`
+
+### CLI Priority
+Explicit command line arguments take priority over environment variables, which in turn take priority over provider-specific defaults.
+
+### Single Metric Calibration Run Example
+To run calibration using only the `faithfulness` metric, with serial execution and a high timeout to prevent local model timeouts:
+```bash
+.venv/bin/python evals/ragas_calibration.py \
+  --provider ollama \
+  --evaluator-model qwen2.5-coder:3b \
+  --embedding-model nomic-embed-text \
+  --metrics faithfulness \
+  --ragas-timeout 600 \
+  --ragas-max-workers 1 \
+  --ragas-max-retries 1
+```
+
 ## Output Report
 The evaluation results are written to a structured JSON file.
 - **Per-trace scores**: Contains metrics like `faithfulness`, `answer_relevancy`, and `context_precision` on each individual query run.

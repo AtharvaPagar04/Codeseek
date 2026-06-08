@@ -238,9 +238,91 @@ def _prepend_architecture_anchors(raw_query: str, all_sources: list[dict], selec
     return unique
 
 
+def has_strong_source_location_evidence(
+    raw_query: str,
+    display_sources: list[dict],
+    query_info: dict | None = None,
+) -> bool:
+    """Detect if this is a source-location query with strong evidence signals."""
+    if not display_sources:
+        return False
+    if query_info is None:
+        return False
+
+    # Exclude general overview/architecture queries from source-location override
+    q_lower = raw_query.lower()
+    if any(w in q_lower for w in ("what does", "overview", "architecture", "tech stack", "summary")):
+        if not any(loc_w in q_lower for loc_w in ("where", "file", "location", "folder", "directory", "path")):
+            return False
+
+    # Ensure the query actually seeks a location or contains location-seeking terms
+    loc_terms = ("where", "file", "location", "folder", "directory", "path", "impl", "defined", "declared", "initialized", "source of", "source code", "happens")
+    if not any(t in q_lower for t in loc_terms):
+        return False
+
+    from pathlib import Path
+    top = display_sources[0]
+    path = top.get("relative_path", "")
+    symbol = top.get("symbol_name", "")
+    labels = top.get("labels", [])
+
+    # Get score
+    score = top.get("score")
+    if score is None:
+        score = top.get("final_score")
+    if score is None:
+        score = top.get("retrieval_score")
+    if score is None:
+        score = 0.0
+
+    q_lower = raw_query.lower()
+
+    # 1. top result has exact file/path match
+    if path:
+        path_lower = path.lower()
+        basename = Path(path).name.lower()
+        if path_lower in q_lower or basename in q_lower:
+            return True
+
+    # 2. top result has symbol_name
+    if symbol and symbol.strip():
+        symbol_lower = symbol.lower()
+        if symbol_lower in q_lower or any(part in q_lower for part in symbol_lower.split("_") if len(part) > 2):
+            return True
+
+    # 3. top result has labels including question_use:code-location or question_use:implementation
+    if any(label in labels for label in ("question_use:code-location", "question_use:implementation")):
+        return True
+
+    # 4. top result is source-code and score/final_score is high
+    is_source_code = False
+    if path:
+        suffix = Path(path).suffix.lower()
+        if suffix in {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".c", ".cpp", ".h"}:
+            is_source_code = True
+    if top.get("chunk_type") in {"function", "class", "method"}:
+        is_source_code = True
+    if "artifact:source-code" in labels:
+        is_source_code = True
+
+    if is_source_code and score >= 0.5:
+        return True
+
+    # 5. query intent is FILE/SYMBOL/CONFIG/DEPENDENCY and context_count > 0
+    intent = str(query_info.get("intent", "")).upper()
+    primary_intent = str(query_info.get("primary_intent", "")).upper()
+    intents_to_check = {intent, primary_intent}
+    target_intents = {"FILE", "SYMBOL", "CONFIG", "DEPENDENCY"}
+    if (intents_to_check & target_intents) and len(display_sources) > 0:
+        return True
+
+    return False
+
+
 def score_evidence_confidence(
     raw_query: str,
     display_sources: list[dict],
+    query_info: dict | None = None,
 ) -> dict:
     """Classify the quality of the assembled evidence for this query.
 
@@ -253,9 +335,10 @@ def score_evidence_confidence(
     1. No sources at all → "weak"
     2. No primary sources → "weak"  (all sources are expansion-only, low confidence)
     3. Top source has zero lexical overlap with the query → "weak"
-    4. Fewer than 2 display sources → "partial"
-    5. Top overlap score is 1 (single weak token hit) and fewer than 3 sources → "partial"
-    6. Otherwise → "strong"
+    4. Strong source-location evidence → "strong" (override partial/weak default sizing)
+    5. Fewer than 2 display sources → "partial"
+    6. Top overlap score is 1 (single weak token hit) and fewer than 3 sources → "partial"
+    7. Otherwise → "strong"
     """
     count = len(display_sources)
     if count == 0:
@@ -266,6 +349,14 @@ def score_evidence_confidence(
         return {
             "level": "weak",
             "reason": "no primary sources; only expansion results",
+            "count": count,
+        }
+
+    # Overriding override for strong source-location evidence
+    if has_strong_source_location_evidence(raw_query, display_sources, query_info):
+        return {
+            "level": "strong",
+            "reason": "strong source-location evidence matched",
             "count": count,
         }
 

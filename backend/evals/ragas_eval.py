@@ -17,6 +17,36 @@ try:
 except ImportError:
     RAGAS_AVAILABLE = False
 
+try:
+    from ragas.run_config import RunConfig
+except ImportError:
+    RunConfig = None
+
+SUPPORTED_RAGAS_METRICS = {
+    "faithfulness",
+    "answer_relevancy",
+    "context_precision",
+    "context_recall",
+}
+
+DEFAULT_RAGAS_METRICS = [
+    "faithfulness",
+    "answer_relevancy",
+    "context_precision",
+    "context_recall",
+]
+
+
+def parse_metric_names(raw: str | None) -> tuple[list[str], list[str]]:
+    if not raw:
+        return DEFAULT_RAGAS_METRICS[:], []
+
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    invalid = [name for name in names if name not in SUPPORTED_RAGAS_METRICS]
+    valid = [name for name in names if name in SUPPORTED_RAGAS_METRICS]
+
+    return valid, invalid
+
 
 def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -322,6 +352,30 @@ def main() -> None:
         action="store_true",
         help="Perform health check on evaluator/models (required for dry-run validation)."
     )
+    parser.add_argument(
+        "--ragas-timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds for RAGAS evaluation."
+    )
+    parser.add_argument(
+        "--ragas-max-workers",
+        type=int,
+        default=None,
+        help="Maximum concurrent workers for RAGAS."
+    )
+    parser.add_argument(
+        "--ragas-max-retries",
+        type=int,
+        default=None,
+        help="Maximum retries for RAGAS evaluation."
+    )
+    parser.add_argument(
+        "--metrics",
+        type=str,
+        default=None,
+        help="Comma-separated list of metrics to run."
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -381,6 +435,91 @@ def main() -> None:
         "langchain_ollama_available": langchain_ollama_available,
     }
 
+    # Resolve provider defaults
+    if evaluator_provider == "ollama":
+        default_timeout = 600
+        default_max_workers = 1
+        default_max_retries = 1
+    else:  # openai
+        default_timeout = 180
+        default_max_workers = 4
+        default_max_retries = 3
+
+    # Resolve timeout
+    ragas_timeout_str = os.environ.get("RAGAS_TIMEOUT_SECONDS")
+    env_timeout = int(ragas_timeout_str) if (ragas_timeout_str and ragas_timeout_str.isdigit()) else None
+    ragas_timeout = (
+        args.ragas_timeout
+        if args.ragas_timeout is not None
+        else (env_timeout if env_timeout is not None else default_timeout)
+    )
+
+    # Resolve max_workers
+    ragas_workers_str = os.environ.get("RAGAS_MAX_WORKERS")
+    env_workers = int(ragas_workers_str) if (ragas_workers_str and ragas_workers_str.isdigit()) else None
+    ragas_max_workers = (
+        args.ragas_max_workers
+        if args.ragas_max_workers is not None
+        else (env_workers if env_workers is not None else default_max_workers)
+    )
+
+    # Resolve max_retries
+    ragas_retries_str = os.environ.get("RAGAS_MAX_RETRIES")
+    env_retries = int(ragas_retries_str) if (ragas_retries_str and ragas_retries_str.isdigit()) else None
+    ragas_max_retries = (
+        args.ragas_max_retries
+        if args.ragas_max_retries is not None
+        else (env_retries if env_retries is not None else default_max_retries)
+    )
+
+    # Resolve metrics
+    raw_metrics = args.metrics if args.metrics is not None else os.environ.get("RAGAS_METRICS")
+    valid_metrics, invalid_metrics = parse_metric_names(raw_metrics)
+
+    ragas_runtime = {
+        "timeout": ragas_timeout,
+        "max_workers": ragas_max_workers,
+        "max_retries": ragas_max_retries,
+        "metrics_requested_raw": raw_metrics or "",
+        "metrics_selected": valid_metrics,
+        "run_config_available": RunConfig is not None
+    }
+
+    if invalid_metrics:
+        report = {
+            "status": "ERROR",
+            "schema_version": "ragas_eval.v1",
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "total_traces_loaded": 0,
+            "total_traces_evaluated": 0,
+            "total_traces_skipped": 0,
+            "metrics_requested": [raw_metrics] if raw_metrics else DEFAULT_RAGAS_METRICS,
+            "metrics_run": [],
+            "metrics_skipped": {},
+            "evaluator": evaluator_config,
+            "runtime": runtime_info,
+            "score_health": {
+                "numeric_score_count": 0,
+                "null_score_count": 0,
+                "metrics_with_numeric_scores": [],
+                "metrics_with_null_scores": []
+            },
+            "summary": {},
+            "traces": [],
+            "errors": [
+                {
+                    "type": "INVALID_RAGAS_METRICS",
+                    "message": f"Unsupported metrics requested: {', '.join(invalid_metrics)}"
+                }
+            ],
+            "ragas_runtime": ragas_runtime
+        }
+        with output_path.open("w", encoding="utf-8") as out_f:
+            json.dump(report, out_f, indent=2)
+        print(f"Error: Unsupported metrics requested: {', '.join(invalid_metrics)}", file=sys.stderr)
+        sys.exit(1)
+
     # Validate provider name
     if evaluator_provider not in ("openai", "ollama"):
         report = {
@@ -391,7 +530,7 @@ def main() -> None:
             "total_traces_loaded": 0,
             "total_traces_evaluated": 0,
             "total_traces_skipped": 0,
-            "metrics_requested": ["faithfulness", "answer_relevancy", "context_precision", "context_recall"],
+            "metrics_requested": valid_metrics,
             "metrics_run": [],
             "metrics_skipped": {},
             "evaluator": evaluator_config,
@@ -405,6 +544,7 @@ def main() -> None:
             "summary": {},
             "traces": [],
             "errors": [f"Invalid evaluator provider: {evaluator_provider}. Supported providers: openai, ollama"],
+            "ragas_runtime": ragas_runtime,
         }
         with output_path.open("w", encoding="utf-8") as out_f:
             json.dump(report, out_f, indent=2)
@@ -426,7 +566,7 @@ def main() -> None:
             "total_traces_loaded": 0,
             "total_traces_evaluated": 0,
             "total_traces_skipped": 0,
-            "metrics_requested": ["faithfulness", "answer_relevancy", "context_precision", "context_recall"],
+            "metrics_requested": valid_metrics,
             "metrics_run": [],
             "metrics_skipped": {},
             "evaluator": evaluator_config,
@@ -440,6 +580,7 @@ def main() -> None:
             "summary": {},
             "traces": [],
             "errors": [f"Failed to read/load trace file: {e}"],
+            "ragas_runtime": ragas_runtime,
         }
         with output_path.open("w", encoding="utf-8") as out_f:
             json.dump(report, out_f, indent=2)
@@ -471,7 +612,7 @@ def main() -> None:
         trace_diagnostics[trace_id] = compute_diagnostics(sample, trace)
 
     # 3. Determine metrics to run per sample
-    requested_metrics = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+    requested_metrics = valid_metrics
     metrics_run_set = set()
     metrics_skipped = {}
 
@@ -501,6 +642,7 @@ def main() -> None:
             "summary": {},
             "traces": [],
             "errors": ["Ragas or datasets packages are not installed. Install hint: pip install ragas datasets"],
+            "ragas_runtime": ragas_runtime,
         }
         with output_path.open("w", encoding="utf-8") as out_f:
             json.dump(report, out_f, indent=2)
@@ -615,13 +757,32 @@ def main() -> None:
             }
             ragas_metrics = [metric_map[m] for m in metrics_run if m in metric_map]
 
-            try:
-                result = evaluate(
-                    dataset=dataset,
-                    metrics=ragas_metrics,
-                    llm=llm,
-                    embeddings=embeddings
+            run_config = None
+            if RunConfig is not None:
+                run_config = RunConfig(
+                    timeout=ragas_timeout,
+                    max_workers=ragas_max_workers,
+                    max_retries=ragas_max_retries,
                 )
+            else:
+                errors.append({
+                    "type": "RAGAS_RUN_CONFIG_UNAVAILABLE",
+                    "message": "ragas.run_config.RunConfig is unavailable in this installed RAGAS version."
+                })
+
+            evaluate_kwargs = {
+                "dataset": dataset,
+                "metrics": ragas_metrics,
+            }
+            if llm is not None:
+                evaluate_kwargs["llm"] = llm
+            if embeddings is not None:
+                evaluate_kwargs["embeddings"] = embeddings
+            if run_config is not None:
+                evaluate_kwargs["run_config"] = run_config
+
+            try:
+                result = evaluate(**evaluate_kwargs)
             except TypeError as te:
                 if evaluator_provider == "ollama":
                     raise RuntimeError(f"RAGAS_VERSION_DOES_NOT_SUPPORT_CUSTOM_EVALUATOR_ARGS: {te}")
@@ -754,6 +915,7 @@ def main() -> None:
         "diagnostics": diag_summary,
         "traces": traces_report_data,
         "errors": errors,
+        "ragas_runtime": ragas_runtime,
     }
 
     with output_path.open("w", encoding="utf-8") as out_f:

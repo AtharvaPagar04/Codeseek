@@ -179,3 +179,40 @@ class TestConfidenceLevels:
             sources = [_src(f"auth/mod{i}.py", f"sym_{i}") for i in range(n)]
             conf = score_evidence_confidence(QUERY_WITH_TOKENS, sources)
             assert conf["count"] == n
+
+
+class TestSourceLocationConfidence:
+    def test_exact_path_match_is_strong(self):
+        sources = [_src("backend/rag_ingestion/stages/storage.py", "upsert_qdrant", expansion="primary")]
+        query_info = {"intent": "SYMBOL", "primary_intent": "SYMBOL"}
+        conf = score_evidence_confidence(
+            "Show me where storage.py upsert happens",
+            sources,
+            query_info=query_info
+        )
+        assert conf["level"] == "strong"
+        assert "source-location" in conf["reason"]
+
+    def test_labels_match_is_strong(self):
+        sources = [_src("backend/retrieval/api_service.py", "", expansion="primary")]
+        sources[0]["labels"] = ["question_use:code-location"]
+        query_info = {"intent": "SYMBOL", "primary_intent": "SYMBOL"}
+        conf = score_evidence_confidence(
+            "Where is FastAPI initialized",
+            sources,
+            query_info=query_info
+        )
+        assert conf["level"] == "strong"
+        assert "source-location" in conf["reason"]
+
+    def test_intent_match_is_strong(self):
+        sources = [_src("backend/retrieval/config.py", "", expansion="primary")]
+        query_info = {"intent": "CONFIG", "primary_intent": "CONFIG"}
+        conf = score_evidence_confidence(
+            "Where is environment variable handled",
+            sources,
+            query_info=query_info
+        )
+        assert conf["level"] == "strong"
+        assert "source-location" in conf["reason"]
+
