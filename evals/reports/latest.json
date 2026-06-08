@@ -20,7 +20,7 @@
     "duplicate_context_rate": 0.0,
     "wrong_top1_rate": 0.0,
     "empty_result_rate": 0.0,
-    "avg_latency_ms": 824.53
+    "avg_latency_ms": 955.73
   },
   "pass_thresholds": {
     "file_hit@5": 0.8,
@@ -242,7 +242,7 @@
             "question_use:test-validation"
           ],
           "code_intent": "File: evals/reports/latest.json\nConfig file: evals/reports/latest.json.",
-          "score": 13.513738591942001,
+          "score": 13.513738591941998,
           "source_layer": "lexical"
         },
         {
@@ -261,7 +261,7 @@
             "question_use:test-validation"
           ],
           "code_intent": "File: backend/tests/test_code_answers.py\nSymbols: _FakeEncoding, encode, decode, CodeAnswerTests, test_detects_explicit.",
-          "score": 12.900074683099188,
+          "score": 12.90007468309919,
           "source_layer": "lexical"
         }
       ],
@@ -677,7 +677,7 @@
           "summary": "Function: main"
         }
       ],
-      "latency_ms": 5736,
+      "latency_ms": 5520,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -873,7 +873,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "File: backend/docs/retrieval_docs/retrieval_pipeline_docs.md.",
-          "score": 16.919454982683714,
+          "score": 16.91945498268371,
           "source_layer": "lexical"
         },
         {
@@ -1030,7 +1030,7 @@
           "summary": "File: CodeSeek_Retrieval_Pipeline_Validation_and_Improvement_Plan_V2_3.md"
         }
       ],
-      "latency_ms": 400,
+      "latency_ms": 796,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -1214,7 +1214,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: backend/docs/retrieval_docs/eval_codeseek_ragas_v1.json\nConfig file: backend/docs/retrieval_docs/eval_codeseek_rag.",
-          "score": 16.567088218745113,
+          "score": 16.56708821874511,
           "source_layer": "lexical"
         },
         {
@@ -1715,7 +1715,7 @@
           "summary": "File: backend/docs/retrieval_docs/retrieval_pipeline_docs.md"
         }
       ],
-      "latency_ms": 164,
+      "latency_ms": 170,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -2714,7 +2714,7 @@
           "summary": "Function: run_query\nParameters: raw_query, memory, request_id, str, return_meta, bool, provider_config, dict, capture_eval\nDocstring: Run one retrieval query end-to-end."
         }
       ],
-      "latency_ms": 208,
+      "latency_ms": 209,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -2926,7 +2926,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: CodeSeek_Retrieval_Pipeline_Validation_and_Improvement_Plan_V2_3.md.",
-          "score": 21.07799809220458,
+          "score": 21.077998092204584,
           "source_layer": "lexical"
         },
         {
@@ -3285,7 +3285,7 @@
           "summary": "Function: main"
         }
       ],
-      "latency_ms": 1146,
+      "latency_ms": 1692,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -3504,7 +3504,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: backend/docs/retrieval_docs/retrieval_pipeline_docs.md.",
-          "score": 17.57289359951652,
+          "score": 17.572893599516522,
           "source_layer": "lexical"
         },
         {
@@ -3832,7 +3832,7 @@
           "summary": "Class: SessionCreateRequest"
         }
       ],
-      "latency_ms": 317,
+      "latency_ms": 199,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -3999,7 +3999,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: INGESTION_PIPELINE_DOCUMENTATION.md.",
-          "score": 16.956335310925688,
+          "score": 16.956335310925684,
           "source_layer": "lexical"
         },
         {
@@ -4213,7 +4213,7 @@
           "summary": "File: backend/docs/ingestion_docs/architecture.md"
         }
       ],
-      "latency_ms": 658,
+      "latency_ms": 1171,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -4795,7 +4795,7 @@
           "summary": "Local content match for fastapi in backend/retrieval/api_service.py"
         }
       ],
-      "latency_ms": 1277,
+      "latency_ms": 1670,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -4944,7 +4944,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "File: CodeSeek_Retrieval_Pipeline_Validation_and_Improvement_Plan_V2_3.md.",
-          "score": 26.544674284449037,
+          "score": 26.544674284449034,
           "source_layer": "lexical"
         },
         {
@@ -4960,7 +4960,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "File: OVERVIEW_PROMPT_TRACKER.md.",
-          "score": 26.213331835887534,
+          "score": 26.21333183588753,
           "source_layer": "lexical"
         },
         {
@@ -4977,7 +4977,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "File: CodeSeek_Retrieval_Pipeline_Validation_and_Improvement_Plan_V2_3.md.",
-          "score": 24.17769508305271,
+          "score": 24.177695083052708,
           "source_layer": "lexical"
         },
         {
@@ -5242,7 +5242,7 @@
           "summary": "Function: _env_keys_from_text\nParameters: text"
         }
       ],
-      "latency_ms": 167,
+      "latency_ms": 171,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -5404,7 +5404,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: evals/golden_queries.yaml\nConfig file: evals/golden_queries.yaml.",
-          "score": 22.542206137986803,
+          "score": 22.542206137986806,
           "source_layer": "lexical"
         },
         {
@@ -5705,7 +5705,7 @@
           "summary": "Function: get_collection_name"
         }
       ],
-      "latency_ms": 187,
+      "latency_ms": 190,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -5883,7 +5883,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: evals/reports/latest.json\nConfig file: evals/reports/latest.json | Config file: evals/reports/latest.json | Config.",
-          "score": 21.119612284845644,
+          "score": 21.11961228484564,
           "source_layer": "lexical"
         },
         {
@@ -5903,7 +5903,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "Function: _extract_requirements_metadata\nParameters: chunk, content.",
-          "score": 18.58944319143797,
+          "score": 18.589443191437972,
           "source_layer": "lexical"
         },
         {
@@ -5923,7 +5923,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: backend/docs/retrieval_docs/eval_fixture_monorepo_mixed.json\nConfig file: backend/docs/retrieval_docs/eval_fixture.",
-          "score": 15.428957057803258,
+          "score": 15.428957057803256,
           "source_layer": "lexical"
         },
         {
@@ -6338,7 +6338,7 @@
           "summary": "Class: IngestionNonCodeFilesTests\nMethods: test_repo_summary_evidence_paths_are_refreshed_during_incremental_runs, test_incremental_pipeline_refreshes_repo_summary_evidence_files, test_detect_languages_supports_repo_overview_files, test_parse_file_marks_markdown_as_ok_without_symbols, test_generate_summary_extracts_structured_repo_file_details, test_generate_summary_extracts_dockerfile_env_and_readme_metadata, test_storage_payload_includes_structured_non_code_metadata, test_build_repo_summary_chunk_synthesizes_structured_evidence"
         }
       ],
-      "latency_ms": 463,
+      "latency_ms": 571,
       "metrics": {
         "file_hit@1": false,
         "file_hit@3": true,
@@ -6498,7 +6498,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "Function: test_query_3.",
-          "score": 22.51735312345918,
+          "score": 22.517353123459177,
           "source_layer": "lexical"
         },
         {
@@ -6517,7 +6517,7 @@
             "tech:qdrant"
           ],
           "code_intent": "File: codeseek_label_impl_plan (1).md.",
-          "score": 21.474313551572155,
+          "score": 21.47431355157216,
           "source_layer": "lexical"
         },
         {
@@ -7023,7 +7023,7 @@
           "summary": "Function: test_query_3"
         }
       ],
-      "latency_ms": 225,
+      "latency_ms": 219,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -7189,7 +7189,7 @@
             "question_use:technical-explanation"
           ],
           "code_intent": "Function: test_query_4.",
-          "score": 34.498186899700855,
+          "score": 34.49818689970086,
           "source_layer": "lexical"
         },
         {
@@ -7685,7 +7685,7 @@
           "summary": "File: backend/retrieval/provider_health.py\nSymbols: ProviderNotConfiguredError, ProviderNotReadyError, _is_auto_model, _ollama_api_root, _check_ollama_available, require_llm_ready_for_user"
         }
       ],
-      "latency_ms": 656,
+      "latency_ms": 980,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -8153,7 +8153,7 @@
           "summary": "Function: _resolve_repo_file\nParameters: relative_path"
         }
       ],
-      "latency_ms": 215,
+      "latency_ms": 210,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
@@ -8705,7 +8705,7 @@
           "summary": "Function: test_query_1"
         }
       ],
-      "latency_ms": 549,
+      "latency_ms": 568,
       "metrics": {
         "file_hit@1": true,
         "file_hit@3": true,
