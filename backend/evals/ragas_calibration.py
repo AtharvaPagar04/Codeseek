@@ -198,6 +198,18 @@ def main() -> None:
         default=None,
         help="Comma-separated list of metrics to run."
     )
+    parser.add_argument(
+        "--expected-repo-root",
+        type=str,
+        default=None,
+        help="Expected repository root directory.",
+    )
+    parser.add_argument(
+        "--expected-collection",
+        type=str,
+        default=None,
+        help="Expected Qdrant collection name.",
+    )
     args = parser.parse_args()
 
     queries_path = Path(args.queries)
@@ -205,29 +217,7 @@ def main() -> None:
     ragas_output_path = Path(args.ragas_output)
     summary_output_path = Path(args.summary_output)
 
-    # Create directories
-    trace_output_path.parent.mkdir(parents=True, exist_ok=True)
-    ragas_output_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 1. Handle old trace file deletion/backup
-    if trace_output_path.exists() and not args.append:
-        try:
-            trace_output_path.unlink()
-        except Exception as e:
-            print(f"Failed to delete old trace file: {e}")
-
-    # 2. Load queries
-    try:
-        queries = load_calibration_queries(queries_path)
-    except Exception as e:
-        print(f"Error loading calibration queries: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    if args.limit:
-        queries = queries[:args.limit]
-
-    # 3. Resolve session from DB if provided
+    # 1. Resolve session from DB if provided
     if args.session_id:
         try:
             from retrieval.db import db_cursor
@@ -244,6 +234,73 @@ def main() -> None:
                     print(f"Bound to session {args.session_id}: collection={db_session['collection']}, repo_root={db_session['repo_root']}")
         except Exception as e:
             print(f"Database session query failed: {e}. Using env/default binding.")
+
+    # 2. Validate session binding
+    import retrieval.config
+    actual_repo_root = retrieval.config.get_repo_root()
+    actual_collection = retrieval.config.get_collection_name()
+
+    mismatches = []
+    if args.expected_repo_root:
+        expected_root_abs = str(Path(args.expected_repo_root).resolve())
+        actual_root_abs = str(Path(actual_repo_root).resolve())
+        if expected_root_abs != actual_root_abs:
+            mismatches.append(
+                f"Session binding mismatch: expected repo_root {args.expected_repo_root} but got {actual_repo_root}"
+            )
+            
+    if args.expected_collection:
+        if args.expected_collection != actual_collection:
+            mismatches.append(
+                f"Session binding mismatch: expected collection {args.expected_collection} but got {actual_collection}"
+            )
+
+    if mismatches:
+        for err_msg in mismatches:
+            print(err_msg, file=sys.stderr)
+            
+        if args.summary_output:
+            err_dict = {
+                "type": "SESSION_BINDING_MISMATCH",
+                "message": "; ".join(mismatches),
+                "expected_repo_root": args.expected_repo_root or "",
+                "actual_repo_root": actual_repo_root or "",
+                "expected_collection": args.expected_collection or "",
+                "actual_collection": actual_collection or ""
+            }
+            summary_err_report = {
+                "status": "ERROR",
+                "errors": [err_dict]
+            }
+            try:
+                summary_output_path.parent.mkdir(parents=True, exist_ok=True)
+                with summary_output_path.open("w", encoding="utf-8") as out_f:
+                    json.dump(summary_err_report, out_f, indent=2)
+                print(f"Calibration error summary written to: {summary_output_path}")
+            except Exception as e:
+                print(f"Failed to write error summary to {summary_output_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 3. Create directories and handle old trace file deletion/backup
+    trace_output_path.parent.mkdir(parents=True, exist_ok=True)
+    ragas_output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if trace_output_path.exists() and not args.append:
+        try:
+            trace_output_path.unlink()
+        except Exception as e:
+            print(f"Failed to delete old trace file: {e}")
+
+    # 4. Load queries
+    try:
+        queries = load_calibration_queries(queries_path)
+    except Exception as e:
+        print(f"Error loading calibration queries: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.limit:
+        queries = queries[:args.limit]
 
     # 4. Enable answer tracing configuration
     os.environ["ENABLE_ANSWER_TRACE_LOGGING"] = "1"

@@ -115,6 +115,22 @@ To run calibration using only the `faithfulness` metric, with serial execution a
   --ragas-max-retries 1
 ```
 
+## Session Binding Guard
+
+To prevent calibration tests from executing and saving traces against the wrong repository session (which can overwrite legitimate traces and cause false retrieval failures), `ragas_calibration.py` provides a session binding guard.
+
+### CLI Options
+- `--expected-repo-root PATH`: The absolute path to the expected repository root directory.
+- `--expected-collection NAME`: The expected name of the Qdrant database collection.
+
+### Guard Behavior
+1. After resolving the session and before generating answers, the script compares the bound/actual `repo_root` and `collection` against the expected values (resolving both to absolute paths).
+2. If a mismatch is detected, the run is terminated immediately:
+   - Prints a mismatch error to stderr.
+   - If `--summary-output` is configured, writes a summary report JSON indicating the mismatch error.
+   - Exits with a non-zero status code.
+   - No trace files are deleted, created, or overwritten, and `ragas_eval.py` is not executed.
+
 ## Output Report
 The evaluation results are written to a structured JSON file.
 - **Per-trace scores**: Contains metrics like `faithfulness`, `answer_relevancy`, and `context_precision` on each individual query run.

@@ -235,6 +235,145 @@ class TestRagasCalibration(unittest.TestCase):
             self.assertEqual(summary["ragas_runtime"]["max_workers"], 2)
             self.assertEqual(summary["ragas_runtime"]["metrics_requested_raw"], "answer_relevancy")
 
+    @patch("retrieval.main.run_query")
+    @patch("evals.ragas_eval.main")
+    @patch("retrieval.config.get_repo_root")
+    @patch("retrieval.config.get_collection_name")
+    def test_session_binding_matching(self, mock_get_col: MagicMock, mock_get_root: MagicMock, mock_ragas_main: MagicMock, mock_run_query: MagicMock):
+        from evals import ragas_calibration
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            queries_path = tmp_path / "queries.yaml"
+            trace_output_path = tmp_path / "traces.jsonl"
+            ragas_output_path = tmp_path / "ragas_output.json"
+            summary_output_path = tmp_path / "summary.json"
+
+            content = {"queries": [{"id": "q_test", "query": "Test query?", "category": "test", "expected_files": [], "expected_answer_contains": []}]}
+            with open(queries_path, "w", encoding="utf-8") as f:
+                yaml.dump(content, f)
+
+            expected_root = str(Path(tmp_dir).resolve())
+            mock_get_root.return_value = expected_root
+            mock_get_col.return_value = "repo_collection"
+
+            cli_args = [
+                "ragas_calibration.py",
+                "--queries", str(queries_path),
+                "--trace-output", str(trace_output_path),
+                "--ragas-output", str(ragas_output_path),
+                "--summary-output", str(summary_output_path),
+                "--expected-repo-root", expected_root,
+                "--expected-collection", "repo_collection",
+                "--skip-ragas"
+            ]
+
+            with patch("sys.argv", cli_args):
+                # Should not raise SystemExit
+                ragas_calibration.main()
+            
+            mock_run_query.assert_called_once()
+
+    @patch("retrieval.main.run_query")
+    @patch("evals.ragas_eval.main")
+    @patch("retrieval.config.get_repo_root")
+    @patch("retrieval.config.get_collection_name")
+    def test_session_binding_mismatch_repo_root(self, mock_get_col: MagicMock, mock_get_root: MagicMock, mock_ragas_main: MagicMock, mock_run_query: MagicMock):
+        from evals import ragas_calibration
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            queries_path = tmp_path / "queries.yaml"
+            trace_output_path = tmp_path / "traces.jsonl"
+            ragas_output_path = tmp_path / "ragas_output.json"
+            summary_output_path = tmp_path / "summary.json"
+
+            content = {"queries": [{"id": "q_test", "query": "Test query?", "category": "test", "expected_files": [], "expected_answer_contains": []}]}
+            with open(queries_path, "w", encoding="utf-8") as f:
+                yaml.dump(content, f)
+
+            mock_get_root.return_value = "/some/actual/root"
+            mock_get_col.return_value = "repo_collection"
+
+            cli_args = [
+                "ragas_calibration.py",
+                "--queries", str(queries_path),
+                "--trace-output", str(trace_output_path),
+                "--ragas-output", str(ragas_output_path),
+                "--summary-output", str(summary_output_path),
+                "--expected-repo-root", "/different/expected/root",
+                "--expected-collection", "repo_collection",
+                "--skip-ragas"
+            ]
+
+            with patch("sys.argv", cli_args):
+                with self.assertRaises(SystemExit) as cm:
+                    ragas_calibration.main()
+                self.assertNotEqual(cm.exception.code, 0)
+            
+            # Verify no query run and no trace file created
+            mock_run_query.assert_not_called()
+            self.assertFalse(trace_output_path.exists())
+
+            # Verify summary contains mismatch
+            self.assertTrue(summary_output_path.exists())
+            with open(summary_output_path, "r", encoding="utf-8") as sf:
+                summary = json.load(sf)
+            self.assertEqual(summary["status"], "ERROR")
+            self.assertEqual(summary["errors"][0]["type"], "SESSION_BINDING_MISMATCH")
+            self.assertIn("expected repo_root", summary["errors"][0]["message"])
+            self.assertEqual(summary["errors"][0]["expected_repo_root"], "/different/expected/root")
+            self.assertEqual(summary["errors"][0]["actual_repo_root"], "/some/actual/root")
+
+    @patch("retrieval.main.run_query")
+    @patch("evals.ragas_eval.main")
+    @patch("retrieval.config.get_repo_root")
+    @patch("retrieval.config.get_collection_name")
+    def test_session_binding_mismatch_collection(self, mock_get_col: MagicMock, mock_get_root: MagicMock, mock_ragas_main: MagicMock, mock_run_query: MagicMock):
+        from evals import ragas_calibration
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            queries_path = tmp_path / "queries.yaml"
+            trace_output_path = tmp_path / "traces.jsonl"
+            ragas_output_path = tmp_path / "ragas_output.json"
+            summary_output_path = tmp_path / "summary.json"
+
+            content = {"queries": [{"id": "q_test", "query": "Test query?", "category": "test", "expected_files": [], "expected_answer_contains": []}]}
+            with open(queries_path, "w", encoding="utf-8") as f:
+                yaml.dump(content, f)
+
+            expected_root = str(Path(tmp_dir).resolve())
+            mock_get_root.return_value = expected_root
+            mock_get_col.return_value = "actual_collection"
+
+            cli_args = [
+                "ragas_calibration.py",
+                "--queries", str(queries_path),
+                "--trace-output", str(trace_output_path),
+                "--ragas-output", str(ragas_output_path),
+                "--summary-output", str(summary_output_path),
+                "--expected-repo-root", expected_root,
+                "--expected-collection", "different_collection",
+                "--skip-ragas"
+            ]
+
+            with patch("sys.argv", cli_args):
+                with self.assertRaises(SystemExit) as cm:
+                    ragas_calibration.main()
+                self.assertNotEqual(cm.exception.code, 0)
+            
+            # Verify no query run and no trace file created
+            mock_run_query.assert_not_called()
+            self.assertFalse(trace_output_path.exists())
+
+            # Verify summary contains mismatch
+            self.assertTrue(summary_output_path.exists())
+            with open(summary_output_path, "r", encoding="utf-8") as sf:
+                summary = json.load(sf)
+            self.assertEqual(summary["status"], "ERROR")
+            self.assertEqual(summary["errors"][0]["type"], "SESSION_BINDING_MISMATCH")
+            self.assertIn("expected collection", summary["errors"][0]["message"])
+            self.assertEqual(summary["errors"][0]["expected_collection"], "different_collection")
+            self.assertEqual(summary["errors"][0]["actual_collection"], "actual_collection")
+
 
 if __name__ == "__main__":
     unittest.main()
