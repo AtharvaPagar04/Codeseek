@@ -139,3 +139,8 @@ The evaluation results are written to a structured JSON file.
 ## Why RAGAS is Separate from `retrieval_eval`
 - **`retrieval_eval`**: Validates deterministic file/symbol/label correctness and index alignment. It runs on golden queries with strict, static expectations.
 - **`ragas_eval`**: Checks semantic and synthesis answer quality (faithfulness, answer relevance, and context alignment) from dynamic query sessions using an evaluator LLM.
+
+## RAGAS Evaluator Comparison
+
+To compare RAGAS scores for the same frozen trace across different evaluator setups (e.g. OpenAI vs local models), see the [RAGAS Evaluator Comparison Guide](ragas_evaluator_compare.md).
+
