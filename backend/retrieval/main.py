@@ -94,6 +94,80 @@ WEAK_EVIDENCE_BANNER = (
 )
 
 
+def _write_trace_for_query(
+    raw_query: str,
+    answer: str,
+    response_sources: list[dict],
+    expanded: list[dict],
+    memory: object,
+    metrics: object,
+    primary_intent: str | None,
+    query_info: dict | None,
+    llm_selection: dict | None = None,
+) -> None:
+    from retrieval.config import ENABLE_ANSWER_TRACE_LOGGING, get_collection_name, get_repo_root
+    if not ENABLE_ANSWER_TRACE_LOGGING:
+        return
+
+    try:
+        from evals.answer_trace_writer import build_answer_trace, write_answer_trace
+        session_id = getattr(memory, "session_id", None)
+        commit_hash = None
+        if session_id:
+            try:
+                from retrieval.session_indexer import get_session
+                session_ = get_session(session_id)
+                if session_:
+                    commit_hash = session_.get("last_indexed_commit")
+            except Exception:
+                pass
+
+        used_keys = {
+            (
+                s.get("relative_path", ""),
+                s.get("symbol_name", ""),
+                int(s.get("start_line", 0)),
+                int(s.get("end_line", 0)),
+            )
+            for s in response_sources
+        }
+        retrieved_chunks = [
+            c for c in expanded
+            if (
+                c.get("relative_path", ""),
+                c.get("symbol_name", ""),
+                int(c.get("start_line", 0)),
+                int(c.get("end_line", 0)),
+            ) in used_keys
+        ]
+
+        trace = build_answer_trace(
+            question=raw_query,
+            answer=answer,
+            retrieved_chunks=retrieved_chunks,
+            session_id=session_id,
+            collection=get_collection_name(),
+            repo_root=get_repo_root(),
+            commit_hash=commit_hash,
+            provider=llm_selection.get("provider") if llm_selection else None,
+            model=llm_selection.get("model") if llm_selection else None,
+            reranker_intent=primary_intent,
+            label_intent=query_info.get("label_intent") if query_info else None,
+            latency_ms=int(metrics.total_ms()) if metrics else None,
+            route="retrieval_query",
+            extra={
+                "top_k": len(response_sources),
+                "conversation_id": getattr(memory, "thread_id", None),
+                "is_followup": query_info.get("is_followup", False) if query_info else False,
+                "is_low_context": query_info.get("is_low_context", False) if query_info else False,
+            },
+        )
+        write_answer_trace(trace)
+    except Exception as exc:
+        import logging
+        logging.warning(f"Failed to write answer trace: {exc}")
+
+
 def run_query(
     raw_query: str,
     memory: ConversationMemory,
@@ -201,6 +275,16 @@ def run_query(
             stage_latency_ms=metrics.stage_latency_ms,
             total_latency_ms=metrics.total_ms(),
             source_filter=meta["source_filter"],
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
         )
         if return_meta:
             return answer, shown_sources, token_count, meta
@@ -330,6 +414,16 @@ def run_query(
                 response_mode="code_excerpt",
                 evidence_confidence=evidence_confidence["level"],
             )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
             if return_meta:
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
@@ -375,6 +469,16 @@ def run_query(
             source_filter=meta["source_filter"],
             response_mode="architecture_summary",
         )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
+        )
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
@@ -412,6 +516,16 @@ def run_query(
             shown_sources=len(shown_sources),
             source_filter=meta["source_filter"],
             response_mode="overview_summary",
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
         )
         if return_meta:
             return answer, shown_sources, token_count, meta
@@ -457,6 +571,16 @@ def run_query(
             shown_sources=len(shown_sources),
             source_filter=meta["source_filter"],
             response_mode="flow_summary",
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
         )
         if return_meta:
             return answer, shown_sources, token_count, meta
@@ -504,6 +628,16 @@ def run_query(
                 response_mode="symbol_deep_dive",
                 evidence_confidence=evidence_confidence["level"],
             )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=deep_dive_answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
             if return_meta:
                 return deep_dive_answer, shown_sources, token_count, meta
             return deep_dive_answer, shown_sources, token_count
@@ -546,6 +680,16 @@ def run_query(
                 source_filter=meta["source_filter"],
                 response_mode="explanation_summary",
                 evidence_confidence=evidence_confidence["level"],
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
             )
             if return_meta:
                 return answer, shown_sources, token_count, meta
@@ -665,6 +809,17 @@ def run_query(
         llm_model=llm_selection.get("model", ""),
         llm_routing_mode=llm_selection.get("routing_mode", ""),
         source_filter=meta["source_filter"],
+    )
+    _write_trace_for_query(
+        raw_query=raw_query,
+        answer=answer,
+        response_sources=response_sources,
+        expanded=expanded,
+        memory=memory,
+        metrics=metrics,
+        primary_intent=primary_intent,
+        query_info=query_info,
+        llm_selection=llm_selection,
     )
     if return_meta:
         return answer, response_sources, token_count, meta
