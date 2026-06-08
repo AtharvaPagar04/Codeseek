@@ -1,5 +1,6 @@
 """Evaluation runner for CodeSeek retrieval pipeline."""
 
+
 import os
 import sys
 import json
@@ -81,6 +82,85 @@ def format_final_point(p: dict) -> dict:
         "content_excerpt": p.get("content_excerpt", ""),
         "summary": p.get("summary", ""),
     }
+def _safe_round(value, digits: int = 6):
+    if isinstance(value, (int, float)):
+        return round(value, digits)
+    return value
+
+
+def _candidate_excerpt(candidate: dict, limit: int = 200) -> str:
+    text = (
+        candidate.get("content")
+        or candidate.get("content_excerpt")
+        or candidate.get("summary")
+        or candidate.get("code_intent")
+        or ""
+    )
+    text = str(text).replace("\n", " ").strip()
+    return text[:limit]
+
+
+def _compact_candidate(candidate: dict, rank: int | None = None, include_excerpt: bool = False) -> dict:
+    item = {
+        "rank": rank,
+        "chunk_id": candidate.get("chunk_id"),
+        "relative_path": candidate.get("relative_path"),
+        "symbol_name": candidate.get("symbol_name"),
+        "qualified_symbol": candidate.get("qualified_symbol"),
+        "chunk_type": candidate.get("chunk_type"),
+        "file_type": candidate.get("file_type"),
+        "labels": candidate.get("labels") or [],
+        "source_layers": candidate.get("source_layers") or [],
+        "vector_score": _safe_round(candidate.get("vector_score")),
+        "exact_match_score": _safe_round(candidate.get("exact_match_score")),
+        "label_boost": _safe_round(candidate.get("label_boost")),
+        "path_symbol_boost": _safe_round(candidate.get("path_symbol_boost")),
+        "final_score": _safe_round(
+            candidate.get("final_score")
+            or candidate.get("rerank_score")
+            or candidate.get("score")
+        ),
+    }
+
+    if include_excerpt:
+        item["content_excerpt"] = _candidate_excerpt(candidate)
+
+    return item
+
+
+def _compact_results(results: list[dict], *, limit: int = 10, include_excerpt: bool = False) -> list[dict]:
+    return [
+        _compact_candidate(candidate, rank=i, include_excerpt=include_excerpt)
+        for i, candidate in enumerate((results or [])[:limit], 1)
+    ]
+
+
+def _likely_failure_type(
+    *,
+    file_hit: bool,
+    symbol_hit: bool,
+    label_hit: bool,
+    expected_files: list[str],
+    expected_symbols: list[str],
+    final_results: list[dict],
+) -> str:
+    if not final_results:
+        return "empty_results"
+
+    if expected_files and not file_hit and expected_symbols and not symbol_hit:
+        return "expected_file_and_symbol_not_in_top5"
+
+    if expected_files and not file_hit:
+        return "expected_file_not_in_top5"
+
+    if expected_symbols and not symbol_hit:
+        return "expected_symbol_not_in_top5"
+
+    if not label_hit:
+        return "expected_labels_not_in_top5"
+
+    return "unknown"
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run retrieval evaluation for CodeSeek.")
@@ -88,7 +168,19 @@ def main():
     parser.add_argument("--golden", default="../evals/golden_queries.yaml", help="Path to golden queries YAML file.")
     parser.add_argument("--output", default="../evals/reports/latest.json", help="Path to write the evaluation JSON report.")
     parser.add_argument("--k", type=int, default=5, help="K value for evaluation (default: 5).")
+    parser.add_argument(
+        "--debug-query-ids",
+        default="",
+        help="Comma-separated golden query IDs to include detailed layer debug output for, e.g. q004,q007",
+    )
+
     args = parser.parse_args()
+
+    debug_query_ids = {
+        q.strip()
+        for q in (args.debug_query_ids or "").split(",")
+        if q.strip()
+    }
 
     session_id = args.session_id
     collection_name = None
@@ -154,6 +246,10 @@ def main():
     global_protected_hits_preserved = 0
     global_protected_hits_dropped = 0
     all_dropped_exact_hits = []
+    known_failed_queries = []
+    blocking_failures = []
+    non_blocking_failures = []
+    debug_queries = {}
 
     for idx, gq in enumerate(golden_queries, 1):
         query_id = gq["id"]
@@ -288,6 +384,59 @@ def main():
         if q_label_hit5:
             label_hits_at_5 += 1
 
+        if not q_file_hit5 or not q_symbol_hit5 or not q_label_hit5:
+            failure_entry = {
+                "query_id": query_id,
+                "query": raw_query,
+                "category": gq.get("category"),
+                "expected_intent": expected_intent,
+                "actual_intent": label_intent,
+                "expected_reranker_intent": expected_reranker_intent,
+                "actual_reranker_intent": mapped_reranker_intent,
+                "file_hit@5": q_file_hit5,
+                "symbol_hit@5": q_symbol_hit5,
+                "label_hit@5": q_label_hit5,
+                "expected_files": expected_files,
+                "expected_symbols": expected_symbols,
+                "expected_labels": expected_labels,
+                "actual_top5": _compact_results(final_results, limit=5, include_excerpt=False),
+                "likely_failure_type": _likely_failure_type(
+                    file_hit=q_file_hit5,
+                    symbol_hit=q_symbol_hit5,
+                    label_hit=q_label_hit5,
+                    expected_files=expected_files,
+                    expected_symbols=expected_symbols,
+                    final_results=final_results,
+                ),
+            }
+
+            known_failed_queries.append(failure_entry)
+            
+        if query_id in debug_query_ids:
+            debug_queries[query_id] = {
+                "query_id": query_id,
+                "query": raw_query,
+                "category": gq.get("category"),
+                "expected_files": expected_files,
+                "expected_symbols": expected_symbols,
+                "expected_labels": expected_labels,
+                "expected_intent": expected_intent,
+                "actual_intent": label_intent,
+                "expected_reranker_intent": expected_reranker_intent,
+                "actual_reranker_intent": mapped_reranker_intent,
+                "metrics": {
+                    "file_hit@5": q_file_hit5,
+                    "symbol_hit@5": q_symbol_hit5,
+                    "label_hit@5": q_label_hit5,
+                },
+                "dense_results_top10": _compact_results(dense_results, limit=10, include_excerpt=True),
+                "bm25_results_top10": _compact_results(bm25_results, limit=10, include_excerpt=True),
+                "metadata_results_top10": _compact_results(metadata_results, limit=10, include_excerpt=True),
+                "exact_results_top10": _compact_results(exact_results, limit=10, include_excerpt=True),
+                "dependency_results_top10": _compact_results(dependency_results, limit=10, include_excerpt=True),
+                "final_results_top10": _compact_results(final_results, limit=10, include_excerpt=True),
+            }
+
         exact_audit = audit_exact_hit_preservation(final_results, exact_results, 5)
         q_exact_preserved = "N/A"
         if exact_audit["eligible"]:
@@ -320,21 +469,19 @@ def main():
 
         # Check wrong top-1: if query has expected files/symbols, does top-1 match them?
         if expected_files or expected_symbols:
-            # Check wrong top-1: if query has expected files/symbols, does top-1 match them?
-            if expected_files or expected_symbols:
-                has_top1_match = compute_file_hit(
-                    final_results,
-                    expected_files,
-                    1,
-                ) or compute_symbol_hit(
-                    final_results,
-                    expected_symbols,
-                    k=1,
-                    reranker_intent=mapped_reranker_intent,
-                )
+            has_top1_match = compute_file_hit(
+                final_results,
+                expected_files,
+                1,
+            ) or compute_symbol_hit(
+                final_results,
+                expected_symbols,
+                k=1,
+                reranker_intent=mapped_reranker_intent,
+            )
 
-                if not has_top1_match:
-                    wrong_top1_count += 1
+            if not has_top1_match:
+                wrong_top1_count += 1
 
         # Collect trace
         trace = {
@@ -388,33 +535,57 @@ def main():
     empty_result_rate = (empty_result_count / total_queries * 100.0) if total_queries else 0.0
     avg_latency = (total_latency_ms / total_queries) if total_queries else 0.0
 
+    status = "PASS" if file_hit_at_5 >= 80.0 else "FAIL"
+
+    pass_thresholds = {
+        "file_hit@5": 0.80,
+        "symbol_hit@5": "reported",
+        "label_hit@5": "reported",
+        "reranker_intent_accuracy": "reported",
+        "duplicate_context_rate": "reported",
+    }
+
+    if status == "PASS":
+        non_blocking_failures = known_failed_queries
+        blocking_failures = []
+    else:
+        blocking_failures = known_failed_queries
+        non_blocking_failures = []
+
+    summary = {
+        "intent_accuracy": round(intent_accuracy, 2),
+        "reranker_intent_accuracy": round(reranker_intent_accuracy, 2),
+        "file_hit@1": round(file_hit_at_1, 2),
+        "file_hit@3": round(file_hit_at_3, 2),
+        "file_hit@5": round(file_hit_at_5, 2),
+        "symbol_hit@5": round(symbol_hit_at_5, 2),
+        "label_hit@5": round(label_hit_at_5, 2),
+        "protected_exact_hit_preserved@5": round(protected_exact_hit_preserved_rate, 2),
+        "exact_hit_regression_count": exact_hit_regression_count,
+        "protected_hits_total": global_protected_hits_total,
+        "protected_hits_preserved": global_protected_hits_preserved,
+        "protected_hits_dropped": global_protected_hits_dropped,
+        "duplicate_context_rate": round(duplicate_context_rate, 2),
+        "wrong_top1_rate": round(wrong_top1_rate, 2),
+        "empty_result_rate": round(empty_result_rate, 2),
+        "avg_latency_ms": round(avg_latency, 2),
+    }
+
     report = {
-        "status": "PASS" if file_hit_at_5 >= 80.0 else "FAIL",
+        "status": status,
         "session_id": session_id or "N/A",
         "collection": collection_name,
         "repo_root": repo_root,
         "total_queries": total_queries,
-        "summary": {
-            "intent_accuracy": round(intent_accuracy, 2),
-            "reranker_intent_accuracy": round(reranker_intent_accuracy, 2),
-            "file_hit@1": round(file_hit_at_1, 2),
-            "file_hit@3": round(file_hit_at_3, 2),
-            "file_hit@5": round(file_hit_at_5, 2),
-            "symbol_hit@5": round(symbol_hit_at_5, 2),
-            "label_hit@5": round(label_hit_at_5, 2),
-            "protected_exact_hit_preserved@5": round(protected_exact_hit_preserved_rate, 2),
-            "exact_hit_regression_count": exact_hit_regression_count,
-            "protected_hits_total": global_protected_hits_total,
-            "protected_hits_preserved": global_protected_hits_preserved,
-            "protected_hits_dropped": global_protected_hits_dropped,
-            "duplicate_context_rate": round(duplicate_context_rate, 2),
-            "wrong_top1_rate": round(wrong_top1_rate, 2),
-            "empty_result_rate": round(empty_result_rate, 2),
-            "avg_latency_ms": round(avg_latency, 2),
-        },
+        "summary": summary,
+        "pass_thresholds": pass_thresholds,
+        "known_failed_queries": known_failed_queries,
+        "blocking_failures": blocking_failures,
+        "non_blocking_failures": non_blocking_failures,
+        "debug_queries": debug_queries,
         "reranker_intent_failures": reranker_intent_failures,
         "dropped_exact_hits": all_dropped_exact_hits,
-        "query_traces": traces
+        "query_traces": traces,
     }
 
     # Write report file

@@ -61,9 +61,18 @@ FOLLOW_UP_MARKERS = {
     "more",
     "details",
     "it",
+    "its",
     "that",
     "those",
     "this",
+    "these",
+    "they",
+    "them",
+    "there",
+    "then",
+    "above",
+    "previous",
+    "continue",
 }
 
 LOW_CONTEXT_FALLBACK = (
