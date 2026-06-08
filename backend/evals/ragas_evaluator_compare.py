@@ -79,6 +79,17 @@ def main():
         required=True,
         help="Evaluator configuration in the format 'provider:model:embedding_model'. Can be repeated.",
     )
+    parser.add_argument(
+        "--subprocess-timeout",
+        type=int,
+        default=3600,
+        help="Subprocess timeout in seconds per evaluator run.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print verbose progress and command construction output.",
+    )
 
     args = parser.parse_args()
 
@@ -131,7 +142,7 @@ def main():
 
             temp_report_path = tmp_dir_path / f"ragas_report_{evaluator_id}.json"
 
-            print(f"\n[{idx + 1}/{len(evaluator_configs)}] Running evaluator: {raw_cfg}")
+            print(f"\n[{idx + 1}/{len(evaluator_configs)}] Running evaluator: {raw_cfg} (ID: {evaluator_id})")
             
             # Construct subprocess command to invoke evals/ragas_eval.py
             cmd = [
@@ -152,24 +163,56 @@ def main():
             if args.limit is not None:
                 cmd.extend(["--limit", str(args.limit)])
 
-            # Run as subprocess
+            if args.verbose:
+                print(f"Command: {' '.join(cmd)}")
+
+            # Run as subprocess with heartbeat/progress tracking
             start_time = time.perf_counter()
+            timed_out = False
+            stdout_str = ""
+            stderr_str = ""
+            return_code = None
+
             try:
                 env = os.environ.copy()
-                result = subprocess.run(
+                process = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    env=env,
-                    check=False
+                    env=env
                 )
-                return_code = result.returncode
-                stdout_str = result.stdout
-                stderr_str = result.stderr
+
+                poll_interval = 5.0
+                while True:
+                    ret = process.poll()
+                    if ret is not None:
+                        return_code = ret
+                        break
+                    
+                    elapsed = time.perf_counter() - start_time
+                    if elapsed >= args.subprocess_timeout:
+                        timed_out = True
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                        break
+                    
+                    print(f"  ... {evaluator_id} still running: {elapsed:.0f}s elapsed", flush=True)
+                    time.sleep(poll_interval)
+
+                try:
+                    stdout_str, stderr_str = process.communicate(timeout=5)
+                except Exception as ce:
+                    stderr_str += f"\nError communicating with subprocess: {ce}"
+
             except Exception as e:
                 return_code = -1
                 stdout_str = ""
                 stderr_str = f"Subprocess invocation failed: {e}"
+
             duration = time.perf_counter() - start_time
 
             print(f"Completed in {duration:.2f} seconds. Exit code: {return_code}")
@@ -226,11 +269,18 @@ def main():
 
             if not report_read_ok:
                 status = "ERROR"
-                err_msg = get_tail(stderr_str) or f"Subprocess exited with code {return_code} without generating report."
-                errors.append({
-                    "type": "SUBPROCESS_ERROR",
-                    "message": err_msg
-                })
+                if timed_out:
+                    errors.append({
+                        "type": "SUBPROCESS_TIMEOUT",
+                        "message": f"Subprocess timed out after {args.subprocess_timeout} seconds.",
+                        "timeout_seconds": args.subprocess_timeout
+                    })
+                else:
+                    err_msg = get_tail(stderr_str) or f"Subprocess exited with code {return_code} without generating report."
+                    errors.append({
+                        "type": "SUBPROCESS_ERROR",
+                        "message": err_msg
+                    })
                 # If faithfulness was requested, count all as null since the run failed
                 try:
                     import evals.ragas_eval
@@ -257,7 +307,11 @@ def main():
                 "metrics_skipped": metrics_skipped,
                 "errors": errors,
                 "metric_averages": metric_averages,
-                "ragas_runtime": ragas_runtime
+                "ragas_runtime": ragas_runtime,
+                "timeout_seconds": args.subprocess_timeout,
+                "timed_out": timed_out,
+                "stdout_tail": get_tail(stdout_str),
+                "stderr_tail": get_tail(stderr_str)
             })
 
     # Resolve top-level status

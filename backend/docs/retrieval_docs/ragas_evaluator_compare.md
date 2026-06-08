@@ -14,10 +14,11 @@ This is crucial for identifying whether low or null RAGAS scores are caused by L
   --input-traces evals/reports/ragas_calibration_traces.jsonl \
   --output-json ../evals/reports/ragas_evaluator_compare_latest.json \
   --output-md ../evals/reports/ragas_evaluator_compare_latest.md \
-  --metrics answer_relevancy,context_precision,faithfulness \
+  --metrics answer_relevancy,context_precision \
   --evaluator ollama:qwen2.5-coder:3b:nomic-embed-text \
-  --evaluator ollama:qwen-coder-7b-16k:nomic-embed-text \
-  --evaluator openai:gpt-4o-mini:text-embedding-3-small
+  --evaluator openai:gpt-4o-mini:text-embedding-3-small \
+  --limit 2 \
+  --verbose
 ```
 
 ### Arguments
@@ -25,94 +26,55 @@ This is crucial for identifying whether low or null RAGAS scores are caused by L
 - `--output-json PATH`: (Required) Path to write the aggregated comparison JSON report.
 - `--output-md PATH`: (Required) Path to write the aggregated comparison Markdown report.
 - `--metrics LIST`: (Optional) Comma-separated list of metrics to evaluate (default: `faithfulness,answer_relevancy,context_precision,context_recall`).
-- `--limit N`: (Optional) Limit the number of traces to evaluate.
+- `--limit N`: (Optional) Limit the number of traces to evaluate. Useful for quick validations (e.g., `--limit 1` or `--limit 2`).
 - `--evaluator CONFIG`: (Required, repeatable) Evaluator configuration in the format `provider:model:embedding_model`.
+- `--subprocess-timeout SECONDS`: (Optional) Subprocess timeout in seconds per evaluator run (default: `3600`).
+- `--verbose`: (Optional) If provided, prints progress indicators, elapsed runtime heartbeats, and exact command invocations.
 
 ---
 
 ## Under the Hood
 1. **Trace Validation**: The script validates that the input trace file exists and contains valid traces with contexts.
-2. **Subprocess Execution**: For each requested evaluator config, the comparison runner invokes `evals/ragas_eval.py` as a isolated subprocess with safe defaults:
-   - `--ragas-timeout 600`
-   - `--ragas-max-workers 1`
-   - `--ragas-max-retries 1`
-3. **Graceful Failures**: If a single evaluator fails or errors, it does not abort the entire comparison. Instead, the evaluator's row is marked as `status: ERROR` with the subprocess stderr captured under `errors`.
-4. **Aggregation & Evaluation**: The runner aggregates execution times, status, score health, missing reports, errors, and metric averages from each run's output JSON into a consolidated report.
+2. **Subprocess Execution**: For each requested evaluator config, the comparison runner invokes `evals/ragas_eval.py` as an isolated subprocess.
+3. **Heartbeat / Progress Logging**: While the subprocess is running, the script streams periodic elapsed time updates (every 5 seconds) to stdout to avoid the process looking stuck.
+4. **Timeout Handling**: Subprocesses are executed with the timeout specified by `--subprocess-timeout`. If a timeout occurs:
+   - The subprocess is terminated/killed.
+   - The evaluator status is marked as `ERROR`.
+   - The `return_code` is set to `null` in the JSON report.
+   - A `SUBPROCESS_TIMEOUT` error entry (including `timeout_seconds`) is appended to the results row.
+   - The runner proceeds to the next evaluator configuration.
+5. **Aggregation & Evaluation**: The runner aggregates execution times, status, score health, missing reports, errors, and metric averages from each run's output JSON into a consolidated report.
 
 ---
 
-## Comparison Heuristics & Recommendations
+## Best Practices & Troubleshooting
 
-The comparison runner automatically analyzes output trends to provide actionable recommendations:
+### Recommend Metric Isolation
+Evaluating multiple metrics simultaneously using local models can lead to high resource consumption and timeouts. It is highly recommended to isolate metric runs:
+1. **Answer Relevancy first**: Run `--metrics answer_relevancy` to check response alignment. `answer_relevancy` is usually the most stable local metric.
+2. **Context Precision second**: Run `--metrics context_precision` to inspect retrieval rank quality.
+3. **Faithfulness separately**: Run `--metrics faithfulness` on its own. Faithfulness tends to be computationally heavy and prone to parser issues on smaller LLMs, so isolating it helps pinpoint judge limitations.
 
-- **Stability Selection**: Recommends the evaluator configuration with the fewest null scores and highest numeric score health.
-- **Metric Mismatch Detector**: If `context_precision` remains `0.0` across all evaluators (both local and proprietary) while retrieval/context file hit diagnostics pass, it notes that this suggests a metric or reference dataset schema mismatch rather than a retrieval failure.
-- **Faithfulness Validator**: If null scores or exceptions for `faithfulness` only occur on smaller local models (e.g. 3b/7b/8b) but not on stronger models, the runner suggests using a stronger evaluator model (like `gpt-4o-mini` or a 32b+ parameter local model) for that metric.
+### Performance Warning for Local LLMs
+Running comprehensive 3B vs 7B comparisons locally with all metrics enabled can be extremely slow and may take 60+ minutes depending on your CPU/GPU hardware.
+- Use `--limit 1` or `--limit 2` to test configuration stability and verify that the models and embeddings load correctly before running full evaluations.
+- Use `--subprocess-timeout` to bound execution times.
 
 ---
 
 ## Output Formats
 
-### JSON Report Structure
-```json
-{
-  "status": "PARTIAL",
-  "input_traces": "evals/reports/ragas_calibration_traces.jsonl",
-  "metrics_requested": ["answer_relevancy", "context_precision", "faithfulness"],
-  "evaluators": [
-    "ollama:qwen2.5-coder:3b:nomic-embed-text",
-    "ollama:qwen-coder-7b-16k:nomic-embed-text"
-  ],
-  "summary": {
-    "best_numeric_score_health": "ollama_qwen2_5_coder_3b_nomic_embed_text",
-    "lowest_null_score_count": "ollama_qwen2_5_coder_3b_nomic_embed_text",
-    "faithfulness_null_counts": {
-      "ollama_qwen2_5_coder_3b_nomic_embed_text": 0,
-      "ollama_qwen_coder_7b_16k_nomic_embed_text": 1
-    },
-    "context_precision_values": {
-      "ollama_qwen2_5_coder_3b_nomic_embed_text": 0.0
-    },
-    "answer_relevancy_values": {
-      "ollama_qwen2_5_coder_3b_nomic_embed_text": 0.9
-    },
-    "recommendation": "Evaluator 'ollama_qwen2_5_coder_3b_nomic_embed_text' has the fewest null scores (0) and is recommended as the most stable configuration. context_precision remains 0.0 across all evaluators; this suggests a metric/reference mismatch rather than retrieval failure."
-  },
-  "results": [
-    {
-      "evaluator_id": "ollama_qwen2_5_coder_3b_nomic_embed_text",
-      "provider": "ollama",
-      "model": "qwen2.5-coder:3b",
-      "embedding_model": "nomic-embed-text",
-      "command": [...],
-      "return_code": 0,
-      "duration_seconds": 23.4,
-      "report_path": "...",
-      "status": "PASS",
-      "score_health": {
-        "numeric_score_count": 3,
-        "null_score_count": 0,
-        "metrics_with_numeric_scores": ["answer_relevancy", "context_precision", "faithfulness"],
-        "metrics_with_null_scores": []
-      },
-      "metrics_run": ["answer_relevancy", "context_precision", "faithfulness"],
-      "metrics_skipped": {},
-      "errors": [],
-      "metric_averages": {
-        "answer_relevancy": 0.9,
-        "context_precision": 0.0,
-        "faithfulness": 0.85
-      },
-      "ragas_runtime": {...}
-    },
-    ...
-  ]
-}
-```
+### JSON Result Keys
+Each row under `.results` contains detailed trace metadata:
+- `timeout_seconds`: The timeout threshold set for the subprocess.
+- `timed_out`: A boolean indicating whether the execution timed out (`true` or `false`).
+- `stdout_tail`: The last 20 lines of standard output.
+- `stderr_tail`: The last 20 lines of standard error.
+- `return_code`: The subprocess exit code (or `null` if timed out).
 
 ### Markdown Report
 Generates a reader-friendly report including:
-- Top-level comparison status
-- Metric average and evaluator execution comparison table
-- Captured error details per failed configuration
+- Top-level comparison status.
+- Metric average and evaluator execution comparison table.
+- Captured error details per failed configuration (including timeouts).
 - Formatted heuristic recommendation and a copy-pasteable command to calibrate using the recommended settings.
