@@ -18,6 +18,7 @@ import {
   listSessions,
   listSessionThreads,
   retrySessionIndexing,
+  updateSessionIndexingOptions,
 } from './utils/api';
 
 const NORMAL_POLL_INTERVAL_MS = 60_000;
@@ -33,6 +34,7 @@ function Shell() {
     appendMessage,
     mergeBackendSessions,
     setSessionThreads,
+    updateSession,
   } = useSessions();
   const {
     isConnected,
@@ -150,7 +152,6 @@ function Shell() {
 
   const doCreateSession = async (repo, enableChunkDescriptions) => {
     try {
-      const existing = sessions.find((session) => session.repo_full_name === repo.full_name);
       const created = await createSession({
         repoFullName: repo.full_name,
         repoUrl: repo.clone_url || `https://github.com/${repo.full_name}.git`,
@@ -158,17 +159,6 @@ function Shell() {
       });
       const newSession = addSession(created);
       setActiveSessionId(newSession.id);
-      setUiNotice(
-        existing
-          ? {
-              tone: 'info',
-              message: `Opened existing session for ${repo.full_name}.`,
-            }
-          : {
-              tone: 'success',
-              message: `Created session for ${repo.full_name}. Indexing will continue in the background.`,
-            }
-      );
       setSidebarOpen(false);
     } catch (err) {
       setUiNotice({ tone: 'error', message: err.message || 'Failed to create session.' });
@@ -206,12 +196,30 @@ function Shell() {
     try {
       const session = await retrySessionIndexing(sessionId);
       addSession(session);
-      setUiNotice({
-        tone: 'info',
-        message: `Retrying indexing for ${session.repo_full_name}.`,
-      });
     } catch (err) {
       setUiNotice({ tone: 'error', message: err.message || 'Failed to retry indexing.' });
+    }
+  };
+
+  const handleUpdateSessionIndexingOptions = async (sessionId, options) => {
+    try {
+      const updatedOptions = await updateSessionIndexingOptions(sessionId, options);
+      const session = sessions.find((s) => s.id === sessionId);
+      if (session) {
+        const updatedSession = {
+          ...session,
+          refine_labels_with_llm: updatedOptions.refine_labels_with_llm,
+          indexing_options: updatedOptions,
+        };
+        addSession(updatedSession);
+      }
+    } catch (err) {
+      console.warn('[sessions] update indexing options failed:', err.message);
+      setUiNotice({
+        tone: 'error',
+        message: 'Could not update label refinement setting.',
+      });
+      throw err;
     }
   };
 
@@ -279,6 +287,7 @@ function Shell() {
               }}
               onDeleteSession={handleDeleteSession}
               onNewSession={() => setModalOpen(true)}
+              onUpdateIndexingOptions={handleUpdateSessionIndexingOptions}
             />
           </div>
         </div>
@@ -299,6 +308,8 @@ function Shell() {
               session={activeSession}
               appendMessage={appendMessage}
               onRetryIndexing={handleRetryIndexing}
+              updateSession={updateSession}
+              onUpdateIndexingOptions={handleUpdateSessionIndexingOptions}
               onClearMessages={async (sessionId) => {
                 try {
                   const activeThreadId = activeSession.active_thread_id;

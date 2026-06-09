@@ -1,0 +1,167 @@
+{
+  "status": "PASS",
+  "schema_version": "ragas_eval.v1",
+  "input_path": "../evals/reports/ragas_calibration_traces.jsonl",
+  "output_path": "../evals/reports/ragas_calibration_latest.json",
+  "total_traces_loaded": 5,
+  "total_traces_evaluated": 5,
+  "total_traces_skipped": 0,
+  "metrics_requested": [
+    "answer_relevancy",
+    "context_precision"
+  ],
+  "metrics_run": [
+    "answer_relevancy",
+    "context_precision"
+  ],
+  "metrics_skipped": {},
+  "evaluator": {
+    "provider": "ollama",
+    "model": "qwen2.5-coder:3b",
+    "embedding_model": "nomic-embed-text",
+    "base_url": "http://localhost:11434"
+  },
+  "runtime": {
+    "ragas_version": "0.4.3",
+    "datasets_version": "5.0.0",
+    "langchain_ollama_available": true
+  },
+  "score_health": {
+    "numeric_score_count": 10,
+    "null_score_count": 0,
+    "metrics_with_numeric_scores": [
+      "answer_relevancy",
+      "context_precision"
+    ],
+    "metrics_with_null_scores": []
+  },
+  "summary": {
+    "answer_relevancy": 0.8599,
+    "context_precision": 0.0,
+    "score_health": {
+      "numeric_score_count": 10,
+      "null_score_count": 0,
+      "metrics_with_numeric_scores": [
+        "answer_relevancy",
+        "context_precision"
+      ],
+      "metrics_with_null_scores": []
+    }
+  },
+  "diagnostics": {
+    "answer_length_chars_avg": 324.0,
+    "context_count_avg": 4.8,
+    "total_context_chars_avg": 8553.0,
+    "answer_has_citation_like_path_rate": 1.0,
+    "answer_mentions_top_context_file_rate": 0.6
+  },
+  "traces": [
+    {
+      "trace_id": "85ffded3-a829-408d-a568-f4f87c3b1dcc",
+      "question": "Show me where Qdrant upsert happens",
+      "answer_preview": "The Qdrant upsert happens in backend/rag_ingestion/stages/storage.py inside the storage stage. The r...",
+      "context_count": 3,
+      "ground_truth_present": false,
+      "scores": {
+        "answer_relevancy": 0.9246,
+        "context_precision": 0.0
+      },
+      "skipped_metrics": {},
+      "diagnostics": {
+        "answer_length_chars": 135,
+        "context_count": 3,
+        "total_context_chars": 9576,
+        "answer_has_citation_like_path": true,
+        "answer_mentions_top_context_file": true
+      }
+    },
+    {
+      "trace_id": "4c8cc50b-adb3-43e3-9850-64c2641e55f2",
+      "question": "Where is the FastAPI app initialized?",
+      "answer_preview": "The FastAPI app is initialized in backend/retrieval/api_service.py. The app startup checks and route...",
+      "context_count": 4,
+      "ground_truth_present": false,
+      "scores": {
+        "answer_relevancy": 1.0,
+        "context_precision": 0.0
+      },
+      "skipped_metrics": {},
+      "diagnostics": {
+        "answer_length_chars": 167,
+        "context_count": 4,
+        "total_context_chars": 8341,
+        "answer_has_citation_like_path": true,
+        "answer_mentions_top_context_file": true
+      }
+    },
+    {
+      "trace_id": "282d6a0b-67a6-4c2d-92bc-dcfa50895faf",
+      "question": "Where is environment variable handling implemented?",
+      "answer_preview": "Environment variable handling is implemented in backend/retrieval/config.py. It loads config setting...",
+      "context_count": 6,
+      "ground_truth_present": false,
+      "scores": {
+        "answer_relevancy": 0.9936,
+        "context_precision": 0.0
+      },
+      "skipped_metrics": {},
+      "diagnostics": {
+        "answer_length_chars": 156,
+        "context_count": 6,
+        "total_context_chars": 12484,
+        "answer_has_citation_like_path": true,
+        "answer_mentions_top_context_file": false
+      }
+    },
+    {
+      "trace_id": "a1247711-b2f7-4fe6-add6-73b74ad65c45",
+      "question": "What does this repo do?",
+      "answer_preview": "Function: _fetch_github_repos\nParameters: access_token.\n\n- Backend API layer is implemented in `retr...",
+      "context_count": 6,
+      "ground_truth_present": false,
+      "scores": {
+        "answer_relevancy": 0.7514,
+        "context_precision": 0.0
+      },
+      "skipped_metrics": {},
+      "diagnostics": {
+        "answer_length_chars": 735,
+        "context_count": 6,
+        "total_context_chars": 7152,
+        "answer_has_citation_like_path": true,
+        "answer_mentions_top_context_file": true
+      }
+    },
+    {
+      "trace_id": "c7dd3924-6d9d-40de-89df-d3e326669ea9",
+      "question": "How does auth work?",
+      "answer_preview": "Auth And Session Lifecycle (partial evidence)\n\nMissing expected evidence roles: Auth entrypoint, Ses...",
+      "context_count": 5,
+      "ground_truth_present": false,
+      "scores": {
+        "answer_relevancy": 0.63,
+        "context_precision": 0.0
+      },
+      "skipped_metrics": {},
+      "diagnostics": {
+        "answer_length_chars": 427,
+        "context_count": 5,
+        "total_context_chars": 5212,
+        "answer_has_citation_like_path": true,
+        "answer_mentions_top_context_file": false
+      }
+    }
+  ],
+  "errors": [],
+  "ragas_runtime": {
+    "timeout": 600,
+    "max_workers": 1,
+    "max_retries": 1,
+    "metrics_requested_raw": "answer_relevancy,context_precision",
+    "metrics_selected": [
+      "answer_relevancy",
+      "context_precision"
+    ],
+    "run_config_available": true
+  }
+}

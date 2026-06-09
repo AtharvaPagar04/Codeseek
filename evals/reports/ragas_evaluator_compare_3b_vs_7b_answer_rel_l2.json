@@ -1,0 +1,149 @@
+{
+  "status": "PASS",
+  "input_traces": "evals/reports/ragas_calibration_traces.jsonl",
+  "metrics_requested": [
+    "answer_relevancy"
+  ],
+  "evaluators": [
+    "ollama:qwen2.5-coder:3b:nomic-embed-text",
+    "ollama:qwen-coder-7b-16k:nomic-embed-text"
+  ],
+  "summary": {
+    "best_numeric_score_health": "ollama_qwen2_5_coder_3b_nomic_embed_text",
+    "lowest_null_score_count": "ollama_qwen2_5_coder_3b_nomic_embed_text",
+    "faithfulness_null_counts": {
+      "ollama_qwen2_5_coder_3b_nomic_embed_text": 0,
+      "ollama_qwen_coder_7b_16k_nomic_embed_text": 0
+    },
+    "context_precision_values": {},
+    "answer_relevancy_values": {
+      "ollama_qwen2_5_coder_3b_nomic_embed_text": 0.6721,
+      "ollama_qwen_coder_7b_16k_nomic_embed_text": 0.2717
+    },
+    "recommendation": "Evaluator 'ollama_qwen2_5_coder_3b_nomic_embed_text' has the fewest null scores (0) and is recommended as the most stable configuration."
+  },
+  "results": [
+    {
+      "evaluator_id": "ollama_qwen2_5_coder_3b_nomic_embed_text",
+      "provider": "ollama",
+      "model": "qwen2.5-coder:3b",
+      "embedding_model": "nomic-embed-text",
+      "command": [
+        "/home/arch/DEV/CodeSeek/backend/.venv/bin/python",
+        "evals/ragas_eval.py",
+        "--input",
+        "evals/reports/ragas_calibration_traces.jsonl",
+        "--output",
+        "/home/arch/DEV/CodeSeek/backend/tmp6_gsb9qj/ragas_report_ollama_qwen2_5_coder_3b_nomic_embed_text.json",
+        "--evaluator-provider",
+        "ollama",
+        "--evaluator-model",
+        "qwen2.5-coder:3b",
+        "--embedding-model",
+        "nomic-embed-text",
+        "--ragas-timeout",
+        "600",
+        "--ragas-max-workers",
+        "1",
+        "--ragas-max-retries",
+        "1",
+        "--allow-no-ground-truth",
+        "--metrics",
+        "answer_relevancy",
+        "--limit",
+        "2"
+      ],
+      "return_code": 0,
+      "duration_seconds": 226.48,
+      "report_path": "/home/arch/DEV/CodeSeek/backend/tmp6_gsb9qj/ragas_report_ollama_qwen2_5_coder_3b_nomic_embed_text.json",
+      "status": "PASS",
+      "score_health": {
+        "numeric_score_count": 2,
+        "null_score_count": 0,
+        "metrics_with_numeric_scores": [
+          "answer_relevancy"
+        ],
+        "metrics_with_null_scores": []
+      },
+      "metrics_run": [
+        "answer_relevancy"
+      ],
+      "metrics_skipped": {},
+      "errors": [],
+      "metric_averages": {
+        "answer_relevancy": 0.6721
+      },
+      "ragas_runtime": {
+        "timeout": 600,
+        "max_workers": 1,
+        "max_retries": 1,
+        "metrics_requested_raw": "answer_relevancy",
+        "metrics_selected": [
+          "answer_relevancy"
+        ],
+        "run_config_available": true
+      }
+    },
+    {
+      "evaluator_id": "ollama_qwen_coder_7b_16k_nomic_embed_text",
+      "provider": "ollama",
+      "model": "qwen-coder-7b-16k",
+      "embedding_model": "nomic-embed-text",
+      "command": [
+        "/home/arch/DEV/CodeSeek/backend/.venv/bin/python",
+        "evals/ragas_eval.py",
+        "--input",
+        "evals/reports/ragas_calibration_traces.jsonl",
+        "--output",
+        "/home/arch/DEV/CodeSeek/backend/tmp6_gsb9qj/ragas_report_ollama_qwen_coder_7b_16k_nomic_embed_text.json",
+        "--evaluator-provider",
+        "ollama",
+        "--evaluator-model",
+        "qwen-coder-7b-16k",
+        "--embedding-model",
+        "nomic-embed-text",
+        "--ragas-timeout",
+        "600",
+        "--ragas-max-workers",
+        "1",
+        "--ragas-max-retries",
+        "1",
+        "--allow-no-ground-truth",
+        "--metrics",
+        "answer_relevancy",
+        "--limit",
+        "2"
+      ],
+      "return_code": 0,
+      "duration_seconds": 249.02,
+      "report_path": "/home/arch/DEV/CodeSeek/backend/tmp6_gsb9qj/ragas_report_ollama_qwen_coder_7b_16k_nomic_embed_text.json",
+      "status": "PASS",
+      "score_health": {
+        "numeric_score_count": 2,
+        "null_score_count": 0,
+        "metrics_with_numeric_scores": [
+          "answer_relevancy"
+        ],
+        "metrics_with_null_scores": []
+      },
+      "metrics_run": [
+        "answer_relevancy"
+      ],
+      "metrics_skipped": {},
+      "errors": [],
+      "metric_averages": {
+        "answer_relevancy": 0.2717
+      },
+      "ragas_runtime": {
+        "timeout": 600,
+        "max_workers": 1,
+        "max_retries": 1,
+        "metrics_requested_raw": "answer_relevancy",
+        "metrics_selected": [
+          "answer_relevancy"
+        ],
+        "run_config_available": true
+      }
+    }
+  ]
+}

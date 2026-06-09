@@ -1,0 +1,24 @@
+{
+  "status": "WARN",
+  "hard_gate_status": "PASS",
+  "warnings": [
+    "expected context file rank is 3 (> 1) for query q008",
+    "missing expected answer term 'CodeSeek' for query q043",
+    "missing expected answer term 'repository' for query q043"
+  ],
+  "diagnostics": [
+    "RAGAS context_precision is 0.0 (diagnostic-only; local code-location traces often default to 0.0 on small models)",
+    "RAGAS faithfulness on small local models is unstable/null (diagnostic-only; faithfulness requires larger/stronger model for stable scoring)",
+    "context_precision remains 0.0 across all evaluators (diagnostic-only)",
+    "evaluator disagreement between 3B and 7B models (diagnostic-only)"
+  ],
+  "hard_gate_failures": [],
+  "reports_loaded": {
+    "retrieval_report": true,
+    "conversation_report": true,
+    "judge_calibration_report": true,
+    "ragas_report": true,
+    "evaluator_compare_report": true
+  },
+  "recommendation": "Review the soft warnings. Verify if low answer relevancy or missing terms represent a real answer quality regression or acceptable variance."
+}

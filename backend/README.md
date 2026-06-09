@@ -180,3 +180,83 @@ Session initialization flow:
   - `.github/workflows/qdrant-snapshot-schedule.yml`
 - Versioned image release workflow (GHCR):
   - `.github/workflows/release-image.yml`
+
+## GPU / VRAM Management (RTX 3050 / 4 GB)
+
+CodeSeek runs two GPU-heavy workloads at the same time on a low-VRAM machine:
+
+| Workload | Default device | Notes |
+|----------|----------------|-------|
+| SentenceTransformer (embedding) | **cpu** | Set by `EMBEDDING_DEVICE=cpu` |
+| Ollama local LLM (descriptions / chat) | GPU | Separate process; unloaded after indexing |
+
+### Recommended startup
+
+Always start the backend with CPU-only embeddings so Ollama has the full 4 GB:
+
+```bash
+./scripts/run_backend_cpu_embeddings.sh
+```
+
+This script sets `CUDA_VISIBLE_DEVICES=""` (hides the GPU from PyTorch entirely)
+and `EMBEDDING_DEVICE=cpu`.  Ollama is a separate binary and ignores
+`CUDA_VISIBLE_DEVICES`, so it can still use the GPU for chat/descriptions.
+
+### Indexing with CPU embeddings
+
+```bash
+./scripts/run_index_cpu_embeddings.sh /home/arch/DEV/Portfolio my_collection_name
+```
+
+With LLM descriptions enabled:
+
+```bash
+ENABLE_LLM_CHUNK_DESCRIPTIONS=1 \
+LOCAL_LLM_UNLOAD_MODEL=qwen2.5-coder:3b-5k \
+./scripts/run_index_cpu_embeddings.sh /home/arch/DEV/Portfolio my_llm_collection
+```
+
+After indexing, Ollama is evicted automatically when `UNLOAD_LOCAL_LLM_AFTER_INDEXING=1`
+(default).  Verify with:
+
+```bash
+ollama ps          # should show no loaded models
+nvidia-smi         # backend Python should not appear with large VRAM usage
+./scripts/check_backend_gpu_usage.sh
+```
+
+### Checking GPU usage
+
+```bash
+./scripts/check_backend_gpu_usage.sh
+```
+
+Expected output when configured correctly:
+
+```
+OK: backend is not using GPU
+```
+
+### Recovery — backend is using GPU
+
+If the backend was started without CPU-only settings and is consuming 1 GB+ VRAM:
+
+```bash
+pkill -f "uvicorn" 2>/dev/null || true
+pkill -f "python.*api_service" 2>/dev/null || true
+pkill -f "rag_ingestion/main.py" 2>/dev/null || true
+
+./scripts/run_backend_cpu_embeddings.sh
+```
+
+### GPU environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CUDA_VISIBLE_DEVICES` | `""` (in cpu scripts) | Set to `""` to hide GPU from PyTorch |
+| `EMBEDDING_DEVICE` | `cpu` | SentenceTransformer device |
+| `EMBEDDING_BATCH_SIZE` | `4` | encode() batch size (smaller = less RAM) |
+| `ENABLE_GPU_CLEANUP_AFTER_STAGES` | `1` | Free CUDA cache after each heavy stage |
+| `UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING` | `1` | Release embedding model reference after indexing |
+| `UNLOAD_LOCAL_LLM_AFTER_INDEXING` | `1` | Send keep_alive=0 to Ollama after indexing |
+| `LOCAL_LLM_UNLOAD_MODEL` | (from `RETRIEVAL_LOCAL_LLM_PRIMARY_MODEL`) | Ollama model name to evict |

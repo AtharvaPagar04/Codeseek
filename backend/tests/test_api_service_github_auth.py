@@ -129,6 +129,71 @@ class ApiServiceGithubAuthTests(unittest.TestCase):
         self.assertTrue(payload["logged_out"])
         self.assertFalse(payload["session_cleared"])
 
+    @patch("retrieval.api_service.append_message")
+    @patch("retrieval.api_service.append_thread_message")
+    @patch("retrieval.api_service.ensure_default_thread")
+    @patch("retrieval.api_service.run_query")
+    @patch("retrieval.api_service.get_active_provider_credential")
+    @patch("retrieval.api_service._current_auth_user")
+    @patch("retrieval.api_service._resolve_query_session")
+    @patch("retrieval.api_service.validate_collection_binding")
+    def test_query_endpoint_auth_modes(self, mock_validate, mock_resolve, mock_current_user, mock_provider, mock_run_query, mock_ensure_thread, mock_append_thread, mock_append) -> None:
+        from fastapi.testclient import TestClient
+        from retrieval.api_service import app
+        
+        client = TestClient(app)
+        
+        # Mock successful LLM run and database calls
+        mock_run_query.return_value = (
+            "Hello response",
+            [],
+            10,
+            {"stage_latency_ms": {}, "source_filter": {}, "evidence_confidence": {"level": "strong"}}
+        )
+        mock_provider.return_value = {"provider": "local", "model": "test-model"}
+        mock_resolve.return_value = {"id": "session-1", "repo_root": "/tmp", "collection": "col1"}
+        mock_ensure_thread.return_value = {"id": "thread-1", "repo_session_id": "session-1"}
+        
+        # Case 1: valid session cookie, no API key -> should succeed
+        mock_current_user.return_value = {"id": "user-1", "username": "octocat"}
+        
+        response = client.post(
+            "/api/v1/query",
+            json={"question": "What is this?"},
+            cookies={api_service.AUTH_SESSION_COOKIE: "valid-token"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["answer"], "Hello response")
+        
+        # Case 2: no cookie, valid API key -> should succeed
+        mock_current_user.return_value = None
+        with patch.dict(os.environ, {"CODESEEK_API_KEY": "backend-key"}):
+            response = client.post(
+                "/api/v1/query",
+                json={"question": "What is this?"},
+                headers={"Authorization": "Bearer backend-key"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["answer"], "Hello response")
+            
+        # Case 3: unauthenticated (no cookie, no API key) -> should fail with 401
+        response = client.post(
+            "/api/v1/query",
+            json={"question": "What is this?"}
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Please sign in again.", response.json()["detail"])
+        
+        # Case 4: invalid API key -> should fail with 401
+        with patch.dict(os.environ, {"CODESEEK_API_KEY": "backend-key"}):
+            response = client.post(
+                "/api/v1/query",
+                json={"question": "What is this?"},
+                headers={"Authorization": "Bearer invalid-key"}
+            )
+            self.assertEqual(response.status_code, 401)
+            self.assertIn("Backend API key is invalid or missing.", response.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

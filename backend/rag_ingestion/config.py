@@ -76,3 +76,32 @@ EMBEDDING_INPUT_MAX_TOTAL_CHARS = _env_int("EMBEDDING_INPUT_MAX_TOTAL_CHARS", 10
 
 ENABLE_CHUNK_LABELS = _env_bool("ENABLE_CHUNK_LABELS", True)
 ENABLE_LLM_LABEL_REFINEMENT = _env_bool("ENABLE_LLM_LABEL_REFINEMENT", False)
+# Max chunks passed to LLM label refinement per indexing run.
+# Kept small (20) for RTX 3050 / 4 GB VRAM safety; raise via env for larger machines.
+CHUNK_LABEL_LLM_MAX_CHUNKS = _env_int("CHUNK_LABEL_LLM_MAX_CHUNKS", 20)
+# Max characters of content excerpt included in the refinement prompt (no full code).
+CHUNK_LABEL_LLM_MAX_CONTENT_CHARS = _env_int("CHUNK_LABEL_LLM_MAX_CONTENT_CHARS", 1200)
+# Timeout (seconds) for a single LLM label refinement request.
+CHUNK_LABEL_LLM_TIMEOUT_SECONDS = _env_int("CHUNK_LABEL_LLM_TIMEOUT_SECONDS", 30)
+
+# ---------------------------------------------------------------------------
+# GPU / VRAM cleanup after indexing stages
+# ---------------------------------------------------------------------------
+ENABLE_GPU_CLEANUP_AFTER_STAGES = _env_bool("ENABLE_GPU_CLEANUP_AFTER_STAGES", True)
+UNLOAD_LOCAL_LLM_AFTER_INDEXING = _env_bool("UNLOAD_LOCAL_LLM_AFTER_INDEXING", True)
+# Unload Ollama model immediately after description generation (before embedding).
+# Defaults to False to avoid slow re-loads when descriptions run in batches.
+UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS = _env_bool("UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS", False)
+UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING = _env_bool("UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING", True)
+
+# Embedding model device: "cpu" keeps the model off CUDA; "cuda" allows GPU embedding.
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+# Batch size for encode() calls — smaller batches use less VRAM at a time.
+EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 4)
+
+# Ollama model name to evict after indexing.  Defaults to the primary LLM model
+# so the most common local setup works without extra configuration.
+LOCAL_LLM_UNLOAD_MODEL = os.getenv(
+    "LOCAL_LLM_UNLOAD_MODEL",
+    os.getenv("RETRIEVAL_LOCAL_LLM_PRIMARY_MODEL", ""),
+)

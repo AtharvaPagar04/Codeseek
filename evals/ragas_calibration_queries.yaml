@@ -1,0 +1,43 @@
+queries:
+  - id: q004
+    query: "Show me where Qdrant upsert happens"
+    category: "code_location"
+    expected_files:
+      - "backend/rag_ingestion/stages/storage.py"
+    expected_answer_contains:
+      - "storage.py"
+      - "client.upsert"
+      - "Qdrant"
+
+  - id: q007
+    query: "Where is the FastAPI app initialized?"
+    category: "code_location"
+    expected_files:
+      - "backend/retrieval/api_service.py"
+    expected_answer_contains:
+      - "FastAPI"
+      - "api_service.py"
+
+  - id: q008
+    query: "Where is environment variable handling implemented?"
+    category: "config"
+    expected_files:
+      - "backend/retrieval/config.py"
+    expected_answer_contains:
+      - "config.py"
+      - "environment"
+
+  - id: q043
+    query: "What does this repo do?"
+    category: "overview"
+    expected_answer_contains:
+      - "retrieval"
+      - "repository"
+      - "CodeSeek"
+
+  - id: q_auth
+    query: "How does auth work?"
+    category: "architecture"
+    expected_answer_contains:
+      - "auth"
+      - "session"

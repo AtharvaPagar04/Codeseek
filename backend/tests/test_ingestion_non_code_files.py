@@ -63,7 +63,7 @@ class IngestionNonCodeFilesTests(unittest.TestCase):
             def fake_generate_chunks(_parsed: SimpleNamespace, file: FileRecord) -> list[Chunk]:
                 return [Chunk(relative_path=file.relative_path, chunk_type="file", content=file.relative_path)]
 
-            def fake_store_chunks(chunks: list[Chunk], _counters: PipelineCounters, collection_name: str | None = None) -> None:
+            def fake_store_chunks(chunks: list[Chunk], _counters: PipelineCounters, collection_name: str | None = None, **kwargs) -> None:
                 stored_chunks.extend(chunks)
 
             with patch.object(ingestion_main, "ENABLE_INCREMENTAL_FILE_SKIP", True), \

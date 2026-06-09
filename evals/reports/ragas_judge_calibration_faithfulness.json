@@ -1,0 +1,145 @@
+{
+  "status": "PASS",
+  "overall_status": "PASS",
+  "total_traces": 5,
+  "metrics_found": [
+    "faithfulness"
+  ],
+  "numeric_score_counts": {
+    "faithfulness": 2
+  },
+  "null_score_counts": {
+    "faithfulness": 3
+  },
+  "total_numeric_scores": 2,
+  "total_null_scores": 3,
+  "numeric_score_count": 2,
+  "null_score_count": 3,
+  "queries": [
+    {
+      "query_id": "q004",
+      "query": "Show me where Qdrant upsert happens",
+      "category": "code_location",
+      "expected_files": [
+        "backend/rag_ingestion/stages/storage.py"
+      ],
+      "retrieved_files": [
+        "rag_ingestion/stages/storage.py",
+        "retrieval/code_answers.py"
+      ],
+      "expected_file_context_hit": false,
+      "expected_answer_contains": [
+        "storage.py",
+        "client.upsert",
+        "Qdrant"
+      ],
+      "answer_mentions_expected_terms": {
+        "storage.py": true,
+        "client.upsert": true,
+        "Qdrant": true
+      },
+      "metric_scores": {
+        "faithfulness": 0.25
+      },
+      "null_metrics": [],
+      "errors_for_trace": [],
+      "interpretation": "calibrated pass"
+    },
+    {
+      "query_id": "q007",
+      "query": "Where is the FastAPI app initialized?",
+      "category": "code_location",
+      "expected_files": [
+        "backend/retrieval/api_service.py"
+      ],
+      "retrieved_files": [
+        "retrieval/api_service.py"
+      ],
+      "expected_file_context_hit": false,
+      "expected_answer_contains": [
+        "FastAPI",
+        "api_service.py"
+      ],
+      "answer_mentions_expected_terms": {
+        "FastAPI": true,
+        "api_service.py": true
+      },
+      "metric_scores": {
+        "faithfulness": 0.0
+      },
+      "null_metrics": [],
+      "errors_for_trace": [],
+      "interpretation": "calibrated pass"
+    },
+    {
+      "query_id": "q008",
+      "query": "Where is environment variable handling implemented?",
+      "category": "config",
+      "expected_files": [
+        "backend/retrieval/config.py"
+      ],
+      "retrieved_files": [],
+      "expected_file_context_hit": false,
+      "expected_answer_contains": [
+        "config.py",
+        "environment"
+      ],
+      "answer_mentions_expected_terms": {
+        "config.py": false,
+        "environment": false
+      },
+      "metric_scores": {},
+      "null_metrics": [
+        "faithfulness"
+      ],
+      "errors_for_trace": [],
+      "interpretation": "calibrated pass"
+    },
+    {
+      "query_id": "q043",
+      "query": "What does this repo do?",
+      "category": "overview",
+      "expected_files": [],
+      "retrieved_files": [],
+      "expected_file_context_hit": true,
+      "expected_answer_contains": [
+        "retrieval",
+        "repository",
+        "CodeSeek"
+      ],
+      "answer_mentions_expected_terms": {
+        "retrieval": false,
+        "repository": false,
+        "CodeSeek": false
+      },
+      "metric_scores": {},
+      "null_metrics": [
+        "faithfulness"
+      ],
+      "errors_for_trace": [],
+      "interpretation": "calibrated pass"
+    },
+    {
+      "query_id": "q_auth",
+      "query": "How does auth work?",
+      "category": "architecture",
+      "expected_files": [],
+      "retrieved_files": [],
+      "expected_file_context_hit": true,
+      "expected_answer_contains": [
+        "auth",
+        "session"
+      ],
+      "answer_mentions_expected_terms": {
+        "auth": true,
+        "session": true
+      },
+      "metric_scores": {},
+      "null_metrics": [
+        "faithfulness"
+      ],
+      "errors_for_trace": [],
+      "interpretation": "calibrated pass"
+    }
+  ]
+}

@@ -96,7 +96,7 @@ def classify_query_intent(query: str) -> dict:
         boost_labels = ["question_use:code-location", "question_use:technical-explanation"]
 
     # 5. technical_explanation (general)
-    elif _any_term_in_query(["how does", "how do", "why", "explain", "what is", "work", "works"], q):
+    elif _any_term_in_query(["how does", "how do", "why", "explain", "what is", "what does", "work", "works"], q):
         intent = "technical_explanation"
         boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
 
@@ -139,3 +139,168 @@ def compute_label_boost(chunk_labels: list[str], query_profile: dict) -> float:
         category = label.split(":", 1)[0]
         boost += LABEL_WEIGHTS.get(category, 0.05)
     return min(boost, 1.0)
+
+
+def is_dependency_trace_query(query: str) -> bool:
+    """Check if the query matches dependency trace patterns with word boundaries."""
+    q = query.lower()
+    patterns = [
+        r"\bwhat\s+calls\b",
+        r"\bwho\s+calls\b",
+        r"\bwhere\s+is\s+\S+\s+used\b",
+        r"\bwhere\s+is\s+\S+\s+referenced\b",
+        r"\bwhat\s+imports\b",
+        r"\bwhich\s+files\s+import\b",
+        r"\bwhat\s+depends\s+on\b",
+        r"\bwho\s+uses\b",
+        r"\bcall\s+graph\b",
+        r"\bdependency\s+trace\b"
+    ]
+    return any(re.search(p, q) for p in patterns)
+
+
+def is_config_query(query: str) -> bool:
+    """Check if the query matches config or environment patterns with word boundaries."""
+    q = query.lower()
+    patterns = [
+        r"\benvironment\s+variables?\b",
+        r"\benv\s+vars?\b",
+        r"\b\.env\b",
+        r"\bgetenv\b",
+        r"\benv\b",
+        r"\bconfig\b",
+        r"\bconfiguration\b",
+        r"\bsettings\b",
+        r"\bsecrets\b",
+        r"\bapi\s+keys?\b",
+        r"\bprovider\s+keys?\b",
+        r"\bpackage\.json\b",
+        r"\bpyproject\b",
+        r"\brequirements\b",
+        r"\bdockerfile\b",
+        r"\bcompose\b"
+    ]
+    return any(re.search(p, q) for p in patterns)
+
+
+def is_overview_query(query: str) -> bool:
+    """Check if the query matches codebase overview patterns with word boundaries."""
+    q = query.lower()
+    patterns = [
+        r"\bwhat\s+does\s+this\s+repo\s+do\b",
+        r"\bwhat\s+does\s+this\s+project\s+do\b",
+        r"\brepo\s+overview\b",
+        r"\bproject\s+overview\b",
+        r"\bexplain\s+this\s+repository\b",
+        r"\bsummarize\s+this\s+repo\b",
+        r"\barchitecture\s+overview\b",
+        r"\bhigh\s+level\s+overview\b"
+    ]
+    return any(re.search(p, q) for p in patterns)
+
+
+def is_location_query(query: str) -> bool:
+    """Check if the query is asking for a code location with word boundaries."""
+    q = query.lower()
+    patterns = [
+        r"\bwhere\b",
+        r"\blocated\b",
+        r"\bdefined\b",
+        r"\bwhich\s+file\b",
+        r"\bshow\s+me\s+where\b"
+    ]
+    return any(re.search(p, q) for p in patterns)
+
+
+def regex_match_explicit_followup_terms(query: str) -> bool:
+    """Return True if the query contains explicit anaphora or follow-up signals."""
+    q = query.lower()
+    # Match standard follow-up signals: "it", "its", "that", "above", "previous", "same", "continue"
+    # Match "this" but ONLY if not followed by "project", "repo", or "repository"
+    pattern1 = r"\b(its?|that|above|previous|same|continue)\b"
+    pattern2 = r"\bthis\b(?!\s+(project|repo|repository))\b"
+    return bool(re.search(pattern1, q) or re.search(pattern2, q))
+
+
+def _is_vague_query(query: str) -> bool:
+    """Return True if the query contains only vague pronoun-like references."""
+    vague_tokens = {
+        "it", "its", "that", "this", "those", "there", "they", "them",
+        "their", "the", "same", "also", "where", "what", "which", "when",
+        "how", "why", "who", "is", "are", "was", "were", "be", "been", "being",
+        "do", "does", "did", "have", "has", "had", "can", "could", "will",
+        "would", "should", "may", "might", "a", "an", "of", "in", "on", "at",
+        "to", "for", "by", "with", "from", "and", "or", "not", "but", "so", "as",
+        "used", "show", "me", "please", "provide", "give", "tell", "code",
+        "snippet", "example", "more", "details", "about", "explain", "describe",
+        "list", "find", "look"
+    }
+    q = query.lower()
+    tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", q))
+    content_tokens = tokens - vague_tokens
+    return len(content_tokens) <= 1
+
+
+def identify_followup_or_low_context(
+    query: str,
+    conversation_state: dict | None = None
+) -> tuple[bool, bool]:
+    """Identify if the query is a follow-up or low context based on conversation state."""
+    has_state = bool(
+        conversation_state
+        and (
+            conversation_state.get("previous_files")
+            or conversation_state.get("previous_symbols")
+            or conversation_state.get("previous_query")
+        )
+    )
+
+    has_followup_signal = regex_match_explicit_followup_terms(query)
+
+    is_followup = bool(has_state and has_followup_signal)
+    is_low_context = bool(has_followup_signal and _is_vague_query(query))
+
+    return is_followup, is_low_context
+
+
+def map_label_intent_to_reranker_intent(
+    label_intent: str,
+    *,
+    query: str = "",
+    is_followup: bool = False,
+    is_low_context: bool = False,
+    extracted_entities: dict | None = None,
+) -> str:
+    """Map query classifier intent to reranker scoring intent deterministically."""
+    has_explicit_followup_signal = regex_match_explicit_followup_terms(query)
+
+    if is_followup and has_explicit_followup_signal:
+        return "FOLLOWUP"
+
+    if is_low_context:
+        return "LOW_CONTEXT"
+
+    if is_dependency_trace_query(query):
+        return "DEPENDENCY"
+
+    env_key_detected = False
+    if extracted_entities:
+        env_key_detected = bool(extracted_entities.get("env_keys")) or bool(extracted_entities.get("config_keys"))
+
+    if is_config_query(query) or env_key_detected:
+        return "CONFIG"
+
+    if is_overview_query(query):
+        return "OVERVIEW"
+
+    if is_location_query(query):
+        return "FILE"
+
+    INTENT_MAP = {
+        "code_snippet": "SYMBOL",
+        "implementation": "SYMBOL",
+        "technical_explanation": "ARCHITECTURE",
+        "code_location": "FILE",
+        "general_context": "OVERVIEW",
+    }
+    return INTENT_MAP.get(label_intent, "SEMANTIC")

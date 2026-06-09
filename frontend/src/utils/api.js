@@ -250,6 +250,39 @@ export const retrySessionIndexing = async (sessionId) => {
   return data.session;
 };
 
+export const getSessionIndexingOptions = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-options`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Get session indexing options'
+  );
+  if (!res.ok) await throwApiError('Get session indexing options', res);
+  const data = await res.json();
+  return data.indexing_options;
+};
+
+export const updateSessionIndexingOptions = async (sessionId, options) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-options`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(options),
+      }),
+    'Update session indexing options'
+  );
+  if (!res.ok) await throwApiError('Update session indexing options', res);
+  const data = await res.json();
+  return data.indexing_options;
+};
+
 export const fetchSessionMessages = async (sessionId) => {
   const res = await withNetworkError(
     () =>
@@ -523,3 +556,44 @@ export const logoutGithubSession = async () => {
   }
   return res.json();
 };
+
+export const fetchSessionRepoStatus = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/repo-status`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch session repo status'
+  );
+  if (!res.ok) await throwApiError('Fetch session repo status', res);
+  return res.json();
+};
+
+export const indexLatestVersion = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-latest`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Index latest version'
+  );
+  if (!res.ok) await throwApiError('Index latest version', res);
+  return res.json();
+};
+
+export const fetchLatestEvaluationReport = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/latest`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch latest evaluation report'
+  );
+  if (!res.ok) await throwApiError('Fetch latest evaluation report', res);
+  return res.json();
+};
+

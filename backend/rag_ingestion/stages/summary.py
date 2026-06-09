@@ -65,7 +65,8 @@ def _structured_file_summary(chunk: Chunk) -> str:
         _extract_docker_compose_metadata(chunk, content)
     elif filename == "dockerfile":
         _extract_dockerfile_metadata(chunk, content)
-    elif filename.endswith(".env.example") or filename == ".env.example":
+    elif (filename.endswith(".env.example") or filename == ".env.example" or
+          (filename.startswith(".env") and (filename.endswith(".example") or "example" in filename))):
         _extract_env_example_metadata(chunk, content)
     elif filename == "tsconfig.json":
         _extract_tsconfig_metadata(chunk, content)
@@ -89,6 +90,8 @@ def _structured_file_summary(chunk: Chunk) -> str:
         _extract_caddyfile_metadata(chunk, content)
     elif filename == "nginx.conf":
         _extract_nginx_metadata(chunk, content)
+    elif filename in ("config.py", "settings.py") or filename.endswith((".ini", ".lock")):
+        _extract_generic_config_metadata(chunk, content)
     elif filename in ("jsconfig.json", "pnpm-workspace.yaml", "render.yaml", "railway.json") or \
             filename.endswith((".json", ".yaml", ".yml", ".toml", ".conf", ".mjs", ".cjs")):
         _extract_generic_config_metadata(chunk, content)

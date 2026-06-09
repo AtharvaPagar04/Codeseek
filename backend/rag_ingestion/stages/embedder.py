@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import gc
+import logging
+
 from rag_ingestion.config import (
     BATCH_SIZE,
-    EMBEDDING_MODEL,
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_DEVICE,
     EMBEDDING_INPUT_MAX_CODE_CHARS,
     EMBEDDING_INPUT_MAX_TOTAL_CHARS,
+    EMBEDDING_MODEL,
 )
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
+from rag_ingestion.utils.gpu_cleanup import clear_python_cuda_cache
+
+logger = logging.getLogger(__name__)
 
 _model = None
 
@@ -61,12 +69,20 @@ def embed_chunks(
     """Generate embeddings for chunks in batches."""
     model = _get_model()
 
+    logger.info(
+        "Embedding %d chunks — model=%s device=%s batch_size=%d",
+        len(chunks),
+        EMBEDDING_MODEL,
+        EMBEDDING_DEVICE,
+        EMBEDDING_BATCH_SIZE,
+    )
+
     for start in range(0, len(chunks), BATCH_SIZE):
         batch = chunks[start : start + BATCH_SIZE]
         inputs = [_embedding_input(chunk) for chunk in batch]
         embeddings = model.encode(
             inputs,
-            batch_size=BATCH_SIZE,
+            batch_size=EMBEDDING_BATCH_SIZE,
             show_progress_bar=True,
         )
         for chunk, embedding in zip(batch, embeddings, strict=True):
@@ -76,12 +92,45 @@ def embed_chunks(
     return chunks
 
 
+def unload_embedding_model() -> None:
+    """Release the cached SentenceTransformer reference and free memory.
+
+    After this call the model will be re-loaded on the next embed_chunks()
+    invocation.  This is intentional: it allows the OS to reclaim any CUDA
+    or CPU memory that was held by the model weights.
+    """
+    global _model
+    if _model is None:
+        logger.debug("unload_embedding_model: model was not loaded, nothing to do")
+        return
+
+    _model = None
+    gc.collect()
+    clear_python_cuda_cache("after embedding model unload")
+    logger.info("Embedding model reference released")
+
+
 def _get_model():
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        if EMBEDDING_DEVICE == "cpu":
+            logger.info("Embedding device configured: cpu")
+        else:
+            logger.warning(
+                "Embedding device is %s; this may exceed VRAM on 4GB GPUs. "
+                "Set EMBEDDING_DEVICE=cpu or use scripts/run_backend_cpu_embeddings.sh "
+                "to avoid CUDA OOM.",
+                EMBEDDING_DEVICE,
+            )
+
+        logger.info(
+            "Loading embedding model '%s' on device '%s'",
+            EMBEDDING_MODEL,
+            EMBEDDING_DEVICE,
+        )
+        _model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
     return _model
 
 
@@ -120,7 +169,7 @@ def _dict_line(label: str, values: dict, limit: int = 20) -> list[str]:
 
 def _embedding_input(chunk: Chunk) -> str:
     lines = []
-    
+
     lines += _line("File", chunk.relative_path)
     lines += _line("Language", chunk.language)
     lines += _line("Type", chunk.chunk_type)
@@ -159,16 +208,16 @@ def _embedding_input(chunk: Chunk) -> str:
     lines += _list_line("Methods", chunk.methods)
     lines += _list_line("File Symbols", chunk.file_symbols)
     lines += _line("Docstring", chunk.docstring)
-    
+
     code = chunk.content or ""
     if code.strip():
         if len(code) > EMBEDDING_INPUT_MAX_CODE_CHARS:
             code = code[:EMBEDDING_INPUT_MAX_CODE_CHARS] + "... [truncated]"
         lines.append("Code:")
         lines.append(code)
-        
+
     final_input = "\n".join(lines)
     if len(final_input) > EMBEDDING_INPUT_MAX_TOTAL_CHARS:
         final_input = final_input[:EMBEDDING_INPUT_MAX_TOTAL_CHARS] + "... [truncated]"
-        
+
     return final_input

@@ -181,3 +181,24 @@ def delete_auth_session(token: str) -> bool:
     with db_cursor() as (_conn, cursor):
         cursor.execute("DELETE FROM auth_sessions WHERE session_token_hash = ?", (token_hash,))
         return bool(cursor.rowcount)
+
+
+def get_or_create_system_user() -> dict:
+    with db_cursor() as (_conn, cursor):
+        row = cursor.execute(
+            """
+            SELECT id, github_user_id, username, avatar_url, created_at, updated_at
+            FROM users
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            return _row_to_user(row)
+    
+    # Fallback: create a system user if none exists
+    return upsert_github_user(
+        "system_github_id",
+        "system_user",
+        "https://avatars.githubusercontent.com/u/9919?v=4"
+    )

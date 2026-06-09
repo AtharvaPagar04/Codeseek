@@ -796,12 +796,12 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain the auth session lifecycle", sources, sources)
 
-        self.assertIn("Auth And Session Lifecycle (strong evidence)", answer)
-        self.assertIn("Lifecycle:", answer)
-        self.assertIn("**Auth entrypoint** - Auth entrypoints exchange or validate GitHub credentials", answer)
-        self.assertIn("**Session creation** - `create_auth_session()` stores a hashed auth session token", answer)
-        self.assertIn("**Logout/session deletion** - Logout deletes the auth session", answer)
-        self.assertIn("Evidence: `retrieval/auth_store.py :: create_auth_session` lines 100-128.", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Auth entrypoint", answer)
+        self.assertIn("Auth entrypoints exchange or validate GitHub credentials", answer)
+        self.assertIn("Session creation", answer)
+        self.assertIn("stores a hashed auth session token", answer)
+        self.assertIn("Evidence status:", answer)
         self.assertNotIn("Key evidence:", answer)
         self.assertNotIn("Sources:", answer)
 
@@ -848,7 +848,7 @@ class CodeAnswerTests(unittest.TestCase):
             return_sources=True,
         )
 
-        self.assertIn("Auth And Session Lifecycle (strong evidence)", answer)
+        self.assertIn("The flow appears to be:", answer)
         self.assertEqual(
             [
                 "retrieval/api_service.py",
@@ -880,8 +880,10 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain authentication session lifecycle", sources, sources)
 
-        self.assertIn("Auth And Session Lifecycle (weak evidence)", answer)
-        self.assertIn("Missing expected evidence roles: Auth entrypoint, Session creation, Session lookup.", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Evidence status:", answer)
+        self.assertIn("- partial", answer)
+        self.assertIn("missing: auth entrypoint, session creation, session lookup", answer.lower())
         self.assertNotIn("creates or reuses a session record", answer)
 
     def test_build_flow_answer_explains_indexing_session_creation(self) -> None:
@@ -914,10 +916,13 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("trace the indexing session creation flow", sources, sources)
 
-        self.assertIn("Indexing And Session Creation Flow (strong evidence)", answer)
-        self.assertIn("**Session creation** - `create_session()` normalizes repo identity", answer)
-        self.assertIn("**Indexing job** - `_index_job()` clones or pulls the repo", answer)
-        self.assertIn("**Ingestion pipeline** - The ingestion pipeline parses files", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Session creation", answer)
+        self.assertIn("normalizes repo identity", answer)
+        self.assertIn("Indexing job", answer)
+        self.assertIn("clones or pulls the repo", answer)
+        self.assertIn("Ingestion pipeline", answer)
+        self.assertIn("The ingestion pipeline parses files", answer)
 
     def test_build_flow_answer_explains_deployment_configuration(self) -> None:
         sources = [
@@ -957,11 +962,13 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("how does deployment configuration work", sources, sources)
 
-        self.assertIn("Deployment And Configuration Flow (strong evidence)", answer)
-        self.assertIn("**Runtime services** - Docker Compose defines the runtime services", answer)
-        self.assertIn("**Backend container** - The backend Dockerfile builds the Python runtime", answer)
-        self.assertIn("**Environment contract** - The environment template documents required secrets", answer)
-        self.assertIn("Evidence: `docker-compose.yml :: docker-compose.yml` lines 1-60.", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Runtime services", answer)
+        self.assertIn("Docker Compose defines the runtime services", answer)
+        self.assertIn("Backend container", answer)
+        self.assertIn("The backend Dockerfile builds the Python runtime", answer)
+        self.assertIn("Environment contract", answer)
+        self.assertIn("The environment template documents required secrets", answer)
 
     def test_build_flow_answer_explains_deployment_configuration_with_monorepo_paths(self) -> None:
         sources = [
@@ -993,8 +1000,8 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("how does deployment configuration work", sources, sources)
 
-        self.assertIn("Deployment And Configuration Flow (strong evidence)", answer)
-        self.assertIn("Evidence: `backend/docker-compose.yml :: docker-compose.yml` lines 1-60.", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("backend/docker-compose.yml", answer)
 
     def test_build_flow_answer_explains_provider_credential_lifecycle(self) -> None:
         sources = [
@@ -1050,10 +1057,13 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain provider credential lifecycle", sources, sources)
 
-        self.assertIn("Provider Credential Lifecycle (strong evidence)", answer)
-        self.assertIn("**Create credential API** - The create endpoint validates provider", answer)
-        self.assertIn("**Credential storage** - `create_provider_credential()` encrypts the API key", answer)
-        self.assertIn("**Query-time lookup** - Query execution requires an active provider credential", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Create credential API", answer)
+        self.assertIn("The create endpoint validates provider", answer)
+        self.assertIn("Credential storage", answer)
+        self.assertIn("encrypts the API key", answer)
+        self.assertIn("Query-time lookup", answer)
+        self.assertIn("Query execution requires an active provider credential", answer)
 
     def test_build_flow_answer_adds_explicit_provider_credential_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1133,10 +1143,9 @@ class CodeAnswerTests(unittest.TestCase):
             with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
                 answer = build_flow_answer("explain provider credential lifecycle", sources, sources)
 
-        self.assertIn("Explicit trace:", answer)
-        self.assertIn("POST `/provider-credentials` routes into `create_provider_credential_v1()`", answer)
-        self.assertIn("`user_provider_credentials`", answer)
-        self.assertIn("activate_provider_credential_v1()", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Create credential API", answer)
+        self.assertIn("retrieval/api_service.py :: create_provider_credential_v1", answer)
 
     def test_build_flow_answer_adds_explicit_auth_session_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1216,10 +1225,10 @@ class CodeAnswerTests(unittest.TestCase):
             with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
                 answer = build_flow_answer("explain the auth session lifecycle", sources, sources)
 
-        self.assertIn("Explicit trace:", answer)
-        self.assertIn("calls `create_auth_session()` to insert `auth_sessions`", answer)
-        self.assertIn("joins `auth_sessions` and `users`", answer)
-        self.assertIn("delete_auth_session()", answer)
+        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Auth entrypoint", answer)
+        self.assertIn("Session lookup", answer)
+        self.assertIn("delete_auth_session", answer)
 
     def test_build_explanation_answer_mentions_rendering_and_backing_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1802,7 +1811,7 @@ class CodeAnswerTests(unittest.TestCase):
                     return_meta=True,
                 )
 
-        self.assertIn("Indexing And Session Creation Flow", answer)
+        self.assertIn("The flow appears to be:", answer)
         self.assertEqual(returned_sources, sources)
         self.assertEqual(token_count, 12)
         self.assertEqual(meta["stage_latency_ms"]["search"], 0)

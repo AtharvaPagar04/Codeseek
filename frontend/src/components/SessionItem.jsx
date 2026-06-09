@@ -39,6 +39,27 @@ function statusBadge(session) {
   if (session.status && session.status !== 'ready') {
     return { label: 'Indexing', className: 'text-warning border-warning/30 bg-warning/10' };
   }
+  
+  const freshness = session.repo_status?.status;
+  if (freshness === 'up_to_date') {
+    return { label: 'Fresh', className: 'text-online border-online/30 bg-online/10' };
+  }
+  if (freshness === 'out_of_date') {
+    return { label: 'Stale', className: 'text-warning border-warning/30 bg-warning/10' };
+  }
+  if (freshness === 'dirty_worktree') {
+    return { label: 'Dirty', className: 'text-offline border-offline/30 bg-offline/10' };
+  }
+  if (freshness === 'indexing') {
+    return { label: 'Indexing', className: 'text-warning border-warning/30 bg-warning/10' };
+  }
+  if (freshness === 'failed') {
+    return { label: 'Failed', className: 'text-offline border-offline/30 bg-offline/10' };
+  }
+  if (freshness === 'unknown' || freshness === 'error' || freshness === 'missing') {
+    return { label: 'Unknown', className: 'text-text-muted border-border bg-surface-2' };
+  }
+
   return { label: 'Ready', className: 'text-online border-online/30 bg-online/10' };
 }
 
@@ -51,7 +72,12 @@ function getRelativeTime(iso) {
   }
 }
 
-export default function SessionItem({ session, isActive, onSelect, onDelete }) {
+export default function SessionItem({
+  session,
+  isActive,
+  onSelect,
+  onDelete,
+}) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const badge = statusBadge(session);
 
@@ -94,16 +120,18 @@ export default function SessionItem({ session, isActive, onSelect, onDelete }) {
             {badge.label}
           </span>
 
-          {/* Delete button — visible on hover */}
-          <button
-            onClick={handleDelete}
-            type="button"
-            title="Delete session"
-            className="opacity-0 group-hover:opacity-100 shrink-0 text-text-muted hover:text-offline transition-all mt-0.5"
-            aria-label="Delete session"
-          >
-            <TrashIcon />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Delete button — visible on hover */}
+            <button
+              onClick={handleDelete}
+              type="button"
+              title="Delete session"
+              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-offline transition-all mt-0.5"
+              aria-label="Delete session"
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </div>
 
         <div className="text-2xs text-text-muted mt-1">

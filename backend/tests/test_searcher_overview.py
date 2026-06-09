@@ -8,6 +8,13 @@ from retrieval.searcher import _inject_overview_candidates, _overview_priority, 
 
 
 class SearcherOverviewTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._lexical_patcher = patch("retrieval.searcher._lexical_search", return_value=[])
+        self._lexical_patcher.start()
+
+    def tearDown(self) -> None:
+        self._lexical_patcher.stop()
+
     def test_overview_priority_prefers_representative_files(self) -> None:
         repo_summary = {"relative_path": "__repo_summary__.md", "chunk_type": "repo_summary", "file_type": "repo_summary"}
         readme = {"relative_path": "README.md", "symbol_name": "README", "chunk_type": "file_summary"}

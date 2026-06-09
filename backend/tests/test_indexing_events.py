@@ -195,7 +195,7 @@ class TestPipelineEventCallback:
         # Stub out stages that need external services.
         monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
         monkeypatch.setattr(pipeline_main, "store_chunks",
-                            lambda chunks, counters, collection_name=None: setattr(counters, "embeddings_stored", len(chunks)))
+                            lambda chunks, counters, collection_name=None, **kwargs: setattr(counters, "embeddings_stored", len(chunks)))
         monkeypatch.setattr(pipeline_main, "validate_collection_binding", lambda *a: None)
         monkeypatch.setattr(pipeline_main, "delete_chunks_for_paths", lambda *a, **kw: None)
 

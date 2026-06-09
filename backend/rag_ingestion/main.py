@@ -8,13 +8,23 @@ logger = logging.getLogger(__name__)
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
+    ENABLE_GPU_CLEANUP_AFTER_STAGES,
     ENABLE_INCREMENTAL_FILE_SKIP,
+    LOCAL_LLM_UNLOAD_MODEL,
     RECREATE_COLLECTION_EACH_RUN,
+    UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING,
+    UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS,
+    UNLOAD_LOCAL_LLM_AFTER_INDEXING,
+)
+from rag_ingestion.utils.gpu_cleanup import (
+    clear_python_cuda_cache,
+    log_gpu_memory_snapshot,
+    unload_ollama_model,
 )
 from retrieval.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
-from rag_ingestion.stages.embedder import embed_chunks
+from rag_ingestion.stages.embedder import embed_chunks, unload_embedding_model
 from rag_ingestion.stages.filtering import filter_files
 from rag_ingestion.stages.language import detect_languages
 from rag_ingestion.stages.loader import load_repository
@@ -47,10 +57,25 @@ def run_pipeline(
     source: str,
     collection_name: str | None = None,
     enable_chunk_descriptions: bool | None = None,
+    enable_llm_label_refinement: bool | None = None,
     provider_config: dict | None = None,
     event_callback=None,
+    recreate_collection: bool | None = None,
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
+    from rag_ingestion.config import ENABLE_LLM_LABEL_REFINEMENT
+    should_refine_labels = (
+        ENABLE_LLM_LABEL_REFINEMENT
+        if enable_llm_label_refinement is None
+        else enable_llm_label_refinement
+    )
+    should_recreate_collection = (
+        RECREATE_COLLECTION_EACH_RUN
+        if recreate_collection is None
+        else recreate_collection
+    )
+    logger.info("LLM label refinement enabled for session: %s", should_refine_labels)
+
     counters = PipelineCounters()
 
     def emit(stage, message, level="info", progress=None, total=None, metadata=None):
@@ -92,7 +117,8 @@ def run_pipeline(
     previous_state: dict[str, dict[str, int]] = {}
     next_state: dict[str, dict[str, int]] = {}
     modified_paths: list[str] = []  # files that were re-parsed (changed) in incremental mode
-    if ENABLE_INCREMENTAL_FILE_SKIP:
+    use_incremental_skip = ENABLE_INCREMENTAL_FILE_SKIP and not should_recreate_collection
+    if use_incremental_skip:
         previous_state = load_ingestion_state(repository["repository_root"])
 
     # --- Parse + chunk ---
@@ -102,7 +128,7 @@ def run_pipeline(
         if file.skipped:
             continue
         signature = build_file_signature(file)
-        file_was_unchanged = ENABLE_INCREMENTAL_FILE_SKIP and is_file_unchanged(
+        file_was_unchanged = use_incremental_skip and is_file_unchanged(
             file.relative_path, signature, previous_state
         )
         if file_was_unchanged:
@@ -113,7 +139,7 @@ def run_pipeline(
             log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
 
         # Only track as modified if the file actually changed (not a forced evidence refresh)
-        if (ENABLE_INCREMENTAL_FILE_SKIP and not RECREATE_COLLECTION_EACH_RUN
+        if (use_incremental_skip and not should_recreate_collection
                 and not file_was_unchanged
                 and file.relative_path in previous_state):
             modified_paths.append(file.relative_path)
@@ -125,6 +151,12 @@ def run_pipeline(
         for chunk in chunks:
             build_metadata(chunk)
             chunk.summary = generate_summary(chunk)
+
+        # Copy file_type to all chunks of the same file
+        file_type = next((c.file_type for c in chunks if c.file_type), "")
+        if file_type:
+            for chunk in chunks:
+                chunk.file_type = file_type
 
         counters.chunks_generated += len(chunks)
         all_chunks.extend(chunks)
@@ -160,14 +192,25 @@ def run_pipeline(
             event_callback=event_callback,
         )
 
+        # --- GPU cleanup after description generation ---
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after chunk description generation")
+            log_gpu_memory_snapshot("after chunk description generation")
+
+        # --- Optional: unload Ollama model after descriptions (before embedding) ---
+        if UNLOAD_LOCAL_LLM_AFTER_DESCRIPTIONS and LOCAL_LLM_UNLOAD_MODEL:
+            unload_ollama_model(LOCAL_LLM_UNLOAD_MODEL)
+            clear_python_cuda_cache("after ollama unload post-descriptions")
+            log_gpu_memory_snapshot("after ollama unload post-descriptions")
+
         # --- Labeling ---
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS
+        from rag_ingestion.config import ENABLE_CHUNK_LABELS, ENABLE_LLM_LABEL_REFINEMENT
         if ENABLE_CHUNK_LABELS:
             from rag_ingestion.stages.labeler import label_chunks
             repo_name = repository.get("repository_name", "")
             repo_root = repository.get("repository_root", "")
             all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
-            
+
             labeled_count = sum(1 for c in all_chunks if getattr(c, "labels", None))
             logger.info(
                 "Labeled %s/%s chunks before embedding",
@@ -183,6 +226,14 @@ def run_pipeline(
                     chunk.code_intent,
                 )
 
+            # --- Optional LLM label refinement (Group 12, disabled by default) ---
+            if should_refine_labels:
+                from rag_ingestion.stages.labeler import refine_chunk_labels_with_llm
+                all_chunks = refine_chunk_labels_with_llm(
+                    all_chunks,
+                    provider_config=provider_config,
+                    event_callback=event_callback,
+                )
 
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
@@ -193,20 +244,41 @@ def run_pipeline(
              level="success", progress=counters.embeddings_generated,
              total=len(all_chunks))
 
+        # --- GPU cleanup after embedding ---
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after embedding generation")
+            log_gpu_memory_snapshot("after embedding generation")
+
         # --- Storage: delete stale chunks for modified files first ---
         if modified_paths:
             emit("storage", f"Deleting stale chunks for {len(modified_paths)} modified file(s)…")
             delete_chunks_for_paths(modified_paths, collection_name=selected_collection)
 
         emit("storage", f"Storing {len(embedded_chunks)} chunks in Qdrant…")
-        store_chunks(embedded_chunks, counters, collection_name=selected_collection)
+        store_chunks(
+            embedded_chunks,
+            counters,
+            collection_name=selected_collection,
+            recreate_collection=should_recreate_collection,
+        )
         emit("storage",
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
              level="success", progress=counters.embeddings_stored,
              total=counters.embeddings_stored)
 
+        # --- Final cleanup: unload models and free VRAM ---
+        if UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING:
+            unload_embedding_model()
+
+        if UNLOAD_LOCAL_LLM_AFTER_INDEXING and LOCAL_LLM_UNLOAD_MODEL:
+            unload_ollama_model(LOCAL_LLM_UNLOAD_MODEL)
+
+        if ENABLE_GPU_CLEANUP_AFTER_STAGES:
+            clear_python_cuda_cache("after indexing complete")
+            log_gpu_memory_snapshot("after indexing complete")
+
     if ENABLE_INCREMENTAL_FILE_SKIP:
-        if not RECREATE_COLLECTION_EACH_RUN:
+        if not should_recreate_collection:
             removed_paths = sorted(set(previous_state) - set(next_state))
             if removed_paths:
                 emit("storage", f"Deleting chunks for {len(removed_paths)} removed file(s)…")

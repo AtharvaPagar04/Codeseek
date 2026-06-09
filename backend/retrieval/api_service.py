@@ -23,6 +23,7 @@ from retrieval.auth_store import (
     delete_auth_session,
     get_user_for_session_token,
     upsert_github_user,
+    get_or_create_system_user,
 )
 from retrieval.chat_store import (
     append_message,
@@ -170,7 +171,25 @@ _query_lock = threading.Lock()
 
 def _cors_origins() -> list[str]:
     raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
+        local_dev_origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://0.0.0.0:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ]
+        for local_origin in local_dev_origins:
+            if local_origin not in origins:
+                origins.append(local_origin)
+    return origins
+
+
+def _cors_origin_regex() -> str | None:
+    if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
+        return r"^http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$"
+    return None
 
 
 def _is_https_request(request: Request) -> bool:
@@ -193,6 +212,8 @@ def _allow_http_request(request: Request) -> bool:
 
 @app.middleware("http")
 async def enforce_https_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if ENFORCE_HTTPS and not _allow_http_request(request) and not _is_https_request(request):
         return JSONResponse(
             status_code=400,
@@ -204,6 +225,7 @@ async def enforce_https_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
+    allow_origin_regex=_cors_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -246,6 +268,10 @@ class SessionCreateRequest(BaseModel):
     tenant_id: str | None = None
     github_token: str | None = None
     enable_chunk_descriptions: bool = False
+
+
+class SessionIndexingOptionsUpdateRequest(BaseModel):
+    refine_labels_with_llm: bool
 
 
 class GithubAuthCodeRequest(BaseModel):
@@ -358,6 +384,10 @@ def _enrich_provider_runtime_list(records: list[dict]) -> list[dict]:
 
 @app.on_event("startup")
 def startup_checks() -> None:
+    tenant = os.getenv("CODESEEK_TENANT_ID", "local")
+    print(f"[api.cors] tenant={tenant}")
+    print(f"[api.cors] allowed_origins={_cors_origins()}")
+    print(f"[api.cors] allow_origin_regex={_cors_origin_regex()}")
     _startup_errors.clear()
     init_db()
     missing = []
@@ -587,17 +617,42 @@ def _query_impl(
     started = time.perf_counter()
     path = "/api/v1/query"
     log_event("api.query.start", request_id, path="/query")
-    token = _require_auth(authorization)
+    
+    # Authenticate: EITHER cookie OR API Key
+    auth_user = None
+    token = None
     client_ip = request.client.host if request.client else "unknown"
+
+    if session_token:
+        auth_user = _current_auth_user(session_token)
+        if auth_user:
+            token = f"session:{auth_user['id']}"
+
+    if not auth_user:
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Please sign in again.")
+        
+        expected = os.getenv(API_KEY_ENV, "").strip()
+        if not expected:
+            raise HTTPException(
+                status_code=500, detail=f"{API_KEY_ENV} is not configured on server"
+            )
+        try:
+            token = _auth_key(authorization)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        if token != expected:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        auth_user = get_or_create_system_user()
+
     _enforce_rate_limit(f"{token}:{client_ip}")
     query_text = (body.query or body.question or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
     previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
     previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
-    auth_user = _current_auth_user(session_token)
-    if not auth_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         provider_config = get_active_provider_credential(auth_user["id"])
     except ValueError as e:
@@ -976,6 +1031,41 @@ def get_session_v1(
     return {"session": session}
 
 
+@v1.get("/sessions/{session_id}/indexing-options")
+def get_session_indexing_options_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_indexing_options
+        options = get_session_indexing_options(session_id, auth_user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return {"session_id": session_id, "indexing_options": options}
+
+
+@v1.patch("/sessions/{session_id}/indexing-options")
+def patch_session_indexing_options_v1(
+    session_id: str,
+    body: SessionIndexingOptionsUpdateRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import update_session_indexing_options
+        options = update_session_indexing_options(
+            session_id, auth_user["id"], refine_labels_with_llm=body.refine_labels_with_llm
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return {"session_id": session_id, "indexing_options": options}
+
+
 @v1.get("/sessions/{session_id}/messages")
 def list_session_messages_v1(
     session_id: str,
@@ -1081,6 +1171,17 @@ def retry_session_v1(
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+            from retrieval.session_indexer import _session_provider_configs
+            _session_provider_configs[session["id"]] = provider_config
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     session = retry_indexing(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1092,6 +1193,76 @@ def retry_session_v1(
         user_id=auth_user["id"],
     )
     return {"session": session}
+
+
+@v1.get("/sessions/{session_id}/repo-status")
+def get_session_repo_status_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_repo_status
+        status_info = get_session_repo_status(session_id, auth_user["id"])
+        return status_info
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@v1.get("/sessions/{session_id}/evaluation/latest")
+def get_latest_evaluation_report_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    from retrieval.eval_reports import get_latest_evaluation_report
+    return get_latest_evaluation_report(session_id)
+
+
+
+@v1.post("/sessions/{session_id}/index-latest")
+def index_latest_session_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("status") == "indexing":
+        raise HTTPException(status_code=409, detail="Session is already indexing")
+
+    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+            from retrieval.session_indexer import _session_provider_configs
+            _session_provider_configs[session["id"]] = provider_config
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        from retrieval.session_indexer import index_latest_version
+        res = index_latest_version(session_id, auth_user["id"])
+        log_event(
+            "api.session.index_latest",
+            new_request_id(),
+            session_id=session_id,
+            user_id=auth_user["id"],
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @v1.get("/sessions/{session_id}/indexing-events")

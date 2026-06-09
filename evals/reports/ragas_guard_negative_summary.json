@@ -1,0 +1,13 @@
+{
+  "status": "ERROR",
+  "errors": [
+    {
+      "type": "SESSION_BINDING_MISMATCH",
+      "message": "Session binding mismatch: expected repo_root /home/arch/DEV/CodeSeek but got /home/arch/DEV/CodeSeek/backend; Session binding mismatch: expected collection repository_chunks__local__codeseek but got repository_chunks__local__backend",
+      "expected_repo_root": "/home/arch/DEV/CodeSeek",
+      "actual_repo_root": "/home/arch/DEV/CodeSeek/backend",
+      "expected_collection": "repository_chunks__local__codeseek",
+      "actual_collection": "repository_chunks__local__backend"
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+{
+  "status": "PASS",
+  "schema_version": "ragas_calibration.v1",
+  "total_queries": 5,
+  "traces_generated": 5,
+  "ragas_status": "PASS",
+  "score_summary": {
+    "faithfulness_avg": null,
+    "answer_relevancy_avg": 0.9442,
+    "context_precision_avg": 0.0
+  },
+  "diagnostic_summary": {
+    "avg_answer_length_chars": 178.6,
+    "avg_context_count": 0.6,
+    "expected_file_context_hit_rate": 0.0,
+    "answer_mentions_expected_file_rate": 0.67
+  },
+  "queries": [
+    {
+      "query_id": "q004",
+      "question": "Show me where Qdrant upsert happens",
+      "deterministic_diagnostics": {
+        "answer_length_chars": 135,
+        "context_count": 2,
+        "total_context_chars": 8000,
+        "top_context_files": [
+          "rag_ingestion/stages/storage.py",
+          "retrieval/code_answers.py"
+        ],
+        "expected_file_found_in_contexts": false,
+        "expected_answer_terms_found": {
+          "storage.py": true,
+          "client.upsert": true,
+          "Qdrant": true
+        },
+        "answer_mentions_expected_file": true,
+        "answer_mentions_any_top_context_file": true
+      },
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.9078,
+        "context_precision": 0.0
+      },
+      "interpretation": "answer_too_short_for_ragas"
+    },
+    {
+      "query_id": "q007",
+      "question": "Where is the FastAPI app initialized?",
+      "deterministic_diagnostics": {
+        "answer_length_chars": 167,
+        "context_count": 1,
+        "total_context_chars": 4000,
+        "top_context_files": [
+          "retrieval/api_service.py"
+        ],
+        "expected_file_found_in_contexts": false,
+        "expected_answer_terms_found": {
+          "FastAPI": true,
+          "api_service.py": true
+        },
+        "answer_mentions_expected_file": true,
+        "answer_mentions_any_top_context_file": true
+      },
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.9806,
+        "context_precision": 0.0
+      },
+      "interpretation": "answer_too_short_for_ragas"
+    },
+    {
+      "query_id": "q008",
+      "question": "Where is environment variable handling implemented?",
+      "deterministic_diagnostics": {
+        "answer_length_chars": 197,
+        "context_count": 0,
+        "total_context_chars": 0,
+        "top_context_files": [],
+        "expected_file_found_in_contexts": false,
+        "expected_answer_terms_found": {
+          "config.py": false,
+          "environment": false
+        },
+        "answer_mentions_expected_file": false,
+        "answer_mentions_any_top_context_file": false
+      },
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null
+      },
+      "interpretation": "answer_too_short_for_ragas"
+    },
+    {
+      "query_id": "q043",
+      "question": "What does this repo do?",
+      "deterministic_diagnostics": {
+        "answer_length_chars": 197,
+        "context_count": 0,
+        "total_context_chars": 0,
+        "top_context_files": [],
+        "expected_file_found_in_contexts": false,
+        "expected_answer_terms_found": {
+          "retrieval": false,
+          "repository": false,
+          "CodeSeek": false
+        },
+        "answer_mentions_expected_file": false,
+        "answer_mentions_any_top_context_file": false
+      },
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null
+      },
+      "interpretation": "answer_too_short_for_ragas"
+    },
+    {
+      "query_id": "q_auth",
+      "question": "How does auth work?",
+      "deterministic_diagnostics": {
+        "answer_length_chars": 197,
+        "context_count": 0,
+        "total_context_chars": 0,
+        "top_context_files": [],
+        "expected_file_found_in_contexts": false,
+        "expected_answer_terms_found": {
+          "auth": true,
+          "session": true
+        },
+        "answer_mentions_expected_file": false,
+        "answer_mentions_any_top_context_file": false
+      },
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null
+      },
+      "interpretation": "answer_too_short_for_ragas"
+    }
+  ],
+  "ragas_runtime": {
+    "timeout": 600,
+    "max_workers": 1,
+    "max_retries": 1,
+    "metrics_requested_raw": "answer_relevancy,context_precision",
+    "metrics_selected": [
+      "answer_relevancy",
+      "context_precision"
+    ],
+    "run_config_available": true
+  }
+}

@@ -14,7 +14,10 @@ CONTENT_EXCERPT_CHARS = 12000
 
 
 def store_chunks(
-    chunks: list[Chunk], counters: PipelineCounters, collection_name: str | None = None
+    chunks: list[Chunk],
+    counters: PipelineCounters,
+    collection_name: str | None = None,
+    recreate_collection: bool | None = None,
 ) -> None:
     """Ensure the collection exists and upsert chunks by deterministic IDs."""
     from qdrant_client import QdrantClient
@@ -26,6 +29,7 @@ def store_chunks(
         client=client,
         collection_name=collection,
         vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        recreate_collection=recreate_collection,
     )
 
     points = [
@@ -68,8 +72,18 @@ def delete_chunks_for_paths(
     )
 
 
-def _ensure_collection(client, vectors_config, collection_name: str) -> None:
-    if RECREATE_COLLECTION_EACH_RUN:
+def _ensure_collection(
+    client,
+    vectors_config,
+    collection_name: str,
+    recreate_collection: bool | None = None,
+) -> None:
+    should_recreate = (
+        RECREATE_COLLECTION_EACH_RUN
+        if recreate_collection is None
+        else recreate_collection
+    )
+    if should_recreate:
         client.recreate_collection(
             collection_name=collection_name,
             vectors_config=vectors_config,

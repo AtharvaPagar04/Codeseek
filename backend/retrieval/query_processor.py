@@ -227,8 +227,64 @@ ARCHITECTURE_FILES = [
 ]
 
 
+def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
+    """Call active LLM provider to classify the query intent."""
+    import os
+    from retrieval.llm import _chat_completion_request
+    from retrieval.config import (
+        LOCAL_LLM_BASE_URL,
+        LOCAL_LLM_PRIMARY_MODEL,
+        GROQ_MODEL,
+    )
+    
+    provider = "local"
+    api_key = ""
+    model = LOCAL_LLM_PRIMARY_MODEL
+    base_url = LOCAL_LLM_BASE_URL
+    
+    if os.getenv("GROQ_API_KEY"):
+        provider = "groq"
+        api_key = os.getenv("GROQ_API_KEY")
+        model = GROQ_MODEL
+        base_url = ""
+    elif os.getenv("OPENAI_API_KEY"):
+        provider = "openai"
+        api_key = os.getenv("OPENAI_API_KEY")
+        model = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
+        base_url = ""
+        
+    prompt = (
+        f"Classify the query intent into exactly one of these categories:\n"
+        f"OVERVIEW, ARCHITECTURE, TECH_STACK, EXPLANATION, SYMBOL, FILE, TRACE, DEPENDENCY, CONFIG, CODE_REQUEST, FOLLOWUP, LOW_CONTEXT, SEMANTIC.\n\n"
+        f"Query: '{query}'\n"
+        f"Response (single word only):"
+    )
+    
+    response = _chat_completion_request(
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        timeout_seconds=timeout_ms / 1000.0,
+        base_url=base_url,
+        system_prompt="You are a query intent classifier. Respond with exactly one category name from the list, in uppercase.",
+        max_tokens=max_tokens,
+    )
+    
+    from retrieval.llm import _extract_message_content
+    result = _extract_message_content(response).strip().upper()
+    return result
+
+
 def process_query(raw_query: str) -> dict:
     """Classify intent and extract symbols/file hints from query text."""
+    import time
+    from retrieval.config import (
+        ENABLE_LLM_QUERY_CLASSIFIER,
+        QUERY_CLASSIFIER_MAX_TOKENS,
+        QUERY_CLASSIFIER_TIMEOUT_MS,
+    )
+    
     query = raw_query.strip()
     lower = query.lower()
 
@@ -257,6 +313,28 @@ def process_query(raw_query: str) -> dict:
 
     _inject_config_files(query, entities)
 
+    classifier_mode = "deterministic"
+    classifier_latency_ms = 0.0
+    classifier_fallback_used = False
+
+    if ENABLE_LLM_QUERY_CLASSIFIER:
+        classifier_mode = "llm"
+        t0 = time.perf_counter()
+        try:
+            llm_intent = _llm_classify_intent(
+                query,
+                timeout_ms=QUERY_CLASSIFIER_TIMEOUT_MS,
+                max_tokens=QUERY_CLASSIFIER_MAX_TOKENS
+            )
+            if llm_intent in INTENT_FAMILIES:
+                intent_scores = {intent_type: 0.0 for intent_type in INTENT_FAMILIES}
+                intent_scores[llm_intent] = 1.0
+            else:
+                classifier_fallback_used = True
+        except Exception:
+            classifier_fallback_used = True
+        classifier_latency_ms = (time.perf_counter() - t0) * 1000.0
+
     primary_intent = max(intent_scores, key=intent_scores.get)
     confidence = float(intent_scores.get(primary_intent, 0.0))
     return {
@@ -268,6 +346,9 @@ def process_query(raw_query: str) -> dict:
         "is_followup": primary_intent == "FOLLOWUP" or intent_scores.get("FOLLOWUP", 0.0) >= 0.6,
         "topic_shift": False,
         "confidence": confidence,
+        "classifier_mode": classifier_mode,
+        "classifier_latency_ms": round(classifier_latency_ms, 2),
+        "classifier_fallback_used": classifier_fallback_used,
     }
 
 
@@ -572,11 +653,8 @@ def _has_tech_stack_markers(lower: str) -> bool:
 
 
 def _has_followup_markers(lower: str) -> bool:
-    for phrase in FOLLOWUP_PHRASES:
-        if phrase in lower:
-            return True
-    tokens = {match.group(0).lower() for match in WORD_RE.finditer(lower)}
-    return bool(tokens & FOLLOWUP_TOKENS)
+    from retrieval.query_intent import regex_match_explicit_followup_terms
+    return regex_match_explicit_followup_terms(lower)
 
 
 def _has_code_request_markers(lower: str) -> bool:
