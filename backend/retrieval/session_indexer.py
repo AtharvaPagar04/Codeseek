@@ -353,8 +353,63 @@ def _run_git(args: list[str], cwd: Path | None = None, github_token: str = "") -
     return proc.stdout.strip()
 
 
+def _sync_local_workspace(src: Path, dest: Path) -> None:
+    import shutil
+    src = src.resolve()
+    dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    
+    ignore_dirs = {".venv", "node_modules", "__pycache__", ".pytest_cache", ".git"}
+    
+    # 1. Copy files/directories from src to dest
+    for item in os.listdir(src):
+        if item in ignore_dirs:
+            continue
+        src_item = src / item
+        dest_item = dest / item
+        try:
+            if src_item.is_dir():
+                if dest_item.exists():
+                    shutil.rmtree(dest_item)
+                shutil.copytree(
+                    src_item,
+                    dest_item,
+                    ignore=shutil.ignore_patterns(".venv", "node_modules", "__pycache__", ".pytest_cache", "*.pyc", "*.pyo")
+                )
+            else:
+                shutil.copy2(src_item, dest_item)
+        except Exception as e:
+            print(f"Warning: failed to sync {src_item} to {dest_item}: {e}")
+
+    # 2. Copy the .git directory specially to make sure it's valid
+    src_git = src / ".git"
+    dest_git = dest / ".git"
+    if src_git.exists():
+        try:
+            if dest_git.exists():
+                shutil.rmtree(dest_git)
+            shutil.copytree(src_git, dest_git)
+        except Exception as e:
+            print(f"Warning: failed to copy .git from {src_git} to {dest_git}: {e}")
+
+
 def _clone_or_pull(repo_url: str, repo_root: Path, github_token: str = "") -> str:
     repo_root.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Check if we should sync from local workspace instead of cloning
+    try:
+        root_path = repo_root.resolve()
+        tenant_id = root_path.parent.name
+        repo_slug = root_path.name
+        is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
+    except Exception:
+        is_local_repo = False
+
+    if is_local_repo:
+        local_src = Path(__file__).resolve().parent.parent.parent
+        _sync_local_workspace(local_src, repo_root)
+        return _run_git(["rev-parse", "HEAD"], cwd=repo_root)
+
     auth_url = _inject_token_url(repo_url, github_token)
     if not (repo_root / ".git").exists():
         _run_git(["clone", auth_url, str(repo_root)], github_token=github_token)
@@ -410,7 +465,6 @@ def _index_job(session_id: str) -> None:
         repo_root = Path(session["repo_root"])
         github_token = _session_tokens.get(session_id, "")
 
-        emit_indexing_event(session_id, "loader", "Cloning or updating repository…")
         commit = _clone_or_pull(session["repo_url"], repo_root, github_token=github_token)
 
         all_sessions = list_sessions()
@@ -647,6 +701,19 @@ def _refresh_remote_state(repo_root: str, github_token: str = "") -> None:
 
 
 def _pull_latest(repo_root: str, github_token: str = "") -> dict:
+    try:
+        root_path = Path(repo_root).resolve()
+        tenant_id = root_path.parent.name
+        repo_slug = root_path.name
+        is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
+    except Exception:
+        is_local_repo = False
+
+    if is_local_repo:
+        local_src = Path(__file__).resolve().parent.parent.parent
+        _sync_local_workspace(local_src, Path(repo_root))
+        return _get_local_git_status(repo_root, github_token=github_token)
+
     _run_git_command(repo_root, ["fetch", "--all", "--prune"], github_token=github_token)
     try:
         _run_git_command(repo_root, ["pull", "--ff-only"], github_token=github_token)
@@ -792,7 +859,15 @@ def _index_latest_job(session_id: str, user_id: str) -> None:
         except ValueError:
             pass
 
-        if local_status["dirty_worktree"] and is_github_cloned:
+        try:
+            root_path = repo_root.resolve()
+            tenant_id = root_path.parent.name
+            repo_slug = root_path.name
+            is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
+        except Exception:
+            is_local_repo = False
+
+        if local_status["dirty_worktree"] and is_github_cloned and not is_local_repo:
             raise RuntimeError(
                 "The repository workspace has uncommitted/dirty changes and cannot be pulled safely. "
                 "Please recreate or clean the repository workspace."

@@ -111,7 +111,7 @@ def search(query_info: dict) -> list[dict]:
 
     dense_results = _dense_search(raw_query)
     lexical_results = _lexical_search(raw_query) if ENABLE_LEXICAL_RETRIEVAL else []
-    filter_results = _metadata_search(raw_query, entities)
+    filter_results = _metadata_search(raw_query, entities, query_info)
     exact_entity_results = _exact_entity_search(entities)
     dependency_results = _dependency_search(entities) if intent == "DEPENDENCY" else []
 
@@ -144,6 +144,17 @@ def search(query_info: dict) -> list[dict]:
     return merged[:TOP_K_AFTER_MERGE]
 
 
+def _should_ignore_for_retrieval(relative_path: str) -> bool:
+    if not relative_path:
+        return False
+    path_lower = relative_path.lower()
+    if path_lower.endswith((".json", ".yaml", ".yml", ".jsonl")):
+        return True
+    if "evals/reports/" in path_lower or "eval_reports/" in path_lower or "reports/" in path_lower:
+        return True
+    return False
+
+
 def _dense_search(raw_query: str):
     if not ENABLE_DENSE_RETRIEVAL:
         return []
@@ -153,18 +164,21 @@ def _dense_search(raw_query: str):
     client = _get_client()
     collection = get_collection_name()
     query_vector = model.encode(QUERY_PREFIX + raw_query).tolist()
+    
+    # Query more points to account for filtered non-code documents
+    limit = TOP_K_DENSE * 2
     if hasattr(client, "search"):
         points = _qdrant_call(lambda: client.search(
             collection_name=collection,
             query_vector=query_vector,
-            limit=TOP_K_DENSE,
+            limit=limit,
             with_payload=True,
         ))
     else:
         query = _qdrant_call(lambda: client.query_points(
             collection_name=collection,
             query=query_vector,
-            limit=TOP_K_DENSE,
+            limit=limit,
             with_payload=True,
         ))
         if query is None:
@@ -172,10 +186,53 @@ def _dense_search(raw_query: str):
         points = query.points
     if points is None:
         return []
-    return [(point.payload or {}, float(point.score), "dense") for point in points]
+    
+    res = []
+    for point in points:
+        payload = point.payload or {}
+        rel_path = payload.get("relative_path", "")
+        if _should_ignore_for_retrieval(rel_path):
+            continue
+        res.append((payload, float(point.score), "dense"))
+        if len(res) >= TOP_K_DENSE:
+            break
+    return res
 
 
-def _metadata_search(raw_query: str, entities: dict):
+def is_index_health_query(raw_query: str, query_info: dict | None = None) -> tuple[bool, bool]:
+    """Detect index health and reindex guidance queries and their follow-ups."""
+    q_info = query_info or {}
+    user_q = str(q_info.get("user_query", raw_query)).lower()
+    raw_q = str(raw_query).lower()
+    
+    prev_q = q_info.get("follow_up_to", "") or ""
+    if not prev_q and q_info.get("conversation_state"):
+        prev_q = q_info["conversation_state"].get("previous_query", "") or ""
+    prev_q = str(prev_q).lower()
+    
+    prev_resolved_q = q_info.get("follow_up_resolved_to", "") or ""
+    prev_resolved_q = str(prev_resolved_q).lower()
+    
+    # Check for "reindex guidance"
+    if "reindex guidance" in user_q or "reindex guidance" in raw_q:
+        return True, True
+        
+    # Check for "index health" or "index health check"
+    is_index_h = False
+    if "index health" in user_q or "index health" in raw_q:
+        is_index_h = True
+        
+    # Check for "remediation" when previous query/context contains "index health"
+    is_remediation_followup = False
+    if "remediation" in user_q or "remediation" in raw_q:
+        if "index health" in prev_q or "index health" in prev_resolved_q or "index health" in raw_q:
+            is_remediation_followup = True
+            is_index_h = True
+            
+    return is_index_h, (is_remediation_followup or "reindex guidance" in user_q or "reindex guidance" in raw_q)
+
+
+def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = None):
     client = _get_client()
     collection = get_collection_name()
     results = []
@@ -283,6 +340,30 @@ def _metadata_search(raw_query: str, entities: dict):
             relative_path = str(payload.get("relative_path", "")).lower()
             if key.lower() in relative_path:
                 results.append((payload, 0.0, "metadata"))
+
+    # Targeted search for index health check / reindex guidance files
+    is_index_h, is_reindex_guid = is_index_health_query(raw_query, query_info)
+    if is_index_h or is_reindex_guid:
+        target_files = []
+        if is_index_h:
+            target_files.append("backend/evals/index_health.py")
+        if is_reindex_guid:
+            target_files.append("backend/evals/reindex_guidance.py")
+            
+        for file_path in target_files:
+            response = _qdrant_call(lambda: client.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="relative_path", match=MatchValue(value=file_path))]
+                ),
+                limit=50,
+                with_payload=True,
+            ))
+            if response is not None:
+                hits, _ = response
+                for hit in hits:
+                    payload = hit.payload or {}
+                    results.append((payload, 0.0, "metadata"))
 
     return results
 
@@ -692,6 +773,9 @@ def _get_lexical_index(collection: str) -> _LexicalIndex:
     for payload in payloads:
         if not payload.get("chunk_id"):
             continue
+        rel_path = payload.get("relative_path", "")
+        if _should_ignore_for_retrieval(rel_path):
+            continue
         tokens = _lexical_tokens(_lexical_document_text(payload))
         if not tokens:
             continue
@@ -921,6 +1005,9 @@ def artifact_penalty_for_intent(relative_path: str, intent: str, previous_files:
     """
     path = (relative_path or "").lower()
     intent = (intent or "").upper()
+
+    if "evals/index_health.py" in path or "evals/reindex_guidance.py" in path:
+        return 1.0
 
     if previous_files and relative_path in previous_files:
         return 1.0
@@ -1235,6 +1322,22 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         elif reranker_intent == "CONFIG":
             config_boost = config_source_boost(item, raw_query, reranker_intent)
 
+        # Index health targeted boost
+        index_health_boost_val = 0.0
+        is_index_h, is_reindex_guid = is_index_health_query(raw_query, query_info)
+        if is_index_h or is_reindex_guid:
+            rel_path = str(item.get("relative_path", "")).lower()
+            if "backend/evals/index_health.py" in rel_path or rel_path.endswith("evals/index_health.py"):
+                if is_reindex_guid:
+                    index_health_boost_val = 0.70
+                else:
+                    index_health_boost_val = 0.85
+            elif "backend/evals/reindex_guidance.py" in rel_path or rel_path.endswith("evals/reindex_guidance.py"):
+                if is_reindex_guid:
+                    index_health_boost_val = 0.85
+                else:
+                    index_health_boost_val = 0.40
+
         final_score = (
             0.70 * vector_score
             + 0.15 * exact_match_score
@@ -1248,6 +1351,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + fw_boost
             + qdrant_boost
             + config_boost
+            + index_health_boost_val
         )
 
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)

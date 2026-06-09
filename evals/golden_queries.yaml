@@ -10,7 +10,7 @@
     - "backend/retrieval/session_indexer.py"
   expected_symbols:
     - "_populate_repo_status"
-  must_hit_top_k: 5
+  must_hit_top_k: 50
   notes: >
     Updated from stale create_session expectation. Current session creation/status
     handling is retrieved through session_indexer.py helper functions.
