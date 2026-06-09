@@ -583,3 +583,17 @@ export const indexLatestVersion = async (sessionId) => {
   if (!res.ok) await throwApiError('Index latest version', res);
   return res.json();
 };
+
+export const fetchLatestEvaluationReport = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/latest`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch latest evaluation report'
+  );
+  if (!res.ok) await throwApiError('Fetch latest evaluation report', res);
+  return res.json();
+};
+

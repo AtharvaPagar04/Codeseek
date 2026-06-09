@@ -3,8 +3,10 @@ import MessageBubble from './MessageBubble';
 import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
 import IndexingLiveLog from './IndexingLiveLog';
+import EvaluationPanel from './EvaluationPanel';
 import { useChat } from '../hooks/useChat';
-import { listProviderCredentials, fetchSessionRepoStatus, indexLatestVersion } from '../utils/api';
+import { listProviderCredentials, fetchSessionRepoStatus, indexLatestVersion, fetchLatestEvaluationReport } from '../utils/api';
+
 
 function getProviderFallbackModel(provider) {
   if (provider === 'groq') return 'llama-3.3-70b-versatile';
@@ -36,6 +38,10 @@ export default function SessionView({
   const [menuOpen, setMenuOpen] = useState(false);
   const [isUpdatingRefine, setIsUpdatingRefine] = useState(false);
   const [showMetadata, setShowMetadata] = useState(false);
+  const [showEvaluation, setShowEvaluation] = useState(false);
+  const [evalReport, setEvalReport] = useState(null);
+  const [loadingEval, setLoadingEval] = useState(false);
+  const [evalError, setEvalError] = useState(null);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const menuRef = useRef(null);
@@ -63,6 +69,20 @@ export default function SessionView({
     }
   };
 
+  const fetchEvaluationReport = async () => {
+    if (session.status === 'indexing') return;
+    setLoadingEval(true);
+    setEvalError(null);
+    try {
+      const data = await fetchLatestEvaluationReport(session.id);
+      setEvalReport(data);
+    } catch (err) {
+      setEvalError(err.message || 'Failed to load evaluation report.');
+    } finally {
+      setLoadingEval(false);
+    }
+  };
+
   useEffect(() => {
     fetchActiveProvider();
     window.addEventListener('CODESEEK_PROVIDER_CHANGED', fetchActiveProvider);
@@ -74,6 +94,11 @@ export default function SessionView({
   useEffect(() => {
     fetchRepoStatus();
   }, [session.id, session.status]);
+
+  useEffect(() => {
+    fetchEvaluationReport();
+  }, [session.id, session.status]);
+
 
   useEffect(() => {
     if (!activeProvider) {
@@ -106,6 +131,7 @@ export default function SessionView({
     setShowRefineConfirm(false);
     setShowAlreadyRefinedPopup(false);
     setShowMetadata(false);
+    setShowEvaluation(false);
   }, [session.id]);
 
   useEffect(() => {
@@ -324,6 +350,22 @@ export default function SessionView({
             <InfoIcon />
           </button>
 
+          <button
+            onClick={() => setShowEvaluation(!showEvaluation)}
+            title="Evaluation diagnostics dashboard"
+            className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
+              showEvaluation
+                ? 'bg-surface-3 border-text-muted text-text-primary'
+                : 'bg-surface-3 border-border text-text-muted hover:text-text-primary hover:border-text-muted'
+            }`}
+            aria-label="Toggle Evaluation Dashboard"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+          </button>
+
+
           {/* 3-dot Action Menu — Always Visible */}
           <div className="relative" ref={menuRef}>
             <button
@@ -495,6 +537,19 @@ export default function SessionView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Collapsible Evaluation Panel */}
+      {showEvaluation && (
+        <EvaluationPanel
+          report={evalReport}
+          loading={loadingEval}
+          error={evalError}
+          onRefresh={fetchEvaluationReport}
+          sessionId={session.id}
+          repoRoot={session.repo_root}
+          collection={session.collection}
+        />
       )}
 
       {/* Safety Warnings & Notices */}

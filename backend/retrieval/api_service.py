@@ -1160,6 +1160,21 @@ def get_session_repo_status_v1(
         raise HTTPException(status_code=403, detail=str(exc))
 
 
+@v1.get("/sessions/{session_id}/evaluation/latest")
+def get_latest_evaluation_report_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    from retrieval.eval_reports import get_latest_evaluation_report
+    return get_latest_evaluation_report(session_id)
+
+
+
 @v1.post("/sessions/{session_id}/index-latest")
 def index_latest_session_v1(
     session_id: str,
