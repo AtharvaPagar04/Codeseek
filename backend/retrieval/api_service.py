@@ -170,7 +170,12 @@ _query_lock = threading.Lock()
 
 def _cors_origins() -> list[str]:
     raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
+        for local_origin in ["http://localhost:5173", "http://127.0.0.1:5173"]:
+            if local_origin not in origins:
+                origins.append(local_origin)
+    return origins
 
 
 def _is_https_request(request: Request) -> bool:
@@ -193,6 +198,8 @@ def _allow_http_request(request: Request) -> bool:
 
 @app.middleware("http")
 async def enforce_https_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if ENFORCE_HTTPS and not _allow_http_request(request) and not _is_https_request(request):
         return JSONResponse(
             status_code=400,
