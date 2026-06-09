@@ -80,17 +80,6 @@ export default function StatusBar({
 
         <div className="w-px h-4 bg-border" />
 
-        <button
-          onClick={onOpenRagasReport}
-          title="Open RAGAS scorecards"
-          className="text-xs text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
-        >
-          <ChartIcon />
-          <span className="hidden sm:inline">RAGAS</span>
-        </button>
-
-        <div className="w-px h-4 bg-border" />
-
         {/* GitHub status */}
         {ghUser ? (
           <div className="flex items-center gap-2">
@@ -151,10 +140,3 @@ function KeyIcon() {
   );
 }
 
-function ChartIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M2 13.25A.75.75 0 0 1 2.75 12.5h10.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 13.25zM4 11.5A.5.5 0 0 1 3.5 11V8.75a.5.5 0 0 1 .5-.5h1.5a.5.5 0 0 1 .5.5V11a.5.5 0 0 1-.5.5H4zm3.25 0a.5.5 0 0 1-.5-.5V5.75a.5.5 0 0 1 .5-.5h1.5a.5.5 0 0 1 .5.5V11a.5.5 0 0 1-.5.5h-1.5zm3.25 0a.5.5 0 0 1-.5-.5V3.75a.5.5 0 0 1 .5-.5H12a.5.5 0 0 1 .5.5V11a.5.5 0 0 1-.5.5h-1.5z" />
-    </svg>
-  );
-}
