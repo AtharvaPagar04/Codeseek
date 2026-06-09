@@ -1,12 +1,41 @@
 #!/usr/bin/env bash
 # run_local_backend.sh — launch CodeSeek backend for local development.
 #
-# By default this script performs a CLEAN START, wiping all generated local
-# state (DB, session data, ingestion caches) so every run is a fresh env.
+# By default this script PRESERVES the local SQLite database to keep
+# GitHub authentication sessions and repository session states.
 #
-# To preserve existing state between restarts:
-#   CODESEEK_CLEAN_START=0 ./scripts/run_local_backend.sh
+# To perform a clean start (wipe DB, session data, ingestion caches):
+#   ./scripts/run_local_backend.sh --clean
+#   OR
+#   CODESEEK_CLEAN_START=1 ./scripts/run_local_backend.sh
 set -euo pipefail
+
+# Parse command line options
+cli_clean=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --clean)
+      cli_clean=1
+      shift
+      ;;
+    --help)
+      echo "Usage: $0 [options]"
+      echo ""
+      echo "Options:"
+      echo "  --clean    Force a clean start, wiping all local state (DB, session data, ingestion caches)."
+      echo "  --help     Show this help message."
+      echo ""
+      echo "By default, this script preserves the local database to keep authentication sessions and repository session state."
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help to see available options."
+      exit 1
+      ;;
+  esac
+done
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -63,13 +92,18 @@ export CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS="${CHUNK_DESCRIPTION_MAX_OUTPUT_TOKEN
 export RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS="${RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS:-90}"
 
 # ---------------------------------------------------------------------------
-# Clean-start: wipe generated state so every run is a fresh environment.
-# Set CODESEEK_CLEAN_START=0 to preserve existing local data.
+# Clean-start execution:
+# Preserves local database by default. If --clean is passed or
+# CODESEEK_CLEAN_START=1 is specified in the environment, wips the state.
 # ---------------------------------------------------------------------------
-CLEAN_START="${CODESEEK_CLEAN_START:-1}"
+CLEAN_START="${CODESEEK_CLEAN_START:-0}"
+if [[ "$cli_clean" == "1" ]]; then
+  CLEAN_START=1
+fi
+export CODESEEK_CLEAN_START="$CLEAN_START"
 
 if [[ "$CLEAN_START" == "1" ]]; then
-  echo "[local-backend] clean start enabled"
+  echo "[local-backend] clean start requested"
   echo "[local-backend] ⚠  If the browser shows 401 after restart, log in again — auth state was reset."
 
   # --- SQLite database (all persistent session/auth/provider state) ---
@@ -102,7 +136,11 @@ if [[ "$CLEAN_START" == "1" ]]; then
     -prune -exec rm -rf {} + 2>/dev/null || true
 
 else
-  echo "[local-backend] skipping clean start (CODESEEK_CLEAN_START=0)"
+  if [[ -f "$CODESEEK_DB_PATH" ]]; then
+    echo "[local-backend] preserving local db: $CODESEEK_DB_PATH"
+  else
+    echo "[local-backend] local db not found: $CODESEEK_DB_PATH (will be created on startup)"
+  fi
 fi
 
 echo "[local-backend] starting backend (port 8000)"
