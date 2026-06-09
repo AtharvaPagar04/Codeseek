@@ -172,10 +172,23 @@ def _cors_origins() -> list[str]:
     raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
     if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
-        for local_origin in ["http://localhost:5173", "http://127.0.0.1:5173"]:
+        local_dev_origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://0.0.0.0:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ]
+        for local_origin in local_dev_origins:
             if local_origin not in origins:
                 origins.append(local_origin)
     return origins
+
+
+def _cors_origin_regex() -> str | None:
+    if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
+        return r"^http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$"
+    return None
 
 
 def _is_https_request(request: Request) -> bool:
@@ -211,6 +224,7 @@ async def enforce_https_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
+    allow_origin_regex=_cors_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -369,6 +383,10 @@ def _enrich_provider_runtime_list(records: list[dict]) -> list[dict]:
 
 @app.on_event("startup")
 def startup_checks() -> None:
+    tenant = os.getenv("CODESEEK_TENANT_ID", "local")
+    print(f"[api.cors] tenant={tenant}")
+    print(f"[api.cors] allowed_origins={_cors_origins()}")
+    print(f"[api.cors] allow_origin_regex={_cors_origin_regex()}")
     _startup_errors.clear()
     init_db()
     missing = []
