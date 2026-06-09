@@ -45,6 +45,10 @@ export default function SessionView({
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const menuRef = useRef(null);
+  const metadataRef = useRef(null);
+  const evaluationRef = useRef(null);
+  const metadataBtnRef = useRef(null);
+  const evaluationBtnRef = useRef(null);
 
   const fetchActiveProvider = async () => {
     try {
@@ -138,6 +142,23 @@ export default function SessionView({
     const handleOutsideClick = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) {
         setMenuOpen(false);
+      }
+      if (
+        metadataRef.current &&
+        !metadataRef.current.contains(e.target) &&
+        metadataBtnRef.current &&
+        !metadataBtnRef.current.contains(e.target) &&
+        !(menuRef.current && menuRef.current.contains(e.target))
+      ) {
+        setShowMetadata(false);
+      }
+      if (
+        evaluationRef.current &&
+        !evaluationRef.current.contains(e.target) &&
+        evaluationBtnRef.current &&
+        !evaluationBtnRef.current.contains(e.target)
+      ) {
+        setShowEvaluation(false);
       }
     };
     window.addEventListener('click', handleOutsideClick);
@@ -338,6 +359,7 @@ export default function SessionView({
           )}
 
           <button
+            ref={metadataBtnRef}
             onClick={() => {
               const nextVal = !showMetadata;
               setShowMetadata(nextVal);
@@ -357,6 +379,7 @@ export default function SessionView({
           </button>
 
           <button
+            ref={evaluationBtnRef}
             onClick={() => {
               const nextVal = !showEvaluation;
               setShowEvaluation(nextVal);
@@ -462,7 +485,7 @@ export default function SessionView({
 
       {/* Collapsible Metadata Panel */}
       {showMetadata && (
-        <div className="shrink-0 bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
+        <div ref={metadataRef} className="shrink-0 bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs font-mono select-none">
             <div className="space-y-1.5">
               <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Repository Config</h4>
@@ -554,15 +577,17 @@ export default function SessionView({
 
       {/* Collapsible Evaluation Panel */}
       {showEvaluation && (
-        <EvaluationPanel
-          report={evalReport}
-          loading={loadingEval}
-          error={evalError}
-          onRefresh={fetchEvaluationReport}
-          sessionId={session.id}
-          repoRoot={session.repo_root}
-          collection={session.collection}
-        />
+        <div ref={evaluationRef}>
+          <EvaluationPanel
+            report={evalReport}
+            loading={loadingEval}
+            error={evalError}
+            onRefresh={fetchEvaluationReport}
+            sessionId={session.id}
+            repoRoot={session.repo_root}
+            collection={session.collection}
+          />
+        </div>
       )}
 
       {/* Safety Warnings & Notices */}
