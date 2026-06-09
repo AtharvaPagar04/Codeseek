@@ -48,3 +48,6 @@ These observations are kept purely for trend tracking and research. They **must 
 
 ## 3. Policy Verification
 Evaluation runs are aggregated and gated automatically using `eval_policy_summary.py`. This script reads the JSON reports from retrieval, conversation, calibration, and RAGAS evaluations, evaluates them against the criteria defined above, and generates a structured status report.
+
+For a unified command-line tool that orchestrates this entire pipeline sequentially and handles gates, see the [Safe Eval Runner](safe_eval_runner.md) documentation.
+
