@@ -338,7 +338,13 @@ export default function SessionView({
           )}
 
           <button
-            onClick={() => setShowMetadata(!showMetadata)}
+            onClick={() => {
+              const nextVal = !showMetadata;
+              setShowMetadata(nextVal);
+              if (nextVal) {
+                setShowEvaluation(false);
+              }
+            }}
             title="Session metadata & binding info"
             className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
               showMetadata
@@ -351,7 +357,13 @@ export default function SessionView({
           </button>
 
           <button
-            onClick={() => setShowEvaluation(!showEvaluation)}
+            onClick={() => {
+              const nextVal = !showEvaluation;
+              setShowEvaluation(nextVal);
+              if (nextVal) {
+                setShowMetadata(false);
+              }
+            }}
             title="Evaluation diagnostics dashboard"
             className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
               showEvaluation
@@ -434,6 +446,7 @@ export default function SessionView({
                     onClick={() => {
                       setMenuOpen(false);
                       setShowMetadata(true);
+                      setShowEvaluation(false);
                     }}
                     className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary transition-colors flex items-center gap-2"
                   >
