@@ -78,9 +78,11 @@ FOLLOW_UP_MARKERS = {
 }
 
 LOW_CONTEXT_FALLBACK = (
-    "No relevant code was found for this query. "
-    "Try rephrasing with a specific file name, function name, class, route, or config key. "
-    "Example: \"how does `create_session` work\" or \"what does auth.py do\"."
+    "I could not find strong evidence for that in the indexed repository context.\n\n"
+    "Try asking with:\n"
+    "- a file name\n"
+    "- a function name\n"
+    "- a feature name"
 )
 
 PARTIAL_EVIDENCE_BANNER = (

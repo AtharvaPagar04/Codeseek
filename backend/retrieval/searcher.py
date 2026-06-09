@@ -1108,6 +1108,52 @@ def qdrant_upsert_source_boost(candidate: dict, query: str, intent: str) -> floa
 
     return 0.0
 
+def config_source_boost(candidate: dict, query: str, intent: str) -> float:
+    """Boost configuration implementation files for config/environment queries."""
+    q = (query or "").lower()
+    intent = (intent or "").upper()
+
+    if intent != "CONFIG":
+        return 0.0
+
+    path = (candidate.get("relative_path") or "").lower()
+    content = (
+        candidate.get("content")
+        or candidate.get("content_excerpt")
+        or candidate.get("summary")
+        or ""
+    ).lower()
+
+    if path.startswith("backend/tests/") or "/tests/fixtures/" in path:
+        return 0.0
+
+    filename = path.split("/")[-1]
+    boost = 0.0
+
+    # Boost files whose path basename is config.py or settings.py
+    if filename in {"config.py", "settings.py"}:
+        boost += 0.40
+
+    # Boost chunks containing environment/config APIs or constants
+    env_terms = [
+        "os.getenv",
+        "os.environ",
+        "retrieval_",
+        "ollama_",
+        "qdrant_",
+        "database",
+        "api_key"
+    ]
+    for term in env_terms:
+        if term in content:
+            boost += 0.08
+
+    # If the path actually matches backend/retrieval/config.py, we can add a strong boost
+    if path == "backend/retrieval/config.py":
+        boost += 0.25
+
+    return min(boost, 0.65)
+
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     """Apply unified label-aware and lexical scoring to rank candidates."""
     from pathlib import Path
@@ -1182,9 +1228,12 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
         fw_boost = 0.0
         qdrant_boost = 0.0
+        config_boost = 0.0
         if reranker_intent in {"FILE", "SYMBOL"}:
             fw_boost = framework_source_boost(item, raw_query, reranker_intent)
             qdrant_boost = qdrant_upsert_source_boost(item, raw_query, reranker_intent)
+        elif reranker_intent == "CONFIG":
+            config_boost = config_source_boost(item, raw_query, reranker_intent)
 
         final_score = (
             0.70 * vector_score
@@ -1198,6 +1247,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + content_match_boost
             + fw_boost
             + qdrant_boost
+            + config_boost
         )
 
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)

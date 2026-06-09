@@ -163,9 +163,11 @@ def is_config_query(query: str) -> bool:
     """Check if the query matches config or environment patterns with word boundaries."""
     q = query.lower()
     patterns = [
-        r"\benvironment\s+variables\b",
-        r"\benv\s+vars\b",
+        r"\benvironment\s+variables?\b",
+        r"\benv\s+vars?\b",
         r"\b\.env\b",
+        r"\bgetenv\b",
+        r"\benv\b",
         r"\bconfig\b",
         r"\bconfiguration\b",
         r"\bsettings\b",
