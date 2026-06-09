@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { formatApiError } from './api.js';
+import { getBackendApiKey } from './storage.js';
 
 test('formatApiError maps provider auth failures to actionable copy', () => {
   const message = formatApiError({
@@ -68,3 +69,36 @@ test('fetchLatestEvaluationReport invokes the correct endpoint', async () => {
   }
 });
 
+test('querySession invokes the correct endpoint and includes credentials/auth headers', async () => {
+  const originalFetch = globalThis.fetch;
+  let calledUrl = null;
+  let calledOptions = null;
+
+  globalThis.localStorage = {
+    getItem: (key) => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  globalThis.fetch = async (url, options) => {
+    calledUrl = url;
+    calledOptions = options;
+    return {
+      ok: true,
+      json: async () => ({ answer: 'Query response', sources: [] })
+    };
+  };
+
+  try {
+    const { querySession } = await import('./api.js');
+    const result = await querySession({ question: 'How to use this?', session_id: 'session-123' });
+    assert.equal(result.answer, 'Query response');
+    assert.match(calledUrl, /\/api\/v1\/query/);
+    assert.equal(calledOptions.credentials, 'include');
+    assert.equal(calledOptions.headers['Content-Type'], 'application/json');
+    assert.equal(calledOptions.headers['Authorization'], `Bearer ${getBackendApiKey()}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});

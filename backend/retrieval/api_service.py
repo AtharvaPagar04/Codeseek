@@ -23,6 +23,7 @@ from retrieval.auth_store import (
     delete_auth_session,
     get_user_for_session_token,
     upsert_github_user,
+    get_or_create_system_user,
 )
 from retrieval.chat_store import (
     append_message,
@@ -616,17 +617,42 @@ def _query_impl(
     started = time.perf_counter()
     path = "/api/v1/query"
     log_event("api.query.start", request_id, path="/query")
-    token = _require_auth(authorization)
+    
+    # Authenticate: EITHER cookie OR API Key
+    auth_user = None
+    token = None
     client_ip = request.client.host if request.client else "unknown"
+
+    if session_token:
+        auth_user = _current_auth_user(session_token)
+        if auth_user:
+            token = f"session:{auth_user['id']}"
+
+    if not auth_user:
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Please sign in again.")
+        
+        expected = os.getenv(API_KEY_ENV, "").strip()
+        if not expected:
+            raise HTTPException(
+                status_code=500, detail=f"{API_KEY_ENV} is not configured on server"
+            )
+        try:
+            token = _auth_key(authorization)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        if token != expected:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        auth_user = get_or_create_system_user()
+
     _enforce_rate_limit(f"{token}:{client_ip}")
     query_text = (body.query or body.question or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
     previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
     previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
-    auth_user = _current_auth_user(session_token)
-    if not auth_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         provider_config = get_active_provider_credential(auth_user["id"])
     except ValueError as e:
