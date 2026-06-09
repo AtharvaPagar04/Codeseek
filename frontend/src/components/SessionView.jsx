@@ -35,6 +35,7 @@ export default function SessionView({
   const [showAlreadyRefinedPopup, setShowAlreadyRefinedPopup] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isUpdatingRefine, setIsUpdatingRefine] = useState(false);
+  const [showMetadata, setShowMetadata] = useState(false);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const menuRef = useRef(null);
@@ -104,6 +105,7 @@ export default function SessionView({
     setShowUpToDatePopup(false);
     setShowRefineConfirm(false);
     setShowAlreadyRefinedPopup(false);
+    setShowMetadata(false);
   }, [session.id]);
 
   useEffect(() => {
@@ -255,6 +257,9 @@ export default function SessionView({
   const hasMessages = (activeThread?.messages || []).length > 0;
   const repoStatus = session.repo_status;
 
+  const repoNamePart = session.repo_full_name ? session.repo_full_name.split('/').pop() : '';
+  const isSubdirectorySession = !!(session.repo_root && repoNamePart && !session.repo_root.endsWith(repoNamePart) && !session.repo_root.endsWith(repoNamePart + '/'));
+
   return (
     <div className="flex flex-col h-full min-w-0 relative">
       {/* Sleek Top Header Bar */}
@@ -263,8 +268,12 @@ export default function SessionView({
           <span className="font-mono text-sm font-semibold tracking-wide text-text-primary truncate">
             {session.repo_full_name}
           </span>
-          {(session.status === 'indexing' || (repoStatus?.status && repoStatus.status !== 'up_to_date')) && (
-            <FreshnessBadge status={session.status === 'indexing' ? 'indexing' : repoStatus.status} />
+          {session.status === 'indexing' ? (
+            <FreshnessBadge status="indexing" />
+          ) : repoStatus?.status ? (
+            <FreshnessBadge status={repoStatus.status} />
+          ) : (
+            <FreshnessBadge status={null} />
           )}
         </div>
         
@@ -301,6 +310,19 @@ export default function SessionView({
               </button>
             </div>
           )}
+
+          <button
+            onClick={() => setShowMetadata(!showMetadata)}
+            title="Session metadata & binding info"
+            className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
+              showMetadata
+                ? 'bg-surface-3 border-text-muted text-text-primary'
+                : 'bg-surface-3 border-border text-text-muted hover:text-text-primary hover:border-text-muted'
+            }`}
+            aria-label="Toggle Session Metadata"
+          >
+            <InfoIcon />
+          </button>
 
           {/* 3-dot Action Menu — Always Visible */}
           <div className="relative" ref={menuRef}>
@@ -365,12 +387,141 @@ export default function SessionView({
                     </svg>
                     <span>Refine Labels with LLM</span>
                   </button>
+
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setShowMetadata(true);
+                    }}
+                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary transition-colors flex items-center gap-2"
+                  >
+                    <InfoIcon />
+                    <span>View Binding Info</span>
+                  </button>
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Collapsible Metadata Panel */}
+      {showMetadata && (
+        <div className="shrink-0 bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs font-mono select-none">
+            <div className="space-y-1.5">
+              <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Repository Config</h4>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Repo Root</span>
+                <span className="text-text-primary select-text break-all font-semibold" title={session.repo_root || 'N/A'}>
+                  {session.repo_root || 'N/A'}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Collection</span>
+                <span className="text-text-primary select-text break-all font-semibold" title={session.collection || 'N/A'}>
+                  {session.collection || 'N/A'}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Branch</span>
+                <span className="text-text-primary font-semibold">{repoStatus?.current_branch || 'N/A'}</span>
+              </div>
+            </div>
+            
+            <div className="space-y-1.5">
+              <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Git Binding</h4>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Indexed Commit</span>
+                <span className="text-text-primary select-text font-semibold" title={repoStatus?.indexed_commit_sha || 'N/A'}>
+                  {repoStatus?.indexed_commit_sha ? repoStatus.indexed_commit_sha : 'N/A'}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Current Commit</span>
+                <span className={`select-text font-semibold ${repoStatus?.current_commit_sha !== repoStatus?.indexed_commit_sha ? 'text-warning' : 'text-text-primary'}`} title={repoStatus?.current_commit_sha || 'N/A'}>
+                  {repoStatus?.current_commit_sha ? repoStatus.current_commit_sha : 'N/A'}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[9px] text-text-muted">Worktree Status</span>
+                <span className={repoStatus?.dirty_worktree ? 'text-offline font-bold' : 'text-online font-semibold'}>
+                  {repoStatus?.dirty_worktree ? 'Dirty (Uncommitted changes)' : 'Clean'}
+                </span>
+              </div>
+            </div>
+            
+            <div className="space-y-1.5 flex flex-col justify-between">
+              <div>
+                <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-1">Database Stats</h4>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="flex flex-col bg-surface-3 p-1.5 rounded border border-border">
+                    <span className="text-[9px] text-text-muted">Files</span>
+                    <span className="text-text-primary font-bold">{repoStatus?.files_indexed ?? 0}</span>
+                  </div>
+                  <div className="flex flex-col bg-surface-3 p-1.5 rounded border border-border">
+                    <span className="text-[9px] text-text-muted">Chunks</span>
+                    <span className="text-text-primary font-bold">{repoStatus?.chunks_generated ?? 0}</span>
+                  </div>
+                  <div className="flex flex-col bg-surface-3 p-1.5 rounded border border-border">
+                    <span className="text-[9px] text-text-muted">Embeddings</span>
+                    <span className="text-text-primary font-bold">{repoStatus?.embeddings_stored ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2 mt-3 md:mt-0">
+                <button
+                  onClick={fetchRepoStatus}
+                  disabled={checkingStatus || session.status === 'indexing'}
+                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-surface-3 border border-border hover:border-text-muted text-text-primary disabled:opacity-40 transition-colors flex items-center justify-center gap-1"
+                >
+                  <svg className={`w-3.5 h-3.5 ${checkingStatus ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
+                  </svg>
+                  <span>Refresh status</span>
+                </button>
+                <button
+                  onClick={() => handleIndexLatest()}
+                  disabled={session.status === 'indexing'}
+                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-text-primary hover:bg-text-secondary text-[#0a0a0a] disabled:opacity-40 transition-colors flex items-center justify-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
+                  </svg>
+                  <span>Index latest</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Safety Warnings & Notices */}
+      {(isSubdirectorySession || repoStatus?.dirty_worktree || repoStatus?.status === 'out_of_date') && (
+        <div className="shrink-0 px-6 pt-3 flex flex-col items-center">
+          {isSubdirectorySession && (
+            <StatusNotice
+              tone="warning"
+              message={`Subdirectory Session: This session is bound to a subdirectory (${session.repo_root}). Git operations or freshness status checks outside this folder may not be indexed.`}
+            />
+          )}
+          {repoStatus?.dirty_worktree && (
+            <StatusNotice
+              tone="warning"
+              message="Uncommitted Changes: There are uncommitted changes in your repository. The indexed code segments may not match your active worktree."
+            />
+          )}
+          {repoStatus?.status === 'out_of_date' && (
+            <StatusNotice
+              tone="warning"
+              message={`Repository Stale: The indexed commit (${repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}) differs from the current commit (${repoStatus.current_commit_sha?.slice(0, 7) || 'N/A'}).`}
+              actionLabel="Index Latest"
+              onAction={() => handleIndexLatest()}
+            />
+          )}
+        </div>
+      )}
 
       {/* Message list or empty state */}
       {!hasMessages ? (
@@ -944,6 +1095,14 @@ function ThreeDotsIcon() {
   return (
     <svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor" aria-hidden="true">
       <path d="M2 10a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0-6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 12a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   );
 }

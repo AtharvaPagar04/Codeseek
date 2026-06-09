@@ -39,6 +39,27 @@ function statusBadge(session) {
   if (session.status && session.status !== 'ready') {
     return { label: 'Indexing', className: 'text-warning border-warning/30 bg-warning/10' };
   }
+  
+  const freshness = session.repo_status?.status;
+  if (freshness === 'up_to_date') {
+    return { label: 'Fresh', className: 'text-online border-online/30 bg-online/10' };
+  }
+  if (freshness === 'out_of_date') {
+    return { label: 'Stale', className: 'text-warning border-warning/30 bg-warning/10' };
+  }
+  if (freshness === 'dirty_worktree') {
+    return { label: 'Dirty', className: 'text-offline border-offline/30 bg-offline/10' };
+  }
+  if (freshness === 'indexing') {
+    return { label: 'Indexing', className: 'text-warning border-warning/30 bg-warning/10' };
+  }
+  if (freshness === 'failed') {
+    return { label: 'Failed', className: 'text-offline border-offline/30 bg-offline/10' };
+  }
+  if (freshness === 'unknown' || freshness === 'error' || freshness === 'missing') {
+    return { label: 'Unknown', className: 'text-text-muted border-border bg-surface-2' };
+  }
+
   return { label: 'Ready', className: 'text-online border-online/30 bg-online/10' };
 }
 
