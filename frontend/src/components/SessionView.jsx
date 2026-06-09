@@ -35,7 +35,6 @@ export default function SessionView({
   const [showUpToDatePopup, setShowUpToDatePopup] = useState(false);
   const [showRefineConfirm, setShowRefineConfirm] = useState(false);
   const [showAlreadyRefinedPopup, setShowAlreadyRefinedPopup] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [isUpdatingRefine, setIsUpdatingRefine] = useState(false);
   const [showMetadata, setShowMetadata] = useState(false);
   const [showEvaluation, setShowEvaluation] = useState(false);
@@ -44,7 +43,6 @@ export default function SessionView({
   const [evalError, setEvalError] = useState(null);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
-  const menuRef = useRef(null);
   const metadataRef = useRef(null);
   const evaluationRef = useRef(null);
   const metadataBtnRef = useRef(null);
@@ -130,7 +128,6 @@ export default function SessionView({
 
   useEffect(() => {
     setDismissedFreshnessPrompt(false);
-    setMenuOpen(false);
     setShowUpToDatePopup(false);
     setShowRefineConfirm(false);
     setShowAlreadyRefinedPopup(false);
@@ -140,15 +137,11 @@ export default function SessionView({
 
   useEffect(() => {
     const handleOutsideClick = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
-        setMenuOpen(false);
-      }
       if (
         metadataRef.current &&
         !metadataRef.current.contains(e.target) &&
         metadataBtnRef.current &&
-        !metadataBtnRef.current.contains(e.target) &&
-        !(menuRef.current && menuRef.current.contains(e.target))
+        !metadataBtnRef.current.contains(e.target)
       ) {
         setShowMetadata(false);
       }
@@ -310,7 +303,7 @@ export default function SessionView({
   return (
     <div className="flex flex-col h-full min-w-0 relative">
       {/* Sleek Top Header Bar */}
-      <div className="shrink-0 flex items-center justify-between px-6 py-3 bg-surface-2/40 border-b border-border backdrop-blur-md z-10">
+      <div className="shrink-0 flex items-center justify-between px-6 py-2 bg-surface-2/20 border-b border-border backdrop-blur-md z-10">
         <div className="flex items-center gap-3 min-w-0">
           <span className="font-mono text-sm font-semibold tracking-wide text-text-primary truncate">
             {session.repo_full_name}
@@ -401,85 +394,7 @@ export default function SessionView({
           </button>
 
 
-          {/* 3-dot Action Menu — Always Visible */}
-          <div className="relative" ref={menuRef}>
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              title="Session Options"
-              className="w-7 h-7 flex items-center justify-center rounded-full bg-surface-3 border border-border text-text-muted hover:text-text-primary hover:border-text-muted transition-all duration-150"
-              aria-label="Session Options"
-            >
-              <ThreeDotsIcon />
-            </button>
-            
-            {menuOpen && (
-              <div
-                className="absolute right-0 mt-2 w-56 rounded-xl border border-border bg-surface-2 p-1 shadow-xl animate-fadeIn z-30 flex flex-col"
-                style={{ boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)' }}
-              >
-                {/* Status info */}
-                <div className="px-3 py-2 border-b border-border text-[11px] font-mono text-text-muted select-none">
-                  <div className="flex items-center justify-between mb-1">
-                    <span>Status:</span>
-                    <span className={
-                      repoStatus?.status === 'up_to_date' ? 'text-online' :
-                      repoStatus?.status === 'out_of_date' ? 'text-warning' : 'text-text-muted'
-                    }>
-                      {repoStatus?.status === 'up_to_date' ? 'Up to date' :
-                       repoStatus?.status === 'out_of_date' ? 'Out of date' :
-                       repoStatus?.status ? repoStatus.status.replace('_', ' ') : 'Unknown'}
-                    </span>
-                  </div>
-                  {repoStatus?.indexed_commit_sha && (
-                    <div className="truncate">Indexed: <span className="text-text-secondary">{repoStatus.indexed_commit_sha.slice(0, 7)}</span></div>
-                  )}
-                  {repoStatus?.current_commit_sha && repoStatus?.status === 'out_of_date' && (
-                    <div className="truncate">Latest: <span className="text-warning">{repoStatus.current_commit_sha.slice(0, 7)}</span></div>
-                  )}
-                </div>
 
-                {/* Dropdown Items */}
-                <div className="p-1 space-y-0.5">
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      handleIndexLatest();
-                    }}
-                    disabled={session.status === 'indexing' || checkingStatus}
-                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary disabled:opacity-40 transition-colors flex items-center gap-2"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
-                    </svg>
-                    <span>{session.status === 'indexing' ? 'Indexing...' : 'Index Latest Version'}</span>
-                  </button>
-
-                  <button
-                    onClick={handleRefineClick}
-                    disabled={session.status === 'indexing' || isUpdatingRefine}
-                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary disabled:opacity-40 transition-colors flex items-center gap-2"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                    <span>Refine Labels with LLM</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setShowMetadata(true);
-                      setShowEvaluation(false);
-                    }}
-                    className="w-full text-left rounded-lg px-2.5 py-1.5 hover:bg-surface-3 text-2xs font-mono font-medium text-text-primary transition-colors flex items-center gap-2"
-                  >
-                    <InfoIcon />
-                    <span>View Binding Info</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -548,11 +463,11 @@ export default function SessionView({
                 </div>
               </div>
               
-              <div className="flex items-center gap-2 mt-3 md:mt-0">
+              <div className="flex flex-wrap items-center gap-2 mt-3 md:mt-0">
                 <button
                   onClick={fetchRepoStatus}
                   disabled={checkingStatus || session.status === 'indexing'}
-                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-surface-3 border border-border hover:border-text-muted text-text-primary disabled:opacity-40 transition-colors flex items-center justify-center gap-1"
+                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-surface-3 border border-border hover:border-text-muted text-text-primary disabled:opacity-40 transition-colors flex items-center justify-center gap-1 min-w-[90px]"
                 >
                   <svg className={`w-3.5 h-3.5 ${checkingStatus ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
@@ -562,12 +477,22 @@ export default function SessionView({
                 <button
                   onClick={() => handleIndexLatest()}
                   disabled={session.status === 'indexing'}
-                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-text-primary hover:bg-text-secondary text-[#0a0a0a] disabled:opacity-40 transition-colors flex items-center justify-center gap-1"
+                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-text-primary hover:bg-text-secondary text-[#0a0a0a] disabled:opacity-40 transition-colors flex items-center justify-center gap-1 min-w-[90px]"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
                   </svg>
                   <span>Index latest</span>
+                </button>
+                <button
+                  onClick={handleRefineClick}
+                  disabled={session.status === 'indexing' || isUpdatingRefine}
+                  className="flex-1 py-1.5 px-2 text-2xs font-semibold rounded-lg bg-surface-3 border border-border hover:border-text-muted text-text-primary disabled:opacity-40 transition-colors flex items-center justify-center gap-1 min-w-[90px]"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                  <span>{isUpdatingRefine ? 'Refining...' : 'Refine labels'}</span>
                 </button>
               </div>
             </div>
