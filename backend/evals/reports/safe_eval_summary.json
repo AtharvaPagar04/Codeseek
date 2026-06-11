@@ -1,0 +1,76 @@
+{
+  "status": "PASS",
+  "started_at": "2026-06-09T20:40:11.774351Z",
+  "finished_at": "2026-06-09T20:40:37.630262Z",
+  "duration_seconds": 25.86,
+  "session_id": "ea411847c4d24662a748c667e3233ce6",
+  "expected_repo_root": "/home/arch/DEV/CodeSeek",
+  "expected_collection": "repository_chunks__local__atharvapagar04_codeseek",
+  "steps": [
+    {
+      "name": "retrieval_eval",
+      "status": "PASS",
+      "command": [
+        "/home/arch/DEV/CodeSeek/backend/.venv/bin/python",
+        "evals/retrieval_eval.py",
+        "--session-id",
+        "ea411847c4d24662a748c667e3233ce6",
+        "--golden",
+        "../evals/golden_queries.yaml",
+        "--output",
+        "evals/reports/retrieval_latest.json"
+      ],
+      "return_code": 0,
+      "duration_seconds": 14.89,
+      "output_path": "evals/reports/retrieval_latest.json",
+      "stdout_tail": "Reranker Intent Accuracy:    100.0%\nFile Hit@5:                  100.0%\nSymbol Hit@5:                100.0%\nLabel Hit@5:                 100.0%\nProtected Hits Preserved:    100.0%\nExact Hit Regressions:       0\nTotal Protected Hits:        0\nProtected Hits Preserved:    0\nProtected Hits Dropped:      0\nDuplicate Context Rate:      0.0%\nWrong Top-1 Rate:            6.67%\nEmpty Result Rate:           0.0%\n========================================\n\nFull report written to: /home/arch/DEV/CodeSeek/backend/evals/reports/retrieval_latest.json",
+      "stderr_tail": ""
+    },
+    {
+      "name": "conversation_eval",
+      "status": "PASS",
+      "command": [
+        "/home/arch/DEV/CodeSeek/backend/.venv/bin/python",
+        "evals/conversation_eval.py",
+        "--session-id",
+        "ea411847c4d24662a748c667e3233ce6",
+        "--trees",
+        "../evals/conversation_trees.yaml",
+        "--output",
+        "evals/reports/conversation_latest.json"
+      ],
+      "return_code": 0,
+      "duration_seconds": 10.94,
+      "output_path": "evals/reports/conversation_latest.json",
+      "stdout_tail": "\n========================================\n      CONVERSATION EVAL REPORT SUMMARY\n========================================\nStatus:                      PASS\nIntent Status:               PASS\nRetrieval Status:            PASS\nOverall Status:              PASS\nTotal Turns:                 6\nReranker Intent Accuracy:    100.0%\nFile Hit@5:                  100.0%\nSymbol Hit@5:                100.0%\n========================================\n\nFull report written to: /home/arch/DEV/CodeSeek/backend/evals/reports/conversation_latest.json",
+      "stderr_tail": ""
+    },
+    {
+      "name": "eval_policy_summary",
+      "status": "PASS",
+      "command": [
+        "/home/arch/DEV/CodeSeek/backend/.venv/bin/python",
+        "evals/eval_policy_summary.py",
+        "--retrieval-report",
+        "evals/reports/retrieval_latest.json",
+        "--conversation-report",
+        "evals/reports/conversation_latest.json",
+        "--output-json",
+        "evals/reports/eval_policy_summary.json",
+        "--output-md",
+        "evals/reports/eval_policy_summary.md"
+      ],
+      "return_code": 0,
+      "duration_seconds": 0.03,
+      "output_path": "evals/reports/eval_policy_summary.json",
+      "stdout_tail": "Evaluation policy summary written to evals/reports/eval_policy_summary.json\nEvaluation policy Markdown report written to evals/reports/eval_policy_summary.md\n",
+      "stderr_tail": ""
+    }
+  ],
+  "policy_summary_path": "evals/reports/eval_policy_summary.json",
+  "hard_gate_status": "PASS",
+  "hard_gate_failures": [],
+  "warnings": [],
+  "diagnostics": [],
+  "recommendation": "All gates passed successfully. CodeSeek meets the evaluation quality standards for release."
+}

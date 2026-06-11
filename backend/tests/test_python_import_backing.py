@@ -276,10 +276,10 @@ class TestFindPythonBlockEnd:
         end = _find_python_block_end(lines, 0)
         assert end >= 0
 
-    def test_cap_at_80_lines(self):
-        lines = ["def big_fn():"] + ["    x = 1"] * 100
+    def test_cap_at_200_lines(self):
+        lines = ["def big_fn():"] + ["    x = 1"] * 250
         end = _find_python_block_end(lines, 0)
-        assert end <= 80
+        assert end <= 200
 
 
 # ---------------------------------------------------------------------------

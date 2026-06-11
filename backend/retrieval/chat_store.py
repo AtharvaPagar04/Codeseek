@@ -34,6 +34,27 @@ def list_thread_messages(thread_id: str) -> list[dict]:
     return [_row_to_message(row) for row in rows]
 
 
+def latest_thread_assistant_message(thread_id: str) -> dict | None:
+    """Return the most recent assistant message for a thread, if any."""
+    with db_cursor() as (_conn, cursor):
+        row = cursor.execute(
+            """
+            SELECT id, role, content, sources_json, context_tokens, is_error, created_at
+            FROM chat_messages
+            WHERE thread_id = ? AND role = 'assistant'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (thread_id,),
+        ).fetchone()
+    return _row_to_message(row) if row else None
+
+
+def latest_session_assistant_message(session_id: str) -> dict | None:
+    thread = ensure_default_thread(session_id)
+    return latest_thread_assistant_message(thread["id"])
+
+
 def append_message(
     session_id: str,
     role: str,

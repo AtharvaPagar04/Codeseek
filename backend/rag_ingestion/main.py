@@ -20,6 +20,7 @@ from rag_ingestion.utils.gpu_cleanup import (
     clear_python_cuda_cache,
     log_gpu_memory_snapshot,
     unload_ollama_model,
+    cleanup_after_batch,
 )
 from retrieval.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
@@ -63,7 +64,31 @@ def run_pipeline(
     recreate_collection: bool | None = None,
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
-    from rag_ingestion.config import ENABLE_LLM_LABEL_REFINEMENT
+    from rag_ingestion.config import (
+        ENABLE_LLM_LABEL_REFINEMENT,
+        CODESEEK_DESCRIPTION_MODEL,
+        CODESEEK_LABEL_MODEL,
+        CODESEEK_DESCRIPTION_BATCH_SIZE,
+        CODESEEK_LABEL_REFINE_BATCH_SIZE,
+        CODESEEK_EMBEDDING_BATCH_SIZE,
+        CODESEEK_CHUNK_PROCESS_BATCH_SIZE,
+        CODESEEK_DESCRIPTION_MAX_CHARS,
+        CODESEEK_DESCRIPTION_MAX_TOKENS,
+        CODESEEK_OLLAMA_KEEP_ALIVE,
+        CODESEEK_OLLAMA_STOP_MODEL_EVERY,
+    )
+
+    logger.info("[ingestion.config] description_model=%s", CODESEEK_DESCRIPTION_MODEL)
+    logger.info("[ingestion.config] label_model=%s", CODESEEK_LABEL_MODEL)
+    logger.info("[ingestion.config] description_batch_size=%d", CODESEEK_DESCRIPTION_BATCH_SIZE)
+    logger.info("[ingestion.config] label_refine_batch_size=%d", CODESEEK_LABEL_REFINE_BATCH_SIZE)
+    logger.info("[ingestion.config] embedding_batch_size=%d", CODESEEK_EMBEDDING_BATCH_SIZE)
+    logger.info("[ingestion.config] chunk_process_batch_size=%d", CODESEEK_CHUNK_PROCESS_BATCH_SIZE)
+    logger.info("[ingestion.config] description_max_chars=%d", CODESEEK_DESCRIPTION_MAX_CHARS)
+    logger.info("[ingestion.config] description_max_tokens=%d", CODESEEK_DESCRIPTION_MAX_TOKENS)
+    logger.info("[ingestion.config] ollama_keep_alive=%s", CODESEEK_OLLAMA_KEEP_ALIVE)
+    logger.info("[ingestion.config] ollama_stop_model_every=%d", CODESEEK_OLLAMA_STOP_MODEL_EVERY)
+
     should_refine_labels = (
         ENABLE_LLM_LABEL_REFINEMENT
         if enable_llm_label_refinement is None
@@ -124,50 +149,60 @@ def run_pipeline(
     # --- Parse + chunk ---
     all_chunks = []
     parsed_count = 0
-    for file in language_files:
-        if file.skipped:
-            continue
-        signature = build_file_signature(file)
-        file_was_unchanged = use_incremental_skip and is_file_unchanged(
-            file.relative_path, signature, previous_state
-        )
-        if file_was_unchanged:
-            next_state[file.relative_path] = signature
-            if not is_repo_summary_evidence_path(file.relative_path):
-                log_skip(file.relative_path, "unchanged_file", "skipped")
-                continue
-            log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
 
-        # Only track as modified if the file actually changed (not a forced evidence refresh)
-        if (use_incremental_skip and not should_recreate_collection
-                and not file_was_unchanged
-                and file.relative_path in previous_state):
-            modified_paths.append(file.relative_path)
+    batch_size = CODESEEK_CHUNK_PROCESS_BATCH_SIZE
+    if batch_size < 1:
+        batch_size = 1
 
-        parsed = parse_file(file, counters)
-        chunks = generate_chunks(parsed, file)
-        chunks = handle_overflow(chunks)
+    file_batches = [processable[i : i + batch_size] for i in range(0, len(processable), batch_size)]
 
-        for chunk in chunks:
-            build_metadata(chunk)
-            chunk.summary = generate_summary(chunk)
+    for file_batch in file_batches:
+        batch_chunks = []
+        for file in file_batch:
+            signature = build_file_signature(file)
+            file_was_unchanged = use_incremental_skip and is_file_unchanged(
+                file.relative_path, signature, previous_state
+            )
+            if file_was_unchanged:
+                next_state[file.relative_path] = signature
+                if not is_repo_summary_evidence_path(file.relative_path):
+                    log_skip(file.relative_path, "unchanged_file", "skipped")
+                    continue
+                log_skip(file.relative_path, "repo_summary_evidence_refresh", "parsed")
 
-        # Copy file_type to all chunks of the same file
-        file_type = next((c.file_type for c in chunks if c.file_type), "")
-        if file_type:
+            # Only track as modified if the file actually changed (not a forced evidence refresh)
+            if (use_incremental_skip and not should_recreate_collection
+                    and not file_was_unchanged
+                    and file.relative_path in previous_state):
+                modified_paths.append(file.relative_path)
+
+            parsed = parse_file(file, counters)
+            chunks = generate_chunks(parsed, file)
+            chunks = handle_overflow(chunks)
+
             for chunk in chunks:
-                chunk.file_type = file_type
+                build_metadata(chunk)
+                chunk.summary = generate_summary(chunk)
 
-        counters.chunks_generated += len(chunks)
-        all_chunks.extend(chunks)
-        if ENABLE_INCREMENTAL_FILE_SKIP:
-            next_state[file.relative_path] = signature
+            # Copy file_type to all chunks of the same file
+            file_type = next((c.file_type for c in chunks if c.file_type), "")
+            if file_type:
+                for chunk in chunks:
+                    chunk.file_type = file_type
 
+            counters.chunks_generated += len(chunks)
+            batch_chunks.extend(chunks)
+            if ENABLE_INCREMENTAL_FILE_SKIP:
+                next_state[file.relative_path] = signature
 
-        parsed_count += 1
-        if parsed_count % 10 == 0:
-            emit("parser", f"Parsed {parsed_count} files so far…",
-                 progress=parsed_count, total=len(processable))
+            parsed_count += 1
+            if parsed_count % 10 == 0:
+                emit("parser", f"Parsed {parsed_count} files so far…",
+                     progress=parsed_count, total=len(processable))
+
+        all_chunks.extend(batch_chunks)
+        del batch_chunks
+        cleanup_after_batch()
 
     emit("parser", f"Parsed {counters.files_parsed_ok} files successfully.",
          progress=counters.files_parsed_ok, total=len(processable), level="success")

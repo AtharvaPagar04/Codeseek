@@ -161,3 +161,22 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertIn("Environment variable handling is implemented in backend/retrieval/config.py", answer)
         self.assertNotIn("Low confidence", answer)
         generate_answer.assert_not_called()
+
+    def test_format_source_location_target_shape_reordering(self) -> None:
+        from retrieval.code_answers import _format_source_location_target_shape
+        sources = [
+            {"relative_path": "backend/retrieval/code_answers.py", "symbol_name": "build_flow_answer"},
+            {"relative_path": "backend/rag_ingestion/stages/storage.py", "symbol_name": "upsert_chunks"},
+        ]
+        # Test 1: Avoid code_answers.py as top source if another file exists
+        result1 = _format_source_location_target_shape(list(sources))
+        self.assertIn("The implementation is in:\n\n* `backend/rag_ingestion/stages/storage.py`\n  * symbol/function: `upsert_chunks`", result1)
+
+        # Test 2: Prioritize file mentioned in why_override
+        sources2 = [
+            {"relative_path": "backend/retrieval/api_service.py", "symbol_name": "get_session"},
+            {"relative_path": "backend/retrieval/session_indexer.py", "symbol_name": "create_session"},
+        ]
+        why_override = "The session creation happens in backend/retrieval/session_indexer.py inside create_session."
+        result2 = _format_source_location_target_shape(list(sources2), why_override=why_override)
+        self.assertIn("* `backend/retrieval/session_indexer.py`\n  * symbol/function: `create_session`", result2)

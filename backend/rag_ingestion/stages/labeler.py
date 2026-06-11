@@ -524,7 +524,7 @@ def refine_labels_with_llm(
     Returns [] on any failure — never raises.
     """
     from rag_ingestion.config import CHUNK_LABEL_LLM_TIMEOUT_SECONDS  # noqa: PLC0415
-    from retrieval.config import LOCAL_LLM_BASE_URL, LOCAL_LLM_PRIMARY_MODEL  # noqa: PLC0415
+    from retrieval.config import LOCAL_LLM_BASE_URL  # noqa: PLC0415
 
     try:
         prompt = build_label_refinement_prompt(chunk)
@@ -541,7 +541,13 @@ def refine_labels_with_llm(
             )
             return []
 
-        model = (pc.get("model") or "").strip() or LOCAL_LLM_PRIMARY_MODEL
+        from rag_ingestion.config import (
+            CODESEEK_LABEL_MODEL,
+            CODESEEK_OLLAMA_KEEP_ALIVE,
+            CODESEEK_LABEL_NUM_CTX,
+            CODESEEK_LABEL_MAX_TOKENS,
+        )
+        model = CODESEEK_LABEL_MODEL
         base_url = (pc.get("base_url") or LOCAL_LLM_BASE_URL or "").rstrip("/")
         if base_url.endswith("/chat/completions"):
             base_url = base_url.rsplit("/chat/completions", 1)[0]
@@ -565,7 +571,13 @@ def refine_labels_with_llm(
             "messages": messages,
             "stream": False,
             "temperature": 0.0,
-            "max_tokens": 200,
+            "max_tokens": CODESEEK_LABEL_MAX_TOKENS,
+            "keep_alive": CODESEEK_OLLAMA_KEEP_ALIVE,
+            "options": {
+                "num_ctx": CODESEEK_LABEL_NUM_CTX,
+                "num_predict": CODESEEK_LABEL_MAX_TOKENS,
+                "temperature": 0.0,
+            },
         }
 
         response = _httpx_mod.post(url, json=payload, timeout=CHUNK_LABEL_LLM_TIMEOUT_SECONDS)
@@ -667,34 +679,65 @@ def refine_chunk_labels_with_llm(
     )
     _emit("label_refinement_started", f"LLM label refinement: processing {total} chunks.")
 
+    from rag_ingestion.config import (
+        CODESEEK_LABEL_REFINE_BATCH_SIZE,
+        CODESEEK_OLLAMA_STOP_MODEL_EVERY,
+        CODESEEK_LABEL_MODEL,
+    )
+    from rag_ingestion.utils.gpu_cleanup import cleanup_after_batch, ollama_stop_model
+
+    batch_size = CODESEEK_LABEL_REFINE_BATCH_SIZE
+    if batch_size < 1:
+        batch_size = 1
+
+    batches = [selected[i : i + batch_size] for i in range(0, len(selected), batch_size)]
+
     refined_count = 0
-    for i, chunk in enumerate(selected, start=1):
-        try:
-            llm_labels = refine_labels_with_llm(chunk, provider_config=provider_config)
-            if llm_labels:
-                before = list(chunk.labels or [])
-                chunk.labels = merge_llm_labels(before, llm_labels)
-                added = sorted(set(chunk.labels) - set(before))
-                if added:
-                    _refinement_logger.debug(
-                        "Refined '%s': added %s",
-                        getattr(chunk, "relative_path", "?"),
-                        added,
-                    )
-                    refined_count += 1
-        except Exception as exc:
-            _refinement_logger.warning(
-                "LLM label refinement error for chunk '%s': %s",
-                getattr(chunk, "relative_path", "?"),
-                exc,
+    processed_count = 0
+    batch_count = 0
+
+    for batch in batches:
+        for chunk in batch:
+            processed_count += 1
+            try:
+                llm_labels = refine_labels_with_llm(chunk, provider_config=provider_config)
+                if llm_labels:
+                    before = list(chunk.labels or [])
+                    chunk.labels = merge_llm_labels(before, llm_labels)
+                    added = sorted(set(chunk.labels) - set(before))
+                    if added:
+                        _refinement_logger.debug(
+                            "Refined '%s': added %s",
+                            getattr(chunk, "relative_path", "?"),
+                            added,
+                        )
+                        refined_count += 1
+            except Exception as exc:
+                _refinement_logger.warning(
+                    "LLM label refinement error for chunk '%s': %s",
+                    getattr(chunk, "relative_path", "?"),
+                    exc,
+                )
+
+            _emit(
+                "label_refinement_progress",
+                f"LLM label refinement: {processed_count}/{total} chunks processed.",
+                progress=processed_count,
+                total=total,
             )
 
-        _emit(
-            "label_refinement_progress",
-            f"LLM label refinement: {i}/{total} chunks processed.",
-            progress=i,
-            total=total,
-        )
+        # Clean up resources after each batch
+        cleanup_after_batch()
+
+        # Optional Ollama stop model every N batches
+        batch_count += 1
+        if (
+            CODESEEK_OLLAMA_STOP_MODEL_EVERY > 0
+            and batch_count % CODESEEK_OLLAMA_STOP_MODEL_EVERY == 0
+        ):
+            model_to_stop = CODESEEK_LABEL_MODEL
+            base_url = (provider_config or {}).get("base_url") or "http://localhost:11434"
+            ollama_stop_model(model_to_stop, base_url)
 
     _refinement_logger.info(
         "LLM label refinement: %d/%d chunks had labels added", refined_count, total

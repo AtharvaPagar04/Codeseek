@@ -162,3 +162,292 @@ def test_no_raw_bracket_strings():
     assert "Dependencies:" not in result
     assert "Scripts:" not in result
     assert "Service Dependencies:" not in result
+
+
+def test_embed_chunks_batching_and_cleanup():
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    
+    chunks = [
+        Chunk(relative_path="file1.py", content="def a(): pass"),
+        Chunk(relative_path="file2.py", content="def b(): pass"),
+        Chunk(relative_path="file3.py", content="def c(): pass"),
+    ]
+    counters = PipelineCounters()
+    
+    mock_model = MagicMock()
+    
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 2), \
+         patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch") as mock_cleanup:
+         
+        # Since chunks are embedded in batches of size 2, mock_model.encode will be called twice:
+        # first time with 2 inputs, second time with 1 input.
+        import numpy as np
+        mock_model.encode.side_effect = [
+            np.array([[0.1]*384, [0.2]*384]),
+            np.array([[0.3]*384])
+        ]
+        
+        result = embed_chunks(chunks, counters)
+        
+        assert len(result) == 3
+        assert result[0].embedding == [0.1]*384
+        assert result[1].embedding == [0.2]*384
+        assert result[2].embedding == [0.3]*384
+        assert counters.embeddings_generated == 3
+        
+        # mock_cleanup should be called twice (once after each batch)
+        assert mock_cleanup.call_count == 2
+
+
+def test_embed_chunks_fails_cleanly_on_exception():
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    
+    chunks = [Chunk(relative_path="file1.py", content="def a(): pass")]
+    counters = PipelineCounters()
+    
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = RuntimeError("CUDA out of memory")
+    
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 16):
+         
+        with pytest.raises(RuntimeError) as exc_info:
+            embed_chunks(chunks, counters)
+        
+        assert "CUDA out of memory" in str(exc_info.value)
+
+
+def test_embedding_cooldown_triggers_after_300(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert sleep_calls == [30]
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown] embedded=300 remaining=100 sleeping=30s" in captured.out
+
+
+def test_embedding_cooldown_default_sleep_duration(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(350)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert sleep_calls == [30]
+    captured = capsys.readouterr()
+    assert "sleeping=30s" in captured.out
+
+
+def test_embedding_cooldown_disabled_with_every_zero(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 0), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert len(sleep_calls) == 0
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown]" not in captured.out
+
+
+def test_embedding_cooldown_disabled_with_seconds_zero(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 0), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert len(sleep_calls) == 0
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown]" not in captured.out
+
+
+def test_embedding_cooldown_does_not_sleep_after_final_batch(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(300)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert len(sleep_calls) == 0
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown]" not in captured.out
+
+
+def test_embedding_cooldown_cleanup_before_sleep():
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    actions = []
+
+    def fake_cleanup():
+        actions.append("cleanup")
+
+    def fake_sleep(secs):
+        actions.append("sleep")
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep), \
+         patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch", side_effect=fake_cleanup):
+
+        embed_chunks(chunks, counters)
+
+    assert actions == ["cleanup", "cleanup", "sleep", "cleanup"]
+
+
+def test_embedding_cooldown_log_message_contents(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(350)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
+         patch("rag_ingestion.stages.embedder._sleep"):
+
+        embed_chunks(chunks, counters)
+
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown] embedded=300 remaining=50 sleeping=30s" in captured.out
+
+
+def test_embedding_cooldown_variable_batch_sizes(capsys):
+    from unittest.mock import patch, MagicMock
+    from rag_ingestion.stages.embedder import embed_chunks
+    from rag_ingestion.utils.counters import PipelineCounters
+    import numpy as np
+
+    chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(1000)]
+    counters = PipelineCounters()
+
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 400), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 15), \
+         patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
+
+        embed_chunks(chunks, counters)
+
+    assert sleep_calls == [15, 15]
+
+    captured = capsys.readouterr()
+    assert "[embedding.cooldown] embedded=400 remaining=600 sleeping=15s" in captured.out
+    assert "[embedding.cooldown] embedded=800 remaining=200 sleeping=15s" in captured.out
+

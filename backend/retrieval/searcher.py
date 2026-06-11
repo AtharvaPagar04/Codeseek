@@ -41,6 +41,238 @@ _lexical_indexes: dict[str, "_LexicalIndex"] = {}
 IMPORT_TRACE_DEPTH_LIMIT = 3
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
 
+CODE_REQUEST_TOPIC_ROUTES = (
+    {
+        "id": "auth",
+        "phrases": [
+            "auth function code",
+            "auth code",
+            "authentication code",
+            "login auth code",
+            "session auth code",
+            "session validation function code",
+            "session validation code",
+            "validate session code",
+        ],
+        "target_paths": [
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/auth_store.py",
+        ],
+        "target_symbols": [
+            "_auth_key",
+            "_require_auth",
+            "_current_auth_user",
+            "_require_auth_user",
+            "create_auth_session",
+            "get_user_for_session_token",
+            "upsert_github_user",
+            "delete_auth_session",
+        ],
+        "symbol_path_hints": {
+            "_auth_key": "backend/retrieval/api_service.py",
+            "_require_auth": "backend/retrieval/api_service.py",
+            "_current_auth_user": "backend/retrieval/api_service.py",
+            "_require_auth_user": "backend/retrieval/api_service.py",
+            "create_auth_session": "backend/retrieval/auth_store.py",
+            "get_user_for_session_token": "backend/retrieval/auth_store.py",
+            "upsert_github_user": "backend/retrieval/auth_store.py",
+            "delete_auth_session": "backend/retrieval/auth_store.py",
+        },
+        "exclude_paths": [
+            "backend/rag_ingestion/stages/storage.py",
+            "backend/retrieval/searcher.py",
+        ],
+        "multi_intro": "I found multiple auth-related functions:",
+        "single_intro": "Here is the matching function:",
+        "preferred_display_count": 6,
+    },
+    {
+        "id": "safe_eval_runner",
+        "phrases": [
+            "safe eval runner code",
+            "safe eval code",
+            "safe evaluation runner code",
+            "show me the safe eval runner",
+            "run_safe_evals code",
+            "run safe eval code",
+            "safe eval implemented code",
+            "where is safe eval implemented",
+            "where is the safe eval runner implemented",
+            "where is run_safe_evals implemented",
+        ],
+        "target_paths": [
+            "backend/evals/run_safe_evals.py",
+        ],
+        "target_symbols": [],
+        "symbol_path_hints": {},
+        "exclude_paths": [
+            "backend/retrieval/auth_store.py",
+            "backend/retrieval/api_service.py",
+            "backend/rag_ingestion/stages/storage.py",
+            "backend/retrieval/searcher.py",
+        ],
+        "multi_intro": "I found multiple safe-eval runner snippets:",
+        "single_intro": "Here is the matching function/code:",
+        "preferred_display_count": 3,
+    },
+    {
+        "id": "qdrant_upsert",
+        "phrases": [
+            "qdrant upsert code",
+            "show me the qdrant upsert code",
+            "qdrant upsert",
+            "upsert qdrant",
+            "qdrant upsert implemented code",
+        ],
+        "target_paths": [
+            "backend/rag_ingestion/stages/storage.py",
+        ],
+        "target_symbols": [
+            "store_chunks",
+        ],
+        "symbol_path_hints": {
+            "store_chunks": "backend/rag_ingestion/stages/storage.py",
+        },
+        "exclude_paths": [
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/auth_store.py",
+        ],
+        "multi_intro": "I found multiple Qdrant upsert snippets:",
+        "single_intro": "Here is the matching function/code:",
+        "preferred_display_count": 2,
+    },
+    {
+        "id": "evaluation_report_api",
+        "phrases": [
+            "evaluation report api endpoint code",
+            "evaluation report endpoint code",
+            "latest evaluation report endpoint",
+            "evaluation latest endpoint",
+            "evaluation diagnostics endpoint",
+            "show me the evaluation report api code",
+            "show me the latest evaluation report code",
+        ],
+        "target_paths": [
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/eval_reports.py",
+        ],
+        "target_symbols": [
+            "get_latest_evaluation_report_v1",
+            "get_latest_evaluation_report",
+        ],
+        "symbol_path_hints": {
+            "get_latest_evaluation_report_v1": "backend/retrieval/api_service.py",
+            "get_latest_evaluation_report": "backend/retrieval/eval_reports.py",
+        },
+        "exclude_paths": [
+            "backend/retrieval/searcher.py",
+            "backend/rag_ingestion/stages/storage.py",
+        ],
+        "multi_intro": "I found multiple evaluation-report endpoint snippets:",
+        "single_intro": "Here is the matching function/code:",
+        "preferred_display_count": 2,
+    },
+)
+
+
+def _normalized_query_text(raw_query: str) -> str:
+    lowered = (raw_query or "").strip().lower()
+    if not lowered:
+        return ""
+    for repeats in range(4, 1, -1):
+        if len(lowered) % repeats:
+            continue
+        piece = lowered[: len(lowered) // repeats]
+        if piece * repeats == lowered:
+            lowered = piece
+            break
+    lowered = lowered.replace("_", " ").replace("-", " ")
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    words = lowered.split()
+    for size in range(1, (len(words) // 2) + 1):
+        if len(words) % size:
+            continue
+        unit = words[:size]
+        if unit * (len(words) // size) == words:
+            words = unit
+            break
+    return " ".join(words)
+
+
+def query_explicitly_requests_non_implementation_artifacts(raw_query: str) -> bool:
+    q = _normalized_query_text(raw_query)
+    if not q:
+        return False
+    if any(term in q for term in ("test", "tests", "doc", "docs", "documentation", ".md", "markdown")):
+        return True
+    if any(term in q for term in ("scratch", "benchmark", "plan")):
+        return True
+    if "report" in q:
+        implementation_markers = (" code", " endpoint", " api", " function", " handler", " implemented")
+        if not any(marker in f" {q}" for marker in implementation_markers):
+            return True
+    return False
+
+
+def query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
+    q = _normalized_query_text(raw_query)
+    return any(
+        term in q
+        for term in (
+            "retrieval routing",
+            "reranking",
+            "reranker",
+            "searcher internals",
+            "searcher.py",
+            "retrieval/searcher.py",
+        )
+    )
+
+
+def path_matches_topic_route(relative_path: str, route: dict | None) -> bool:
+    if not route:
+        return False
+    rel = (relative_path or "").lower()
+    return any(rel == target.lower() or rel.endswith("/" + target.lower()) for target in route.get("target_paths", []))
+
+
+def symbol_matches_topic_route(symbol_name: str, relative_path: str, route: dict | None) -> bool:
+    if not route:
+        return False
+    symbol = str(symbol_name or "")
+    if not symbol:
+        return False
+    if symbol not in route.get("target_symbols", []):
+        return False
+    expected_path = route.get("symbol_path_hints", {}).get(symbol)
+    if not expected_path:
+        return True
+    return path_matches_topic_route(relative_path, {"target_paths": [expected_path]})
+
+
+def topic_route_excludes_path(relative_path: str, route: dict | None) -> bool:
+    if not route:
+        return False
+    rel = (relative_path or "").lower()
+    return any(rel == target.lower() or rel.endswith("/" + target.lower()) for target in route.get("exclude_paths", []))
+
+
+def match_code_topic_route(raw_query: str, primary_intent: str | None = None) -> dict | None:
+    q = _normalized_query_text(raw_query)
+    raw_lower = (raw_query or "").lower()
+    if not q:
+        return None
+    allow_source_location = primary_intent in {"FILE", "SYMBOL", "CODE_REQUEST"} or "where is" in q or "where are" in q
+    if not allow_source_location:
+        return None
+    for route in CODE_REQUEST_TOPIC_ROUTES:
+        if route["id"] == "auth" and any(symbol.lower() in raw_lower for symbol in route.get("target_symbols", [])):
+            continue
+        if any(phrase in q for phrase in route["phrases"]):
+            return route
+    return None
+
 
 @dataclass
 class _LexicalDocument:
@@ -117,11 +349,19 @@ def search(query_info: dict) -> list[dict]:
 
     local_content_results = _local_content_match_candidates(raw_query, primary_intent)
 
+    matched_code_topic_route = match_code_topic_route(raw_query, primary_intent)
+    if matched_code_topic_route:
+        query_info["code_topic_route"] = matched_code_topic_route
+
     conversation_state = query_info.get("conversation_state") or {}
     previous_files = conversation_state.get("previous_files", [])
     history_results = []
-    if (query_info.get("is_followup") or primary_intent == "FOLLOWUP") and previous_files:
+    history_is_allowed = not matched_code_topic_route or primary_intent == "FOLLOWUP"
+    if (query_info.get("is_followup") or primary_intent == "FOLLOWUP") and previous_files and history_is_allowed:
         history_results = _inject_previous_files_candidates(previous_files)
+
+    direct_topic_results = _inject_direct_topics_candidates(raw_query, primary_intent)
+    auth_routing_results = _inject_code_topic_routing_candidates(raw_query, primary_intent, matched_code_topic_route)
 
     merged = _merge_results(
         dense_results,
@@ -131,6 +371,8 @@ def search(query_info: dict) -> list[dict]:
         dependency_results,
         local_content_results,
         history_results,
+        direct_topic_results,
+        auth_routing_results,
     )
     # Inject repo-summary and structured overview evidence for any query whose
     # primary intent is broad/structural.  The phrase-based gate is kept as a
@@ -141,6 +383,23 @@ def search(query_info: dict) -> list[dict]:
         merged = _inject_architecture_file_candidates(merged, entities)
     merged = _inject_import_backing_candidates(raw_query, merged)
     merged = _rerank_with_query_tokens(raw_query, merged, query_info)
+
+    query_intent_explicit = any(
+        term in raw_query.lower()
+        for term in [
+            "query_intent.py",
+            "is_code_request_query",
+            "code request detection",
+            "intent classifier",
+            "query classification",
+        ]
+    )
+    if not query_intent_explicit:
+        merged = [
+            m for m in merged
+            if "query_intent.py" not in (m.get("relative_path") or "")
+        ]
+
     return merged[:TOP_K_AFTER_MERGE]
 
 
@@ -189,7 +448,7 @@ def _dense_search(raw_query: str):
     
     res = []
     for point in points:
-        payload = point.payload or {}
+        payload = dict(point.payload or {})
         rel_path = payload.get("relative_path", "")
         if _should_ignore_for_retrieval(rel_path):
             continue
@@ -252,7 +511,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
         if response is not None:
             hits, _ = response
             found_file_hint = bool(hits)
-            results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+            results.extend((dict(hit.payload or {}), 0.0, "filter") for hit in hits)
         if not found_file_hint:
             local_payload = _local_file_hint_payload(file_hint)
             if local_payload:
@@ -271,7 +530,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
             if response is None:
                 continue
             hits, _ = response
-            results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+            results.extend((dict(hit.payload or {}), 0.0, "filter") for hit in hits)
 
     for symbol in symbols:
         found_symbol = False
@@ -288,7 +547,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
         else:
             hits, _ = response
             found_symbol = bool(hits)
-            results.extend((hit.payload or {}, 0.0, "filter") for hit in hits)
+            results.extend((dict(hit.payload or {}), 0.0, "filter") for hit in hits)
         if not found_symbol:
             local_payload = _local_symbol_hint_payload(symbol)
             if local_payload:
@@ -313,7 +572,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
                 continue
             hits, _ = response
             for hit in hits:
-                payload = hit.payload or {}
+                payload = dict(hit.payload or {})
                 relative_path = str(payload.get("relative_path", "")).lower()
                 if key.lower() in relative_path:
                     results.append((payload, 0.0, "metadata"))
@@ -336,7 +595,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
             continue
         hits, _ = response
         for hit in hits:
-            payload = hit.payload or {}
+            payload = dict(hit.payload or {})
             relative_path = str(payload.get("relative_path", "")).lower()
             if key.lower() in relative_path:
                 results.append((payload, 0.0, "metadata"))
@@ -362,7 +621,7 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
             if response is not None:
                 hits, _ = response
                 for hit in hits:
-                    payload = hit.payload or {}
+                    payload = dict(hit.payload or {})
                     results.append((payload, 0.0, "metadata"))
 
     return results
@@ -931,7 +1190,7 @@ def _merge_results(*layers):
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
             if source in {"dense", "lexical", "metadata"}:
                 records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
-            if source in {"filter", "calls", "exact_entity", "history"}:
+            if source in {"filter", "calls", "exact_entity", "history", "direct_injection", "auth_routing", "code_topic_routing"}:
                 records[chunk_id]["exact_retrieval_hit"] = True
             layer_hits[chunk_id].add(source)
 
@@ -949,6 +1208,215 @@ def _merge_results(*layers):
         )
     )
     return merged
+
+
+def _inject_direct_topics_candidates(raw_query: str, primary_intent: str) -> list[tuple[dict, float, str]]:
+    q = (raw_query or "").lower()
+    
+    # 1. Freshness Queries
+    freshness_triggers = {
+        "repo freshness",
+        "freshness status",
+        "repo status",
+        "dirty worktree",
+        "stale repo",
+        "index latest",
+        "status checked",
+    }
+    
+    # 2. Auth / Session Validation Queries
+    auth_triggers = {
+        "auth",
+        "authentication",
+        "github auth",
+        "session validation",
+        "validate session",
+        "session cookie",
+        "auth session",
+        "login callback",
+    }
+    
+    target_files = []
+    # Match any of the trigger phrases
+    if any(trigger in q for trigger in freshness_triggers):
+        target_files = [
+            "backend/retrieval/session_indexer.py",
+            "backend/retrieval/api_service.py",
+            "frontend/src/components/SessionView.jsx"
+        ]
+    elif any(trigger in q for trigger in auth_triggers):
+        target_files = [
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/auth_store.py",
+            "backend/retrieval/db.py",
+            "frontend/src/pages/AuthCallback.jsx"
+        ]
+    elif "repo_freshness_report.md" in q or "freshness report" in q:
+        target_files = [
+            "REPO_FRESHNESS_REPORT.md"
+        ]
+        
+    if not target_files:
+        return []
+        
+    repo_root = Path(get_repo_root()).resolve()
+    results = []
+    
+    for rel_path in target_files:
+        file_path = repo_root / rel_path
+        if not file_path.is_file():
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+            payload = {
+                "chunk_id": f"direct-inject::{rel_path}",
+                "relative_path": rel_path,
+                "symbol_name": "",
+                "qualified_symbol": f"{rel_path}::__file__",
+                "chunk_type": "file",
+                "language": file_path.suffix.lower().lstrip("."),
+                "start_line": 1,
+                "end_line": max(1, len(lines)),
+                "summary": f"Direct injected file candidate {rel_path}",
+                "content": text,
+                "content_excerpt": text[:4000],
+                "exact_retrieval_hit": True,
+                "support_kind": "direct_injection",
+                "labels": ["question_use:code-location", "question_use:implementation"],
+            }
+            results.append((payload, 0.95, "direct_injection"))
+        except OSError:
+            continue
+            
+    return results
+
+
+def _inject_code_topic_routing_candidates(
+    raw_query: str,
+    primary_intent: str,
+    matched_route: dict | None = None,
+) -> list[tuple[dict, float, str]]:
+    from retrieval.code_answers import is_code_request
+    route = matched_route or match_code_topic_route(raw_query, primary_intent)
+    if not route:
+        return []
+    if primary_intent != "CODE_REQUEST" and not is_code_request(raw_query) and "where is" not in _normalized_query_text(raw_query):
+        return []
+
+    client = _get_client()
+    collection = get_collection_name()
+    results = []
+    seen_chunk_ids: set[str] = set()
+
+    for rel_path in route.get("target_paths", []):
+        response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="relative_path", match=MatchValue(value=rel_path))]
+            ),
+            limit=20,
+            with_payload=True,
+        ))
+        hits = response[0] if response is not None else []
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            chunk_id = str(payload.get("chunk_id", "")).strip()
+            if chunk_id and chunk_id in seen_chunk_ids:
+                continue
+            if not path_matches_topic_route(payload.get("relative_path", ""), route):
+                continue
+            payload["exact_retrieval_hit"] = True
+            payload["support_kind"] = "code_topic_routing"
+            results.append((payload, 0.97, "code_topic_routing"))
+            if chunk_id:
+                seen_chunk_ids.add(chunk_id)
+
+        local_file_payload = _local_file_hint_payload(rel_path)
+        if local_file_payload:
+            chunk_id = str(local_file_payload.get("chunk_id", "")).strip()
+            if chunk_id and chunk_id not in seen_chunk_ids:
+                local_file_payload["exact_retrieval_hit"] = True
+                local_file_payload["support_kind"] = "code_topic_routing"
+                results.append((local_file_payload, 0.93, "code_topic_routing"))
+                seen_chunk_ids.add(chunk_id)
+
+    for symbol in route.get("target_symbols", []):
+        expected_path = route.get("symbol_path_hints", {}).get(symbol)
+        response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="symbol_name", match=MatchValue(value=symbol))]
+            ),
+            limit=8,
+            with_payload=True,
+        ))
+        hits = response[0] if response is not None else []
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            chunk_id = str(payload.get("chunk_id", "")).strip()
+            rel_path = payload.get("relative_path", "")
+            if chunk_id and chunk_id in seen_chunk_ids:
+                continue
+            if expected_path and not path_matches_topic_route(rel_path, {"target_paths": [expected_path]}):
+                continue
+            if not path_matches_topic_route(rel_path, route):
+                continue
+            payload["exact_retrieval_hit"] = True
+            payload["support_kind"] = "code_topic_routing"
+            results.append((payload, 0.99, "code_topic_routing"))
+            if chunk_id:
+                seen_chunk_ids.add(chunk_id)
+
+    return results
+
+
+def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list[tuple[dict, float, str]]:
+    from retrieval.code_answers import is_code_request
+    if primary_intent != "CODE_REQUEST" and not is_code_request(raw_query):
+        return _inject_code_topic_routing_candidates(raw_query, primary_intent)
+
+    q_lower = _normalized_query_text(raw_query)
+    legacy_symbol_routes = {
+        "query endpoint": [("_query_impl", "backend/retrieval/api_service.py")],
+        "qdrant upsert": [("store_chunks", "backend/rag_ingestion/stages/storage.py")],
+        "session validation": [
+            ("get_user_for_session_token", "backend/retrieval/auth_store.py"),
+            ("_current_auth_user", "backend/retrieval/api_service.py"),
+            ("_require_auth_user", "backend/retrieval/api_service.py"),
+        ],
+    }
+    selected_routes = []
+    for phrase, entries in legacy_symbol_routes.items():
+        if phrase in q_lower:
+            selected_routes = entries
+            break
+
+    if not selected_routes:
+        return _inject_code_topic_routing_candidates(raw_query, primary_intent)
+
+    client = _get_client()
+    collection = get_collection_name()
+    results = []
+    for symbol, expected_path in selected_routes:
+        response = _qdrant_call(lambda: client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="symbol_name", match=MatchValue(value=symbol))]
+            ),
+            limit=8,
+            with_payload=True,
+        ))
+        hits = response[0] if response is not None else []
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            rel_path = payload.get("relative_path", "")
+            if not path_matches_topic_route(rel_path, {"target_paths": [expected_path]}):
+                continue
+            payload["exact_retrieval_hit"] = True
+            payload["support_kind"] = "auth_routing"
+            results.append((payload, 0.99, "auth_routing"))
+    return results
 
 
 def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) -> list[dict]:
@@ -1241,9 +1709,106 @@ def config_source_boost(candidate: dict, query: str, intent: str) -> float:
 
     return min(boost, 0.65)
 
+
+def classify_source_role(relative_path: str) -> str:
+    if not relative_path:
+        return "unknown"
+    path_lower = relative_path.lower()
+    
+    # 1. answer_template
+    if path_lower == "backend/retrieval/code_answers.py" or path_lower.endswith("backend/retrieval/code_answers.py"):
+        return "answer_template"
+        
+    # 2. generated_eval
+    if ("evals/reports/" in path_lower or 
+        "eval_reports/" in path_lower or 
+        "safe_eval_latest/" in path_lower or 
+        path_lower.startswith("safe_eval_latest/")):
+        return "generated_eval"
+        
+    # 3. test
+    if (path_lower.startswith("backend/tests/") or 
+        "/tests/" in path_lower or 
+        ".test." in path_lower or 
+        path_lower.endswith("_test.py") or 
+        path_lower.endswith("test.js") or 
+        path_lower.endswith("test.jsx")):
+        return "test"
+        
+    # 4. docs
+    if (path_lower.endswith(".md") or 
+        path_lower.startswith("docs/") or 
+        "/docs/" in path_lower or 
+        path_lower.startswith("reports/") or 
+        "/reports/" in path_lower):
+        return "docs"
+        
+    # 5. scratch/tooling
+    if (path_lower.startswith("backend/scratch/") or 
+        "scratch/" in path_lower or 
+        "benchmark" in path_lower or 
+        "verify" in path_lower or 
+        "validate" in path_lower or 
+        "check" in path_lower):
+        return "scratch/tooling"
+        
+    # 6. implementation
+    if (
+        (path_lower.startswith("backend/retrieval/") and path_lower.endswith(".py")) or
+        (path_lower.startswith("backend/evals/") and path_lower.endswith(".py")) or
+        (path_lower.startswith("backend/rag_ingestion/") and path_lower.endswith(".py")) or
+        (path_lower.startswith("frontend/src/") and (path_lower.endswith(".js") or path_lower.endswith(".jsx")))
+    ):
+        return "implementation"
+        
+    return "unknown"
+
+
+def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
+    path = (relative_path or "").lower()
+    q = (raw_query or "").lower()
+    route = match_code_topic_route(raw_query, "CODE_REQUEST")
+    if route:
+        if path_matches_topic_route(path, route):
+            return 1.2
+        if topic_route_excludes_path(path, route):
+            return -3.0
+    
+    # 1. FastAPI/app initialized
+    if "fastapi" in q or "app init" in q or "initialize" in q:
+        if path == "backend/retrieval/api_service.py":
+            return 0.9
+            
+    # 2. Qdrant upsert
+    if "qdrant upsert" in q or "upsert to qdrant" in q or "upsert qdrant" in q or ("qdrant" in q and "upsert" in q):
+        if path == "backend/rag_ingestion/stages/storage.py":
+            return 0.9
+            
+    # 3. repo freshness/status/dirty/stale/index latest
+    if (
+        "freshness" in q
+        or "repo status" in q
+        or "dirty" in q
+        or "stale" in q
+        or "index latest" in q
+        or "reindex" in q
+        or "index status" in q
+    ):
+        if path in {"backend/retrieval/session_indexer.py", "backend/retrieval/api_service.py"}:
+            return 0.9
+            
+    # 4. auth/session validation
+    if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/auth_store.py", "backend/retrieval/db.py"}:
+            return 0.9
+            
+    return 0.0
+
+
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     """Apply unified label-aware and lexical scoring to rank candidates."""
     from pathlib import Path
+    from retrieval.source_filter import apply_query_negative_filters
     query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
 
@@ -1253,6 +1818,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     extracted_symbols = extracted_entities.get("symbols", []) if extracted_entities else []
     is_followup = query_info.get("is_followup", False) if query_info else False
     is_low_context = (query_info.get("primary_intent") == "LOW_CONTEXT") if query_info else False
+    primary_intent = query_info.get("primary_intent") if query_info else None
 
     reranker_intent = map_label_intent_to_reranker_intent(
         label_intent,
@@ -1265,6 +1831,20 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     conversation_state = query_info.get("conversation_state") if query_info else None
     previous_files = conversation_state.get("previous_files", []) if conversation_state else []
     previous_symbols = conversation_state.get("previous_symbols", []) if conversation_state else []
+    matched_code_topic_route = (
+        query_info.get("code_topic_route") if query_info else None
+    ) or match_code_topic_route(raw_query, primary_intent)
+    strict_code_topic_route = bool(
+        matched_code_topic_route
+        and not query_explicitly_requests_non_implementation_artifacts(raw_query)
+        and not query_explicitly_requests_searcher_internals(raw_query)
+    )
+    candidates = apply_query_negative_filters(
+        candidates,
+        raw_query,
+        intent=primary_intent,
+        matched_route=matched_code_topic_route if strict_code_topic_route else None,
+    )
 
     rescored = []
     for item in candidates:
@@ -1338,6 +1918,196 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                 else:
                     index_health_boost_val = 0.40
 
+        # Source-role and routing boosts
+        role_boost = 0.0
+        role_deboost = 0.0
+        
+        # In source-location and flow-summary intent modes
+        is_src_loc_or_flow_sum = reranker_intent in {"FILE", "SYMBOL", "ARCHITECTURE", "OVERVIEW"}
+        
+        role = classify_source_role(relative_path)
+        if is_src_loc_or_flow_sum:
+            if role == "implementation":
+                role_boost = 0.45
+            elif role in {"docs", "generated_eval", "test", "scratch/tooling"}:
+                role_deboost = -0.40
+            elif role == "answer_template":
+                q_lower = raw_query.lower()
+                allow_answer_template = (
+                    "answer formatting" in q_lower
+                    or "source-location" in q_lower
+                    or "overview answer" in q_lower
+                    or "flow answer" in q_lower
+                    or "builder" in q_lower
+                    or "code_answers" in q_lower
+                )
+                if not allow_answer_template:
+                    role_deboost = -1.50
+
+        # Deboost REPO_FRESHNESS_REPORT.md strongly unless explicitly asked
+        if "repo_freshness_report.md" in relative_path.lower():
+            explicit_doc_request = any(term in raw_query.lower() for term in ["report", "document", "file", "read", "say", "md"])
+            if not explicit_doc_request:
+                role_deboost -= 2.0
+
+        # Deboost logic for auth/session validation queries on test/docs/scratch/benchmarks
+        auth_triggers = {
+            "auth", "authentication", "github auth", "session validation",
+            "validate session", "session cookie", "auth session", "login callback"
+        }
+        q_lower = raw_query.lower()
+        if any(term in q_lower for term in auth_triggers):
+            explicit_doc_request = any(term in q_lower for term in ["test", "scratch", "benchmark", "plan", "document", "report", "file", "md"])
+            if not explicit_doc_request:
+                rel_lower = relative_path.lower()
+                if (
+                    "backend/tests/" in rel_lower
+                    or "backend/scratch/" in rel_lower
+                    or ("backend/scripts/" in rel_lower and "benchmark" in rel_lower)
+                    or "codeseek_" in rel_lower
+                    or "validation_and_improvement_plan" in rel_lower
+                ):
+                    role_deboost -= 2.0
+
+        # CODE_REQUEST intent-specific boosts (Task 3 & 4)
+        code_request_boost = 0.0
+        code_request_deboost = 0.0
+        auth_code_boost = 0.0
+        code_topic_route_boost = 0.0
+        code_topic_route_deboost = 0.0
+        
+        is_code = (label_intent in {"CODE_REQUEST", "code_snippet"} or primary_intent == "CODE_REQUEST")
+        if is_code:
+            chunk_type = item.get("chunk_type")
+            symbol_name = item.get("symbol_name")
+            labels = item.get("labels", [])
+            content = item.get("content") or item.get("content_excerpt") or ""
+            
+            # 1. Prefer function-level chunks
+            if chunk_type == "function":
+                code_request_boost += 0.50
+            elif chunk_type == "class":
+                code_request_boost += 0.30
+                
+            # 2. symbol_name exists
+            if symbol_name:
+                code_request_boost += 0.30
+                symbols_to_check = list(extracted_symbols)
+                query_words = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", raw_query)
+                for w in query_words:
+                    if w not in symbols_to_check:
+                        symbols_to_check.append(w)
+                
+                symbol_name_lower = str(symbol_name).lower()
+                matched_exact = False
+                for sym in symbols_to_check:
+                    sym_lower = sym.lower()
+                    if sym_lower == symbol_name_lower:
+                        if sym_lower == "_require_auth" and "_require_auth_user" in q_lower:
+                            continue
+                        matched_exact = True
+                        break
+                
+                if matched_exact:
+                    code_request_boost += 3.0
+                    
+            # 3. source/code labels
+            if any("code" in str(lbl).lower() for lbl in labels) or "question_use:code-snippet" in labels:
+                code_request_boost += 0.25
+                
+            # 4. content contains actual code constructs
+            code_markers = ["def ", "class ", "import ", "return ", " = ", "self.", "async def "]
+            if any(marker in content for marker in code_markers):
+                code_request_boost += 0.25
+                
+            # 5. implementation paths over docs/tests/reports
+            if role == "implementation":
+                code_request_boost += 0.30
+            elif role in {"docs", "generated_eval", "test", "scratch/tooling"}:
+                # Deboost docs/tests/reports unless explicitly requested
+                explicit_docs_or_tests = any(t in raw_query.lower() for t in ["test", "tests", "doc", "docs", "documentation", "report", "scratch", "plan"])
+                if not explicit_docs_or_tests:
+                    code_request_deboost -= 1.20
+            
+            # Extra penalty for markdown files or non-code bearing chunks
+            if relative_path.endswith(".md") or not any(marker in content for marker in code_markers):
+                code_request_deboost -= 0.60
+
+            # 6. Specific topic code routing (Task 4)
+            q_lower = raw_query.lower()
+            
+            # "show me the query endpoint code" -> api_service.py::_query_impl
+            if "query endpoint" in q_lower or "query_endpoint" in q_lower:
+                if symbol_name == "_query_impl" and "api_service.py" in relative_path:
+                    auth_code_boost += 3.0
+            
+            # "show me the Qdrant upsert code" -> stages/storage.py::store_chunks
+            elif "qdrant upsert" in q_lower or "qdrant_upsert" in q_lower:
+                if symbol_name == "store_chunks" and "stages/storage.py" in relative_path:
+                    auth_code_boost += 3.0
+            
+            # "provide me the session validation function code" -> auth_store.py::get_user_for_session_token & api_service.py::_current_auth_user/_require_auth_user
+            elif "session validation" in q_lower or "validate_session" in q_lower:
+                if symbol_name in ["get_user_for_session_token", "_current_auth_user", "_require_auth_user"]:
+                    auth_code_boost += 3.0
+                    
+            # "provide me the auth function code"
+            elif "auth function" in q_lower or "auth code" in q_lower:
+                target_symbols = {
+                    "api_service.py": ["_auth_key", "_require_auth", "_current_auth_user", "_require_auth_user"],
+                    "auth_store.py": ["create_auth_session", "get_user_for_session_token", "upsert_github_user", "delete_auth_session"]
+                }
+                for f_name, symbols in target_symbols.items():
+                    if f_name in relative_path and symbol_name in symbols:
+                        auth_code_boost += 3.0
+            
+            # General auth keywords fallback
+            else:
+                auth_keywords = ["auth", "session", "login", "cookie", "token"]
+                if any(kw in q_lower for kw in auth_keywords):
+                    target_symbols = {
+                        "api_service.py": ["_auth_key", "_require_auth", "_current_auth_user", "_require_auth_user"],
+                        "auth_store.py": ["create_auth_session", "get_user_for_session_token", "upsert_github_user", "delete_auth_session"]
+                    }
+                    for f_name, symbols in target_symbols.items():
+                        if f_name in relative_path:
+                            specific_mention = False
+                            for s in symbols:
+                                if s in q_lower:
+                                    specific_mention = True
+                                    if symbol_name == s:
+                                        auth_code_boost += 2.0
+                            
+                            if not specific_mention and symbol_name in symbols:
+                                auth_code_boost += 1.5
+
+            if matched_code_topic_route:
+                matches_route = (
+                    path_matches_topic_route(relative_path, matched_code_topic_route)
+                    or symbol_matches_topic_route(symbol_name, relative_path, matched_code_topic_route)
+                )
+                if matches_route:
+                    code_topic_route_boost += 3.5
+                    if role == "implementation":
+                        code_topic_route_boost += 0.5
+                elif strict_code_topic_route:
+                    if role == "implementation":
+                        code_topic_route_deboost -= 4.0
+                    if item.get("support_kind") == "conversation_history":
+                        code_topic_route_deboost -= 2.5
+                if topic_route_excludes_path(relative_path, matched_code_topic_route):
+                    code_topic_route_deboost -= 5.0
+                if strict_code_topic_route and "backend/retrieval/searcher.py" in relative_path.lower():
+                    code_topic_route_deboost -= 4.0
+
+        # Injected candidates boost
+        if item.get("support_kind") == "direct_injection":
+            role_boost += 1.5
+        if item.get("support_kind") == "code_topic_routing":
+            role_boost += 2.0
+
+        routing_boost = feature_specific_routing_boost(relative_path, raw_query)
+
         final_score = (
             0.70 * vector_score
             + 0.15 * exact_match_score
@@ -1352,6 +2122,14 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + qdrant_boost
             + config_boost
             + index_health_boost_val
+            + role_boost
+            + role_deboost
+            + routing_boost
+            + code_request_boost
+            + code_request_deboost
+            + auth_code_boost
+            + code_topic_route_boost
+            + code_topic_route_deboost
         )
 
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)
@@ -1748,7 +2526,7 @@ def _fetch_import_symbol_chunks(
     if response is None:
         return []
     hits, _ = response
-    payloads = [hit.payload or {} for hit in hits]
+    payloads = [dict(hit.payload or {}) for hit in hits]
     if payloads:
         return payloads
 

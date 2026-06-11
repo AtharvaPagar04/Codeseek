@@ -132,6 +132,24 @@ def build_recent_entity_set(
     }
 
 
+def latest_rendered_entity_set(recent_turns: Sequence[dict]) -> dict[str, list[str]]:
+    """Return the entity set from the most recent rendered assistant turn.
+
+    This is the strongest follow-up anchor and should outrank older turns
+    when resolving vague references like "that" or "it".
+    """
+    if not recent_turns:
+        return {"files": [], "symbols": [], "routes": [], "env_keys": [], "services": []}
+    latest = recent_turns[-1].get("entities") or {}
+    return {
+        "files": list(latest.get("files", []) or []),
+        "symbols": list(latest.get("symbols", []) or []),
+        "routes": list(latest.get("routes", []) or []),
+        "env_keys": list(latest.get("env_keys", []) or []),
+        "services": list(latest.get("services", []) or []),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Topic-shift detection
 # ---------------------------------------------------------------------------
@@ -248,8 +266,9 @@ def rewrite_follow_up_query(
     has_recent = _any_entities(recent_entity_set)
 
     if vague_query and has_recent:
-        # Pick the most recent symbol or file as the anchor term.
-        anchor_term = _most_salient_entity(recent_entity_set)
+        # Prefer a file+symbol anchor when available so vague follow-ups stay
+        # tied to the most recently rendered implementation source.
+        anchor_term = _most_salient_entity_reference(recent_entity_set)
         if anchor_term and anchor_term.lower() not in lower:
             resolved = f"{anchor_term} — {raw_query.strip()}"
             # Always prepend the previous anchor context for multi-hop continuity.
@@ -261,6 +280,11 @@ def rewrite_follow_up_query(
     if anchor and anchor != raw_query.strip():
         return f"{anchor}\n{raw_query.strip()}"
     return raw_query.strip()
+
+
+def is_vague_follow_up_query(raw_query: str) -> bool:
+    """Return True when a query is vague enough to reuse recent context."""
+    return _is_vague_query(raw_query.strip().lower())
 
 
 def _is_vague_query(lower: str) -> bool:
@@ -299,7 +323,24 @@ def _most_salient_entity(entity_set: dict[str, list[str]]) -> str:
     for key in ("symbols", "files", "services", "routes", "env_keys"):
         values = entity_set.get(key) or []
         if values:
-            return values[-1]  # most recently cited
+            return values[0]  # most recently cited
+    return ""
+
+
+def _most_salient_entity_reference(entity_set: dict[str, list[str]]) -> str:
+    """Return the most specific recent entity reference we can anchor on."""
+    files = entity_set.get("files") or []
+    symbols = entity_set.get("symbols") or []
+    if files and symbols:
+        return f"{files[0]}::{symbols[0]}"
+    if symbols:
+        return symbols[0]
+    if files:
+        return files[0]
+    for key in ("services", "routes", "env_keys"):
+        values = entity_set.get(key) or []
+        if values:
+            return values[0]
     return ""
 
 

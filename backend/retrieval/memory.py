@@ -5,8 +5,10 @@ import tiktoken
 from retrieval.chat_store import (
     list_session_messages,
     list_session_turns,
+    latest_session_assistant_message,
     list_thread_messages,
     list_thread_turns,
+    latest_thread_assistant_message,
 )
 from retrieval.memory_store import (
     get_session_memory,
@@ -111,6 +113,7 @@ class ConversationMemory:
         self.turns: list[dict[str, str]] = []
         # WS7: parallel list of entity dicts, one per turn.
         self._turn_entities: list[dict] = []
+        self._turn_sources: list[list[dict]] = []
 
     def add(
         self,
@@ -119,6 +122,7 @@ class ConversationMemory:
         resolved_query: str | None = None,
         *,
         entities: dict | None = None,
+        rendered_sources: list[dict] | None = None,
         primary_intent: str = "",  # accepted but unused in in-process memory
     ) -> None:
         self.turns.append(
@@ -129,9 +133,11 @@ class ConversationMemory:
             }
         )
         self._turn_entities.append(entities or {})
+        self._turn_sources.append(list(rendered_sources or []))
         if len(self.turns) > self.max_turns:
             self.turns.pop(0)
             self._turn_entities.pop(0)
+            self._turn_sources.pop(0)
 
     def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
         """Return the last *max_turns* per-turn entity dicts, oldest first.
@@ -142,6 +148,11 @@ class ConversationMemory:
             {"entities": e}
             for e in self._turn_entities[-max_turns:]
         ]
+
+    def latest_rendered_sources(self) -> list[dict]:
+        if not self._turn_sources:
+            return []
+        return list(self._turn_sources[-1])
 
     def latest_query(self) -> str:
         if not self.turns:
@@ -186,6 +197,7 @@ class SessionConversationMemory:
         resolved_query: str | None = None,
         *,
         entities: dict | None = None,
+        rendered_sources: list[dict] | None = None,
         primary_intent: str = "",
     ) -> None:
         # Derive turn_index from existing entity rows so it is always monotonically
@@ -217,6 +229,7 @@ class SessionConversationMemory:
             resolved_query=(resolved_query or query),
             entities=entities or {},
         )
+        del rendered_sources
 
     def latest_query(self) -> str:
         messages = list_session_messages(self.session_id)
@@ -234,6 +247,13 @@ class SessionConversationMemory:
     def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
         """Return last *max_turns* per-turn entity rows for this session."""
         return list_session_turn_entities(self.session_id, max_turns=max_turns)
+
+    def latest_rendered_sources(self) -> list[dict]:
+        message = latest_session_assistant_message(self.session_id)
+        if not message:
+            return []
+        sources = message.get("sources") or []
+        return list(sources) if isinstance(sources, list) else []
 
     def get_history_block(self) -> str:
         state = get_session_memory(self.session_id)
@@ -278,6 +298,7 @@ class ThreadConversationMemory:
         resolved_query: str | None = None,
         *,
         entities: dict | None = None,
+        rendered_sources: list[dict] | None = None,
         primary_intent: str = "",
     ) -> None:
         # Derive turn_index from existing entity rows so it is always monotonically
@@ -309,6 +330,7 @@ class ThreadConversationMemory:
             resolved_query=(resolved_query or query),
             entities=entities or {},
         )
+        del rendered_sources
 
     def latest_query(self) -> str:
         messages = list_thread_messages(self.thread_id)
@@ -326,6 +348,13 @@ class ThreadConversationMemory:
     def recent_turn_entities(self, max_turns: int = 8) -> list[dict]:
         """Return last *max_turns* per-turn entity rows for this thread."""
         return list_turn_entities(self.thread_id, max_turns=max_turns)
+
+    def latest_rendered_sources(self) -> list[dict]:
+        message = latest_thread_assistant_message(self.thread_id)
+        if not message:
+            return []
+        sources = message.get("sources") or []
+        return list(sources) if isinstance(sources, list) else []
 
     def get_history_block(self) -> str:
         state = get_thread_memory(self.thread_id)

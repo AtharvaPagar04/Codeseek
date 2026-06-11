@@ -144,8 +144,9 @@ def test_description_text_cleaned_and_truncated():
 
     # Test truncation
     long_text = "word " * 200
-    cleaned_long = _clean_description(long_text)
-    assert 390 <= len(cleaned_long) <= 410
+    with patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MAX_CHARS", 400):
+        cleaned_long = _clean_description(long_text)
+        assert 390 <= len(cleaned_long) <= 410
 
 
 def test_local_provider_calls_v1_chat_completions():
@@ -166,7 +167,8 @@ def test_local_provider_calls_v1_chat_completions():
         ]
     }
 
-    with patch("httpx.post", return_value=mock_response) as mock_post:
+    with patch("httpx.post", return_value=mock_response) as mock_post, \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MODEL", "qwen2.5-coder:3b-8k"):
         res = describe_chunks([chunk], enabled=True, provider_config=provider_config)
         
         # Check that it called /v1/chat/completions
@@ -202,7 +204,8 @@ def test_local_provider_falls_back_to_api_chat_on_404():
     }
 
     # Mock httpx.post to return 404 then 200
-    with patch("httpx.post", side_effect=[response_404, response_200]) as mock_post:
+    with patch("httpx.post", side_effect=[response_404, response_200]) as mock_post, \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MODEL", "qwen2.5-coder:3b-8k"):
         res = describe_chunks([chunk], enabled=True, provider_config=provider_config)
         
         # Should have called post twice
@@ -234,7 +237,8 @@ def test_local_provider_does_not_fallback_on_non_404_error():
         response=response_500
     )
 
-    with patch("httpx.post", return_value=response_500) as mock_post:
+    with patch("httpx.post", return_value=response_500) as mock_post, \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MODEL", "qwen2.5-coder:3b-8k"):
         # Ingestion shouldn't crash — describe_chunks catches the error internally and sets description to summary or ""
         res = describe_chunks([chunk], enabled=True, provider_config=provider_config)
         
@@ -266,3 +270,99 @@ def test_remote_provider_still_uses_chat_completion_request():
         # Verify it called _chat_completion_request and did not call httpx.post directly
         mock_remote.assert_called_once()
         assert res[0].description == "Remote provider description."
+
+
+def test_cooldown_triggers_after_n_completed_descriptions(capsys):
+    chunks = [
+        Chunk(chunk_id="1", relative_path="README.md", chunk_type="function", token_count=100, content="Readme content here"),
+        Chunk(chunk_id="2", relative_path="package.json", chunk_type="function", token_count=100, content="package json content here"),
+        Chunk(chunk_id="3", relative_path="main.py", chunk_type="function", token_count=100, content="main py content here"),
+        Chunk(chunk_id="4", relative_path="app.py", chunk_type="function", token_count=100, content="app py content here"),
+    ]
+    provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    cleanup_calls = []
+    def fake_cleanup():
+        cleanup_calls.append(True)
+
+    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 2), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 5), \
+         patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep), \
+         patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch", side_effect=fake_cleanup):
+        
+        describe_chunks(chunks, enabled=True, provider_config=provider)
+
+    # Cooldown should trigger after 2nd chunk, but NOT after 4th chunk (final chunk).
+    assert sleep_calls == [5]
+    assert len(cleanup_calls) > 0
+
+    captured = capsys.readouterr()
+    assert "[description.cooldown] generated=2 remaining=2 sleeping=5s" in captured.out
+
+
+def test_cooldown_disabled_with_zero(capsys):
+    chunks = [
+        Chunk(chunk_id="1", relative_path="README.md", chunk_type="function", token_count=100, content="Readme content here"),
+        Chunk(chunk_id="2", relative_path="package.json", chunk_type="function", token_count=100, content="package json content here"),
+        Chunk(chunk_id="3", relative_path="main.py", chunk_type="function", token_count=100, content="main py content here"),
+    ]
+    provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 0), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 5), \
+         patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep):
+        
+        describe_chunks(chunks, enabled=True, provider_config=provider)
+
+    assert len(sleep_calls) == 0
+    captured = capsys.readouterr()
+    assert "[description.cooldown]" not in captured.out
+
+
+def test_cooldown_disabled_with_seconds_zero(capsys):
+    chunks = [
+        Chunk(chunk_id="1", relative_path="README.md", chunk_type="function", token_count=100, content="Readme content here"),
+        Chunk(chunk_id="2", relative_path="package.json", chunk_type="function", token_count=100, content="package json content here"),
+    ]
+    provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
+
+    sleep_calls = []
+    def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 1), \
+         patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 0), \
+         patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep):
+        
+        describe_chunks(chunks, enabled=True, provider_config=provider)
+
+    assert len(sleep_calls) == 0
+    captured = capsys.readouterr()
+    assert "[description.cooldown]" not in captured.out
+
+
+def test_invalid_env_values_fallback(monkeypatch):
+    monkeypatch.setenv("CODESEEK_DESCRIPTION_COOLDOWN_EVERY", "invalid_number")
+    monkeypatch.setenv("CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", "not_an_int")
+    
+    import importlib
+    import rag_ingestion.config
+    try:
+        importlib.reload(rag_ingestion.config)
+        assert rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY == 200
+        assert rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS == 60
+    finally:
+        monkeypatch.delenv("CODESEEK_DESCRIPTION_COOLDOWN_EVERY", raising=False)
+        monkeypatch.delenv("CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", raising=False)
+        importlib.reload(rag_ingestion.config)

@@ -61,8 +61,8 @@ export RETRIEVAL_REPO_ROOT="$BACKEND_ROOT"
 export CODESEEK_TENANT_ID="${CODESEEK_TENANT_ID:-local}"
 export CODESEEK_API_KEY="${CODESEEK_API_KEY:-local-dev-key}"
 
-# Prefer SQLite for local dev unless caller forces Postgres.
-if [[ "${CODESEEK_FORCE_POSTGRES:-0}" != "1" ]]; then
+# Prefer Postgres for local dev unless caller overrides to SQLite.
+if [[ "${CODESEEK_FORCE_POSTGRES:-1}" != "1" ]]; then
   export CODESEEK_DB_BACKEND="sqlite"
   unset CODESEEK_DATABASE_URL 2>/dev/null || true
 fi
@@ -71,6 +71,13 @@ fi
 CODESEEK_DB_PATH="${CODESEEK_DB_PATH:-/tmp/codeseek.sqlite3}"
 export CODESEEK_DB_PATH
 
+# Determine and export the database backend.
+DB_BACKEND="${CODESEEK_DB_BACKEND:-sqlite}"
+if [[ -n "${CODESEEK_DATABASE_URL:-}" ]]; then
+  DB_BACKEND="postgres"
+fi
+export CODESEEK_DB_BACKEND="$DB_BACKEND"
+
 CODESEEK_REPO_WORKSPACE="${CODESEEK_REPO_WORKSPACE:-/tmp/codeseek_repo_workspace}"
 export CODESEEK_REPO_WORKSPACE
 
@@ -78,13 +85,13 @@ INGESTION_TEMP_CLONE_DIR="${INGESTION_TEMP_CLONE_DIR:-/tmp/rag_ingestion}"
 export INGESTION_TEMP_CLONE_DIR
 
 # Ingestion / retrieval tuning for local dev.
-export QDRANT_RECREATE_COLLECTION="${QDRANT_RECREATE_COLLECTION:-1}"
+export QDRANT_RECREATE_COLLECTION="${QDRANT_RECREATE_COLLECTION:-0}"
 export INGESTION_ENABLE_INCREMENTAL_FILE_SKIP="${INGESTION_ENABLE_INCREMENTAL_FILE_SKIP:-0}"
 export RETRIEVAL_ENABLE_DENSE="${RETRIEVAL_ENABLE_DENSE:-0}"
 export RETRIEVAL_ENABLE_LEXICAL="${RETRIEVAL_ENABLE_LEXICAL:-1}"
 
 # LLM chunk description settings.
-export CHUNK_DESCRIPTION_MAX_CHUNKS="${CHUNK_DESCRIPTION_MAX_CHUNKS:-80}"
+export CHUNK_DESCRIPTION_MAX_CHUNKS="${CHUNK_DESCRIPTION_MAX_CHUNKS:--1}"
 export CHUNK_DESCRIPTION_SLEEP_SECONDS="${CHUNK_DESCRIPTION_SLEEP_SECONDS:-0}"
 export CHUNK_DESCRIPTION_RETRY_ON_RATE_LIMIT="${CHUNK_DESCRIPTION_RETRY_ON_RATE_LIMIT:-0}"
 export CHUNK_DESCRIPTION_MAX_INPUT_CHARS="${CHUNK_DESCRIPTION_MAX_INPUT_CHARS:-1200}"
@@ -136,10 +143,16 @@ if [[ "$CLEAN_START" == "1" ]]; then
     -prune -exec rm -rf {} + 2>/dev/null || true
 
 else
-  if [[ -f "$CODESEEK_DB_PATH" ]]; then
-    echo "[local-backend] preserving local db: $CODESEEK_DB_PATH"
+  if [[ "$DB_BACKEND" == "sqlite" ]]; then
+    if [[ -f "$CODESEEK_DB_PATH" ]]; then
+      echo "[local-backend] preserving local SQLite db: $CODESEEK_DB_PATH"
+    else
+      echo "[local-backend] local SQLite db not found: $CODESEEK_DB_PATH (will be created on startup)"
+    fi
   else
-    echo "[local-backend] local db not found: $CODESEEK_DB_PATH (will be created on startup)"
+    # Mask username:password in CODESEEK_DATABASE_URL for logs
+    masked_db_url=$(echo "${CODESEEK_DATABASE_URL:-}" | sed -E 's/([^:]+:\/\/)[^@]+@/\1***:***@/')
+    echo "[local-backend] preserving Postgres db: $masked_db_url"
   fi
 fi
 

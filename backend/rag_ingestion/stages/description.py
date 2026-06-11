@@ -22,6 +22,10 @@ from retrieval.config import (
     LOCAL_LLM_TIMEOUT_SECONDS,
 )
 
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
 SYSTEM_INSTRUCTION = (
     "You describe code chunks for search retrieval.\n"
     "Only describe behavior visible in the provided chunk.\n"
@@ -51,10 +55,8 @@ def _is_auto_model(model: str | None) -> bool:
 
 
 def _resolve_local_description_model(provider_config: dict | None) -> str:
-    model = ((provider_config or {}).get("model") or "").strip()
-    if _is_auto_model(model):
-        return LOCAL_LLM_PRIMARY_MODEL
-    return model
+    from rag_ingestion.config import CODESEEK_DESCRIPTION_MODEL
+    return CODESEEK_DESCRIPTION_MODEL
 
 
 def _ollama_root(base_url: str | None) -> str:
@@ -78,12 +80,23 @@ def _local_openai_chat(messages: list[dict], provider_config: dict) -> str:
     url = f"{base_url}/chat/completions"
     model = _resolve_local_description_model(provider_config)
 
+    from rag_ingestion.config import (
+        CODESEEK_OLLAMA_KEEP_ALIVE,
+        CODESEEK_DESCRIPTION_MAX_TOKENS,
+        CODESEEK_DESCRIPTION_NUM_CTX,
+    )
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
         "temperature": 0.1,
-        "max_tokens": CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+        "max_tokens": CODESEEK_DESCRIPTION_MAX_TOKENS,
+        "keep_alive": CODESEEK_OLLAMA_KEEP_ALIVE,
+        "options": {
+            "num_ctx": CODESEEK_DESCRIPTION_NUM_CTX,
+            "num_predict": CODESEEK_DESCRIPTION_MAX_TOKENS,
+            "temperature": 0.1,
+        },
     }
 
     global _local_debug_logged
@@ -93,7 +106,7 @@ def _local_openai_chat(messages: list[dict], provider_config: dict) -> str:
             "model": model,
             "base_url": provider_config.get("base_url"),
             "resolved_url": url,
-            "max_tokens": CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+            "max_tokens": CODESEEK_DESCRIPTION_MAX_TOKENS,
             "messages_count": len(messages),
         })
         _local_debug_logged = True
@@ -123,14 +136,20 @@ def _local_ollama_chat(messages: list[dict], provider_config: dict) -> str:
     url = f"{root}/api/chat"
     model = _resolve_local_description_model(provider_config)
 
+    from rag_ingestion.config import (
+        CODESEEK_OLLAMA_KEEP_ALIVE,
+        CODESEEK_DESCRIPTION_NUM_CTX,
+        CODESEEK_DESCRIPTION_MAX_TOKENS,
+    )
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "keep_alive": "30m",
+        "keep_alive": CODESEEK_OLLAMA_KEEP_ALIVE,
         "options": {
             "temperature": 0.1,
-            "num_predict": CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+            "num_predict": CODESEEK_DESCRIPTION_MAX_TOKENS,
+            "num_ctx": CODESEEK_DESCRIPTION_NUM_CTX,
         },
     }
 
@@ -138,7 +157,7 @@ def _local_ollama_chat(messages: list[dict], provider_config: dict) -> str:
         "provider": "local",
         "model": model,
         "resolved_url": url,
-        "num_predict": CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+        "num_predict": CODESEEK_DESCRIPTION_MAX_TOKENS,
         "messages_count": len(messages),
     })
 
@@ -278,7 +297,10 @@ def describe_chunks(
     # Filter eligible chunks using the smart selection policy.
     eligible_chunks = [c for c in chunks if _should_describe_chunk(c)]
     cap = CHUNK_DESCRIPTION_MAX_CHUNKS
-    selected_chunks = eligible_chunks[:cap]
+    if cap is None or cap < 0:
+        selected_chunks = eligible_chunks
+    else:
+        selected_chunks = eligible_chunks[:cap]
 
     print(
         f"[description] Selected {len(selected_chunks)}/{len(chunks)} chunks for LLM descriptions."
@@ -296,32 +318,80 @@ def describe_chunks(
         % (prov_name, model_name, bool(resolved_config.get("api_key")))
     )
 
+    import rag_ingestion.config as config
+    from rag_ingestion.utils.gpu_cleanup import cleanup_after_batch, ollama_stop_model
+
+    if config.CODESEEK_DESCRIPTION_BATCH_SIZE > 4:
+        import logging
+        logging.getLogger(__name__).warning(
+            "CODESEEK_DESCRIPTION_BATCH_SIZE is set to %d, which is above the recommended maximum of 4. "
+            "This may cause high GPU/RAM pressure.",
+            config.CODESEEK_DESCRIPTION_BATCH_SIZE,
+        )
+
+    batch_size = config.CODESEEK_DESCRIPTION_BATCH_SIZE
+    if batch_size < 1:
+        batch_size = 1
+
+    batches = [selected_chunks[i : i + batch_size] for i in range(0, len(selected_chunks), batch_size)]
+
     total = len(selected_chunks)
     described = 0
+    processed_count = 0
+    batch_count = 0
     total_start = time.perf_counter()
 
-    for i, chunk in enumerate(selected_chunks, 1):
-        start = time.perf_counter()
-        try:
-            chunk.description = _generate_chunk_description(chunk, resolved_config)
-            described += 1
-            elapsed = time.perf_counter() - start
-            print(
-                f"[description] Done {i}/{total} in {elapsed:.2f}s: {chunk.relative_path}"
-            )
-        except Exception as exc:
-            _handle_chunk_error(chunk, exc)
-            chunk.description = chunk.summary or ""
+    for batch in batches:
+        for chunk in batch:
+            start = time.perf_counter()
+            success = False
+            try:
+                chunk.description = _generate_chunk_description(chunk, resolved_config)
+                described += 1
+                success = True
+                elapsed = time.perf_counter() - start
+                print(
+                    f"[description] Done {described}/{total} in {elapsed:.2f}s: {chunk.relative_path}"
+                )
+            except Exception as exc:
+                _handle_chunk_error(chunk, exc)
+                chunk.description = chunk.summary or ""
+            finally:
+                processed_count += 1
 
-        # Emit progress every 5 chunks or on the last chunk.
-        if i % 5 == 0 or i == total:
-            emit(
-                f"Described {described}/{total} chunks.",
-                progress=described, total=total,
-            )
+            # Emit progress every 5 chunks or on the last chunk.
+            if described % 5 == 0 or described == total:
+                emit(
+                    f"Described {described}/{total} chunks.",
+                    progress=described, total=total,
+                )
 
-        if CHUNK_DESCRIPTION_SLEEP_SECONDS > 0:
-            time.sleep(CHUNK_DESCRIPTION_SLEEP_SECONDS)
+            if CHUNK_DESCRIPTION_SLEEP_SECONDS > 0:
+                _sleep(CHUNK_DESCRIPTION_SLEEP_SECONDS)
+
+            if success:
+                if config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY > 0 and config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS > 0:
+                    if described % config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY == 0:
+                        remaining = total - processed_count
+                        if remaining > 0:
+                            print(
+                                f"[description.cooldown] generated={described} remaining={remaining} sleeping={config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS}s"
+                            )
+                            cleanup_after_batch()
+                            _sleep(config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS)
+
+        # Clean up resource after each batch
+        cleanup_after_batch()
+
+        # Optional Ollama stop model every N batches
+        batch_count += 1
+        if (
+            config.CODESEEK_OLLAMA_STOP_MODEL_EVERY > 0
+            and batch_count % config.CODESEEK_OLLAMA_STOP_MODEL_EVERY == 0
+        ):
+            model_to_stop = _resolve_local_description_model(resolved_config)
+            base_url = resolved_config.get("base_url") or "http://localhost:11434"
+            ollama_stop_model(model_to_stop, base_url)
 
     total_elapsed = time.perf_counter() - total_start
     print(
@@ -351,7 +421,7 @@ def _handle_chunk_error(chunk: Chunk, exc: Exception) -> None:
             print(
                 f"[description] Rate limit on chunk {chunk.chunk_id}, retrying once after 5 s…"
             )
-            time.sleep(5)
+            _sleep(5)
             # Retrying the generation once
             # Note: _generate_chunk_description does not rely on global _provider_answer,
             # so we just call it directly.
@@ -465,23 +535,61 @@ def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
     return _clean_description(text)
 
 
+def truncate_to_limit(text: str, max_chars: int) -> str:
+    """Truncates text to max_chars, trying to break at a sentence or word boundary,
+    and appending '...' if truncated.
+    """
+    if max_chars <= 0:
+        return text
+
+    if len(text) <= max_chars:
+        return text
+
+    # We need to truncate. We'll leave room for '...' (3 chars)
+    limit = max_chars - 3
+    if limit <= 0:
+        return "..."
+
+    truncated = text[:limit]
+
+    # Try to find last sentence boundary (., !, ?) in the truncated text
+    # Only do this if the sentence boundary is close to the end (e.g. within last 30% of the limit)
+    sentence_boundary = -1
+    for i in range(len(truncated) - 1, int(limit * 0.7), -1):
+        if truncated[i] in {".", "!", "?"}:
+            sentence_boundary = i
+            break
+
+    if sentence_boundary != -1:
+        return truncated[:sentence_boundary + 1] + "..."
+
+    # Otherwise, try to find last word boundary (whitespace)
+    word_boundary = truncated.rfind(" ")
+    if word_boundary != -1 and word_boundary > int(limit * 0.5):
+        # Strip trailing punctuation from the word before appending '...'
+        word = truncated[:word_boundary].rstrip(".,?!:;-_ ")
+        return word + "..."
+
+    return truncated.rstrip() + "..."
+
+
 def _clean_description(text: str) -> str:
-    text = (text or "").replace("**", "").replace("*", "").replace("`", "").replace("#", "")
-    text = " ".join(text.split())
+    from rag_ingestion.config import CODESEEK_DESCRIPTION_MAX_CHARS
+    import re
+
+    text = text or ""
+    # Strip markdown code blocks entirely to avoid storing massive code blocks in payload
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    
+    text = text.replace("**", "").replace("*", "").replace("`", "").replace("#", "")
+    text = " ".join(text.split()).strip()
+    
     for prefix in ("Description:", "Summary:"):
         if text.lower().startswith(prefix.lower()):
             text = text[len(prefix):].strip()
-    words = text.split()
-    if len(words) > CHUNK_DESCRIPTION_MAX_WORDS:
-        text = " ".join(words[:CHUNK_DESCRIPTION_MAX_WORDS])
-        if not text.endswith("."):
-            text += "..."
-    if len(text) > 400:
-        if text.endswith("..."):
-            if len(text) > 410:
-                text = text[:397] + "..."
-        else:
-            text = text[:397] + "..."
+
+    if CODESEEK_DESCRIPTION_MAX_CHARS > 0:
+        text = truncate_to_limit(text, CODESEEK_DESCRIPTION_MAX_CHARS)
     return text
 
 

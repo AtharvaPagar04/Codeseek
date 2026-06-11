@@ -35,12 +35,35 @@ class ChunkDescriptionTests(unittest.TestCase):
         cleaned = _clean_description(raw)
         self.assertEqual(cleaned, "This is a clean description with markdown.")
 
-        # Length limit test (max 80 words)
-        long_raw = " ".join(["word"] * 100)
-        cleaned_long = _clean_description(long_raw)
-        words = cleaned_long.split()
-        self.assertEqual(len(words), 80)
-        self.assertTrue(cleaned_long.endswith("..."))
+        # 1. Description longer than 80 chars is preserved.
+        desc_long = "This is a longer description that spans more than eighty characters, and it should not be truncated to eighty characters by default. It contains plenty of useful context."
+        self.assertTrue(len(desc_long) > 80)
+        cleaned_long = _clean_description(desc_long)
+        self.assertEqual(cleaned_long, desc_long)
+
+        # 2. Description is capped at configured max, e.g. 600 chars.
+        with patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MAX_CHARS", 100):
+            very_long = " ".join(["word"] * 100)
+            cleaned_capped = _clean_description(very_long)
+            self.assertTrue(len(cleaned_capped) <= 100)
+            self.assertTrue(cleaned_capped.endswith("..."))
+
+        # 3. CODESEEK_DESCRIPTION_MAX_CHARS=0 disables truncation.
+        with patch("rag_ingestion.config.CODESEEK_DESCRIPTION_MAX_CHARS", 0):
+            very_long = " ".join(["word"] * 200)
+            cleaned_unlimited = _clean_description(very_long)
+            self.assertEqual(len(cleaned_unlimited), len(very_long))
+            self.assertFalse(cleaned_unlimited.endswith("..."))
+
+        # 4. Whitespace/newlines are normalized.
+        raw_whitespace = "  This   has \n many   \t newlines   and spaces.  "
+        cleaned_ws = _clean_description(raw_whitespace)
+        self.assertEqual(cleaned_ws, "This has many newlines and spaces.")
+
+        # 5. Description does not include full code blocks.
+        raw_with_code = "Summary of the method: ```python\ndef foo():\n    return 42\n``` and more info."
+        cleaned_code = _clean_description(raw_with_code)
+        self.assertEqual(cleaned_code, "Summary of the method: and more info.")
 
     def test_describe_chunks_disabled_by_default(self) -> None:
         chunks = [

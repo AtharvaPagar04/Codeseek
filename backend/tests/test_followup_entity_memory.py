@@ -44,6 +44,7 @@ from retrieval.follow_up_memory import (
     build_recent_entity_set,
     detect_topic_shift,
     extract_cited_entities,
+    _most_salient_entity,
     rewrite_follow_up_query,
 )
 from retrieval.memory import ConversationMemory
@@ -576,6 +577,16 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             previous_resolved_query="What does search do?\nalso provide code",
         )
         self.assertIn("search", rewritten)
+
+    def test_most_salient_entity_prefers_latest_symbol(self) -> None:
+        entity_set = {
+            "symbols": ["run_safe_evals", "db_cursor"],
+            "files": ["backend/evals/run_safe_evals.py", "backend/retrieval/db.py"],
+            "routes": [],
+            "env_keys": [],
+            "services": [],
+        }
+        self.assertEqual(_most_salient_entity(entity_set), "run_safe_evals")
 
 
 if __name__ == "__main__":

@@ -401,6 +401,8 @@ def _source_record(chunk: dict) -> dict:
         "end_line": int(chunk.get("end_line", 0)),
         "expansion_type": chunk.get("expansion_type", "primary"),
         "score": float(chunk.get("retrieval_score", chunk.get("exact_entity_score", 0.0)) or 0.0),
+        "exact_retrieval_hit": bool(chunk.get("exact_retrieval_hit", False)),
+        "support_kind": chunk.get("support_kind", ""),
     }
 
 

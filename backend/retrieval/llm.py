@@ -32,33 +32,22 @@ from retrieval.local_llm_runtime import (
 
 SYSTEM_PROMPT = (
     "You are a repository-grounded code assistant.\n"
-    "Rules:\n"
-    "1) Use only the provided CODE CONTEXT; do not use outside knowledge.\n"
-    "2) Do not propose new code, refactors, or hypothetical implementations "
-    "unless the user explicitly asks for them.\n"
-    "3) If required evidence is missing, reply with exactly: "
-    "'Insufficient context in retrieved code to answer confidently.'\n"
-    "4) Be concise and technical, but complete enough to answer the user's actual question. "
-    "Prefer direct method/file/class traces over vague summaries.\n"
-    "5) Grounding discipline:\n"
-    "   5a) Only mention files, symbols, classes, or methods that are present in the provided context blocks.\n"
-    "   5b) If uncertain, omit the claim instead of guessing or broadening scope.\n"
-    "   5c) Do not claim behavior that is not visible in the provided context.\n"
-    "6) Code and snippet rules:\n"
-    "   - Always use inline references (e.g. `ClassName.method_name`) when naming symbols from context.\n"
-    "   - Include a short fenced code block ONLY when the user explicitly asks to \"show\", \"provide\", "
-    "\"give\", or \"write\" code — or when a snippet is the clearest way to answer a how/where question.\n"
-    "   - When showing a fenced block, use exactly 1-2 blocks maximum; identify the file and symbol above each.\n"
-    "   - Never reproduce entire files or large function bodies verbatim; excerpt only the essential lines.\n"
-    "7) Response format (default path):\n"
-    "   - Start with a one-line direct answer.\n"
-    "   - Then provide 3-6 short bullet points with concrete evidence from the context.\n"
-    "   - For overview, explanation, or trace questions, explain how behavior is assembled across "
-    "files rather than repeating symbol names without connecting them.\n"
-    "   - For deep-dive / symbol-level questions, give a technical walk-through: purpose, inputs, "
-    "key logic steps, return values, and side effects — referencing exact files and line ranges.\n"
-    "8) For absence/negative answers, never make absolute repo-wide claims. "
-    "Use wording like: 'Not found in the retrieved context.' and suggest a more specific search term."
+    "Core rules:\n"
+    "1. Use only the provided CODE CONTEXT and ALLOWED SOURCES. Do not invent files, functions, classes, endpoints, routes, or behavior.\n"
+    "2. Prefer implementation files over docs, tests, generated reports, scratch files, and benchmark scripts unless the user explicitly asks for them.\n"
+    "3. Never expose retrieval internals to the user. Do not expose retrieval internals such as internal payload metadata, scoring fields, injected candidates, reranker boosts, routing/debug details, source weights, or hidden retrieval heuristics.\n"
+    "   Do not remove, rename, sanitize, or alter legitimate source-code identifiers inside code blocks. Preserve source-code identifiers such as payload, score, rank, metadata, source, or context exactly as written in the source file.\n"
+    "   Avoid phrases like:\n"
+    "   * direct injected candidate\n"
+    "   * direct injected file candidate\n"
+    "   * reranker boost\n"
+    "   * source role classifier\n"
+    "   * exact retrieval hit\n"
+    "   * internal score\n"
+    "4. If evidence is weak or incomplete, say so clearly (e.g., reply with 'I could not find strong evidence...').\n"
+    "5. If the answer mentions a file, that file must appear in the provided ALLOWED SOURCES.\n"
+    "6. If the answer mentions a function/symbol, it must appear in the provided source metadata or code excerpt.\n"
+    "7. Keep answers concise by default. Add detail only when the user asks 'how', 'explain', 'flow', 'architecture', or 'why'."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
@@ -92,12 +81,36 @@ def generate_answer(
     selection_meta: dict[str, Any] | None = None,
 ) -> str:
     """Generate a grounded answer from context using a selected provider."""
+    # Resolve the expected response mode
+    response_mode = "technical_trace"
+    if query_info:
+        intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
+        if intent == "SYMBOL":
+            response_mode = "source_location"
+        elif intent in ("FLOW", "TRACE") or is_explanation_request(raw_query):
+            response_mode = "flow_summary"
+        elif intent == "OVERVIEW" or is_overview_request(raw_query):
+            response_mode = "overview_summary"
+        elif intent == "CODE_REQUEST":
+            response_mode = "code_snippet"
+        elif intent == "CONFIG":
+            response_mode = "source_location"
+            
+    if evidence_confidence:
+        if isinstance(evidence_confidence, dict):
+            level = str(evidence_confidence.get("level", "")).lower()
+        else:
+            level = str(evidence_confidence).lower()
+        if level == "weak" and response_mode not in ("flow_summary", "overview_summary", "code_snippet"):
+            response_mode = "low_context"
+
     prompt = _build_prompt(
         raw_query,
         context,
         history_block,
         allowed_sources or [],
         extra_context_blocks=extra_context_blocks or [],
+        response_mode=response_mode,
     )
     resolved = _resolve_provider_config(
         provider_config,
@@ -184,52 +197,132 @@ def _build_prompt(
     history_block: str,
     allowed_sources: list[dict],
     extra_context_blocks: list[str] | None = None,
+    response_mode: str = "technical_trace",
 ) -> str:
     parts = []
-    if history_block:
-        parts.append(history_block)
-    if is_code_request(raw_query):
-        parts.append("--- RESPONSE MODE: CODE REQUEST ---")
+    if response_mode == "code_snippet" or is_code_request(raw_query):
+        header = "CODE REQUEST"
+    elif response_mode == "overview_summary" or response_mode == "overview" or is_overview_request(raw_query):
+        header = "OVERVIEW"
+    elif response_mode == "explanation" or is_explanation_request(raw_query):
+        header = "EXPLANATION"
+    elif response_mode == "source_location":
+        header = "SOURCE_LOCATION"
+    elif response_mode == "flow_summary":
+        header = "FLOW_SUMMARY"
+    elif response_mode == "low_context":
+        header = "LOW_CONTEXT"
+    else:
+        header = "TECHNICAL_TRACE"
+
+    parts.append(f"--- RESPONSE MODE: {header} ---")
+    
+    if header == "CODE REQUEST":
         parts.append(
-            "The user explicitly asked for code. "
-            "Return the smallest complete snippet that directly answers the question, "
-            "using only the CODE CONTEXT provided. "
-            "Include 1-2 fenced code blocks at most; identify the file and symbol name above each block. "
-            "Do not paraphrase or reconstruct code when an exact verbatim excerpt is available. "
-            "Do not add explanatory prose beyond a one-line context sentence per block unless asked."
+            "Response mode: code_snippet\n\n"
+            "The user explicitly asked for code.\n"
+            "You must return actual code snippets from the provided sources.\n\n"
+            "Rules:\n"
+            "1. Use only provided source text.\n"
+            "2. Preserve code exactly.\n"
+            "3. Do not invent code.\n"
+            "4. Do not rename or remove identifiers.\n"
+            "5. Do not sanitize source-code words that look like retrieval terms.\n"
+            "6. If the current query names an exact symbol, return that symbol only unless the user asks for related functions.\n"
+            "7. If the current query names a feature/topic, use only sources matching that current feature/topic.\n"
+            "8. Do not include code from previous-turn topics unless the current query is a vague follow-up.\n"
+            "9. Do not summarize before showing code.\n"
+            "10. Start with the most relevant file/function.\n"
+            "11. Use fenced code blocks with the correct language.\n"
+            "12. Include only a short note before/after code if needed.\n"
+            "13. Do not include flow summaries unless the user explicitly asks for explanation.\n"
+            "14. Every file/function mentioned must exist in the selected sources.\n"
+            "15. If the code body is not available, clearly say it was not included in the retrieved context."
         )
-    elif is_overview_request(raw_query):
-        parts.append("--- RESPONSE MODE: OVERVIEW ---")
+    elif header == "SOURCE_LOCATION":
         parts.append(
-            "The user wants a grounded project overview. "
-            "Explain what the project does, which modules or entry points drive core behavior, "
-            "the main tech stack or runtime shape visible in context, and any important "
-            "backing data, config, or service dependencies. "
-            "When arrays or objects list concrete technologies, categories, or entities, "
-            "name the most important ones explicitly rather than describing them abstractly. "
-            "Format: one short overview paragraph followed by 4-6 evidence-backed bullet points. "
-            "Do not include fenced code blocks unless the user asked for code."
+            "You MUST follow this exact format for the answer:\n\n"
+            "The implementation is in:\n\n"
+            "* `{primary_file}`\n"
+            "  * symbol/function: `{symbol_if_available}`\n"
+            "  * why: {short user-facing reason}\n\n"
+            "Related sources:\n"
+            "* `{related_file}`\n\n"
+            "Rules:\n"
+            "- The primary file must be the best implementation source, not a docs/test/report/scratch file.\n"
+            "- Prefer executable implementation files over docs/tests when implementation sources are available.\n"
+            "- Docs/tests may be related sources only when the user explicitly asks for docs/tests or no implementation file is available.\n"
+            "- Do not include 'Related sources' if there are none.\n"
+            "- Do not mention internal routing, injection, ranking, or scoring.\n"
+            "- If the exact implementation is uncertain, start with:\n"
+            "  'I found partial evidence. The likely implementation is in:'"
         )
-    elif is_explanation_request(raw_query):
-        parts.append("--- RESPONSE MODE: EXPLANATION ---")
+    elif header == "FLOW_SUMMARY":
+        parts.append(
+            "You MUST follow this exact format for the answer:\n\n"
+            "The flow appears to be:\n\n"
+            "1. {role name}\n"
+            "   * file: `{file_path}`{optional_symbol}\n"
+            "   * role: {what this file/symbol does in the flow}\n\n"
+            "2. {role name}\n"
+            "   * file: `{file_path}`{optional_symbol}\n"
+            "   * role: {what this file/symbol does in the flow}\n\n"
+            "Evidence status:\n"
+            "* complete\n\n"
+            "OR:\n\n"
+            "Evidence status:\n"
+            "* partial\n"
+            "* missing: {missing_role_1}, {missing_role_2}\n\n"
+            "Rules:\n"
+            "- Do not mark evidence as complete if any required role is missing.\n"
+            "- Do not list a role as missing if a displayed source already covers that role.\n"
+            "- Prefer implementation sources.\n"
+            "- Hide docs/tests unless the user explicitly asks for tests/docs."
+        )
+    elif header == "OVERVIEW":
+        parts.append(
+            "The user wants a grounded project overview.\n"
+            "You MUST follow this exact format for the answer:\n\n"
+            "{repo_or_feature_name} is {one-sentence purpose}.\n\n"
+            "At a high level:\n\n"
+            "1. {main capability 1}\n"
+            "2. {main capability 2}\n"
+            "3. {main capability 3}\n\n"
+            "Key areas from the retrieved sources:\n\n"
+            "* `{file_path}`: {short role}\n\n"
+            "Rules:\n"
+            "- Explain the system, not random helper functions.\n"
+            "- Prefer architecture, API, ingestion, retrieval, frontend, and config entrypoints.\n"
+            "- Avoid dumping source paths without explanation."
+        )
+    elif header == "LOW_CONTEXT":
+        parts.append(
+            "You MUST follow this exact format for the answer:\n\n"
+            "I could not find strong evidence for that in the indexed repository context.\n\n"
+            "Try asking with:\n"
+            "* a file name\n"
+            "* a function name\n"
+            "* a feature name\n\n"
+            "If partial evidence exists, include:\n"
+            "Possible related sources:\n"
+            "* `{file_path}`: {why it might be related}"
+        )
+    elif header == "EXPLANATION":
         parts.append(
             "The user asked for an explanation, not a raw code dump. "
-            "Explain the structure and behavior of the referenced code: what it does, "
-            "what it reads and writes, how it transforms or routes data, and any key "
-            "design decisions visible in the context. "
-            "For UI code: explain what is rendered, where data comes from, how loops or maps "
-            "produce output, and any interaction handlers. "
-            "For backend code: explain the request/response flow, key function calls, "
-            "data transformations, and any external dependencies (DB, cache, APIs). "
-            "Reference concrete files and symbols from the allowed sources. "
-            "If backing data arrays or objects are present, name important entries or fields "
-            "rather than referring to them generically. "
-            "Format: one short summary sentence followed by 4-7 focused bullet points. "
-            "Include an inline code reference (e.g. `module.function`) for each bullet point."
+            "Answer with a grounded technical walk-through. "
+            "For each step: name the exact file and symbol, state what it does, what it "
+            "reads/writes/calls, and how it connects to the next step. "
+            "Include inputs, return values, and any notable side effects or error handling "
+            "visible in the context. "
+            "Keep the answer concrete and implementation-based — avoid generic descriptions "
+            "that could apply to any codebase. "
+            "Format: one-line answer, then 4-8 numbered steps or bullet points. "
+            "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
+            "code blocks unless the user explicitly asked for code."
         )
     else:
-        # TRACE / DEPENDENCY / SYMBOL / deep-dive fallthrough
-        parts.append("--- RESPONSE MODE: TECHNICAL TRACE ---")
+        # TECHNICAL TRACE
         parts.append(
             "Answer with a grounded technical walk-through. "
             "For each step: name the exact file and symbol, state what it does, what it "
@@ -242,6 +335,15 @@ def _build_prompt(
             "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
             "code blocks unless the user explicitly asked for code."
         )
+
+    parts.append("--- CURRENT USER QUESTION ---")
+    parts.append(raw_query)
+    parts.append(
+        "The CURRENT USER QUESTION is the source of truth for this answer.\n"
+        "Conversation history is only for resolving vague follow-ups. If the current question explicitly names a file, function, class, symbol, endpoint, feature, or subsystem, answer using the current question and current allowed sources. Do not reuse previous-turn sources unless they directly match the current question.\n"
+        "Use conversation history only when the current question is ambiguous, such as \"that\", \"it\", \"same function\", \"same file\", \"continue\", or \"explain that\"."
+    )
+
     if allowed_sources:
         parts.append("--- ALLOWED SOURCES (STRICT) ---")
         for src in allowed_sources:
@@ -259,7 +361,9 @@ def _build_prompt(
     for block in extra_context_blocks or []:
         parts.append(block)
     parts.append("--- END CODE CONTEXT ---")
-    parts.append(f"Question: {raw_query}")
+    if history_block:
+        parts.append("--- CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---")
+        parts.append(history_block)
     return "\n\n".join(parts)
 
 

@@ -273,3 +273,63 @@ def test_refinement_does_not_store_label_confidences_in_payload():
     assert "label_confidences" not in payload, (
         "label_confidences must NOT be stored in the Qdrant payload"
     )
+
+
+def test_refine_chunk_labels_uses_configured_model():
+    """Verify that refine_labels_with_llm uses CODESEEK_LABEL_MODEL."""
+    chunk = _chunk()
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": json.dumps({"labels": ["domain:auth"]})}}]
+    }
+    
+    with patch("rag_ingestion.stages.labeler._httpx_mod") as mock_httpx, \
+         patch("rag_ingestion.config.CODESEEK_LABEL_MODEL", "qwen2.5-coder:3b"), \
+         patch("rag_ingestion.config.CODESEEK_OLLAMA_KEEP_ALIVE", "30s"):
+         
+        mock_httpx.post.return_value = mock_response
+        refine_labels_with_llm(chunk, provider_config={"provider": "local"})
+        
+        # Check that the model parameter in request body was 'qwen2.5-coder:3b'
+        assert mock_httpx.post.call_count == 1
+        call_args = mock_httpx.post.call_args
+        assert call_args[1]["json"]["model"] == "qwen2.5-coder:3b"
+        assert call_args[1]["json"]["keep_alive"] == "30s"
+
+
+def test_refine_chunk_labels_batching_and_cleanup():
+    """Verify that label refinement processes chunks in batches and runs cleanup."""
+    chunks = [
+        _chunk(path="src/f1.py"),
+        _chunk(path="src/f2.py"),
+        _chunk(path="src/f3.py"),
+    ]
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": json.dumps({"labels": []})}}]
+    }
+    
+    with patch("rag_ingestion.stages.labeler.ENABLE_LLM_LABEL_REFINEMENT", True), \
+         patch("rag_ingestion.stages.labeler._httpx_mod") as mock_httpx, \
+         patch("rag_ingestion.config.CODESEEK_LABEL_REFINE_BATCH_SIZE", 2), \
+         patch("rag_ingestion.config.CODESEEK_OLLAMA_STOP_MODEL_EVERY", 1), \
+         patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch") as mock_cleanup, \
+         patch("rag_ingestion.utils.gpu_cleanup.ollama_stop_model") as mock_stop:
+         
+        mock_httpx.post.return_value = mock_response
+        
+        # Mock select_chunks_for_refinement to return all 3 chunks
+        with patch("rag_ingestion.stages.labeler.select_chunks_for_refinement", return_value=chunks):
+            refine_chunk_labels_with_llm(chunks, provider_config={"provider": "local"})
+            
+            # 3 chunks, batch size 2 -> 2 batches
+            # cleanup_after_batch should be called twice (after each batch)
+            assert mock_cleanup.call_count == 2
+            
+            # CODESEEK_OLLAMA_STOP_MODEL_EVERY = 1 -> ollama_stop_model should be called after each batch (twice)
+            assert mock_stop.call_count == 2
+

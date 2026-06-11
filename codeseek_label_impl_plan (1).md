@@ -826,7 +826,7 @@ backend/rag_ingestion/pipeline.py          (add refinement stage)
 - [ ] 1. Add config:
    ```python
    ENABLE_LLM_LABEL_REFINEMENT = False
-   CHUNK_LABEL_LLM_MAX_CHUNKS = 80
+   CHUNK_LABEL_LLM_MAX_CHUNKS = 
    ```
 
 - [ ] 2. Implement `label_refinement_priority(chunk, label_confidences) -> float`.

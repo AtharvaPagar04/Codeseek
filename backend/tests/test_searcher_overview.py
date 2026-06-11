@@ -90,6 +90,8 @@ class SearcherOverviewTests(unittest.TestCase):
             "retrieval.searcher._exact_entity_search", return_value=[]
         ), patch(
             "retrieval.searcher._repository_overview_candidates", return_value=[overview_payload]
+        ), patch(
+            "retrieval.searcher._inject_architecture_file_candidates", side_effect=lambda candidates, entities: candidates
         ):
             results = search(query_info)
 

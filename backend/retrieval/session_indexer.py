@@ -154,6 +154,40 @@ def delete_session(session_id: str) -> bool:
         return True
 
 
+def _check_and_clean_stale_indexing_sessions(state: dict, exclude_session_id: str | None = None) -> None:
+    """Checks for active indexing sessions. Marks any stale indexing sessions as failed."""
+    sessions = state.get("sessions", [])
+    stale_sessions = []
+    has_active_indexing = False
+    active_repo_name = ""
+
+    for s in sessions:
+        if s.get("status") == "indexing":
+            if exclude_session_id and s.get("id") == exclude_session_id:
+                continue
+            
+            job = _jobs.get(s["id"])
+            if job and job.is_alive():
+                has_active_indexing = True
+                active_repo_name = s.get("repo_full_name", "another repository")
+            else:
+                stale_sessions.append(s)
+
+    if stale_sessions:
+        for s in stale_sessions:
+            s["status"] = "failed"
+            s["error"] = "Indexing was interrupted (stale job detected)."
+            s["updated_at"] = _now()
+            _populate_repo_status(s)
+        _save_state(state)
+
+    if has_active_indexing:
+        raise ValueError(
+            f"Another repository ({active_repo_name}) is currently indexing. "
+            "Only one repository indexing session is allowed at a time."
+        )
+
+
 def create_session(
     repo_full_name: str,
     tenant_id: str,
@@ -214,6 +248,10 @@ def create_session(
                 title=repo_full_name,
             )
             return existing
+
+        # Check if another session is already indexing
+        _check_and_clean_stale_indexing_sessions(state)
+
         state.setdefault("sessions", []).append(session)
         _save_state(state)
         if github_token.strip():
@@ -254,6 +292,9 @@ def retry_indexing(session_id: str) -> dict | None:
     session = get_session(session_id)
     if not session:
         return None
+    with _lock:
+        state = _load_state()
+        _check_and_clean_stale_indexing_sessions(state, exclude_session_id=session_id)
     _update_session(
         session_id,
         status="indexing",
@@ -312,7 +353,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     1 if session.get("refine_labels_with_llm") else 0,
                     session.get("current_commit_sha", ""),
                     session.get("current_branch", ""),
-                    1 if session.get("repo_dirty") else 0,
+                    bool(session.get("repo_dirty")),
                     session.get("repo_status_checked_at", ""),
                     int(session.get("files_indexed", 0)),
                     session_id,
@@ -622,7 +663,7 @@ def _session_insert_values(session: dict) -> tuple:
         1 if session.get("refine_labels_with_llm") else 0,
         session.get("current_commit_sha", ""),
         session.get("current_branch", ""),
-        1 if session.get("repo_dirty") else 0,
+        bool(session.get("repo_dirty")),
         session.get("repo_status_checked_at", ""),
         int(session.get("files_indexed", 0)),
     )
@@ -806,6 +847,10 @@ def index_latest_version(session_id: str, user_id: str) -> dict:
     if session.get("status") == "indexing":
         raise ValueError("Session is already indexing")
 
+    with _lock:
+        state = _load_state()
+        _check_and_clean_stale_indexing_sessions(state, exclude_session_id=session_id)
+
     _update_session(
         session_id,
         status="indexing",
@@ -965,4 +1010,25 @@ def _index_latest_job(session_id: str, user_id: str) -> None:
             embeddings_stored=prev_embeddings_stored,
             files_indexed=prev_files_indexed,
         )
+
+
+# Cleanup any stale indexing sessions left in the DB from a previous run/server crash.
+try:
+    init_db()
+    with db_cursor() as (_conn, cursor):
+        # At startup/import, all sessions marked as 'indexing' in the database are stale
+        # because the new python process has no active threads running.
+        cursor.execute(
+            """
+            UPDATE repo_sessions
+            SET status = 'failed',
+                error = 'Indexing was interrupted (server restarted).',
+                updated_at = ?
+            WHERE status = 'indexing'
+            """,
+            (_now(),)
+        )
+except Exception as e:
+    # Do not block import if database is not initialized yet or throws an error.
+    print(f"Warning: failed to clean up stale indexing sessions on startup: {e}")
 

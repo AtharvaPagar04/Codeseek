@@ -214,3 +214,32 @@ def test_index_job_invalidates_lexical_index_after_ingestion(monkeypatch, tmp_pa
     session_indexer._index_job(session["id"])
 
     assert invalidated == [session["collection"]]
+
+
+def test_stale_indexing_session_cleanup(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+    session_indexer._jobs.clear()
+
+    # Create first session
+    first = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+    )
+    assert first["status"] == "indexing"
+
+    # Try creating another session for a different repo (which would trigger the indexing limit check)
+    second = session_indexer.create_session(
+        repo_full_name="octocat/other-repo",
+        tenant_id="local",
+    )
+    
+    # Since first had no active running thread, it should be marked as failed,
+    # and second should be created successfully!
+    assert second["status"] == "indexing"
+    
+    refreshed_first = session_indexer.get_session(first["id"])
+    assert refreshed_first["status"] == "failed"
+    assert "stale job detected" in refreshed_first["error"]
+

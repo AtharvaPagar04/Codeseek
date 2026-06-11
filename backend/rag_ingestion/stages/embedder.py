@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 _model = None
 
+
+def _sleep(seconds: float) -> None:
+    import time
+    time.sleep(seconds)
+
 KNOWN_LABELS = {
     "File",
     "Language",
@@ -67,6 +72,13 @@ def embed_chunks(
     chunks: list[Chunk], counters: PipelineCounters
 ) -> list[Chunk]:
     """Generate embeddings for chunks in batches."""
+    from rag_ingestion.config import (
+        CODESEEK_EMBEDDING_BATCH_SIZE,
+        CODESEEK_EMBEDDING_COOLDOWN_EVERY,
+        CODESEEK_EMBEDDING_COOLDOWN_SECONDS,
+    )
+    from rag_ingestion.utils.gpu_cleanup import cleanup_after_batch
+
     model = _get_model()
 
     logger.info(
@@ -74,20 +86,59 @@ def embed_chunks(
         len(chunks),
         EMBEDDING_MODEL,
         EMBEDDING_DEVICE,
-        EMBEDDING_BATCH_SIZE,
+        CODESEEK_EMBEDDING_BATCH_SIZE,
     )
 
-    for start in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[start : start + BATCH_SIZE]
-        inputs = [_embedding_input(chunk) for chunk in batch]
-        embeddings = model.encode(
-            inputs,
-            batch_size=EMBEDDING_BATCH_SIZE,
-            show_progress_bar=True,
+    batch_size = CODESEEK_EMBEDDING_BATCH_SIZE
+    if batch_size < 1:
+        batch_size = 1
+
+    total_chunks = len(chunks)
+    embedded_count = 0
+    next_cooldown_at = CODESEEK_EMBEDDING_COOLDOWN_EVERY
+
+    try:
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            inputs = [_embedding_input(chunk) for chunk in batch]
+            embeddings = model.encode(
+                inputs,
+                batch_size=batch_size,
+                show_progress_bar=True,
+            )
+            for chunk, embedding in zip(batch, embeddings, strict=True):
+                chunk.embedding = embedding.tolist()
+                counters.embeddings_generated += 1
+            
+            embedded_count += len(batch)
+
+            # Free temporary inputs/embeddings and collect Python memory
+            del inputs
+            del embeddings
+            cleanup_after_batch()
+
+            remaining = total_chunks - embedded_count
+            if (
+                CODESEEK_EMBEDDING_COOLDOWN_EVERY > 0
+                and CODESEEK_EMBEDDING_COOLDOWN_SECONDS > 0
+                and remaining > 0
+                and embedded_count >= next_cooldown_at
+            ):
+                cleanup_after_batch()
+                print(
+                    f"[embedding.cooldown] embedded={embedded_count} remaining={remaining} sleeping={CODESEEK_EMBEDDING_COOLDOWN_SECONDS}s"
+                )
+                _sleep(CODESEEK_EMBEDDING_COOLDOWN_SECONDS)
+                while next_cooldown_at <= embedded_count:
+                    next_cooldown_at += CODESEEK_EMBEDDING_COOLDOWN_EVERY
+    except Exception as exc:
+        logger.error(
+            "Embedding generation failed: %s. "
+            "This may be caused by CUDA OOM or system RAM limits. "
+            "Try setting EMBEDDING_DEVICE=cpu or reducing CODESEEK_EMBEDDING_BATCH_SIZE.",
+            exc,
         )
-        for chunk, embedding in zip(batch, embeddings, strict=True):
-            chunk.embedding = embedding.tolist()
-            counters.embeddings_generated += 1
+        raise exc
 
     return chunks
 

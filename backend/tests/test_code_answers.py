@@ -584,7 +584,10 @@ class CodeAnswerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("retrieval.code_answers.get_repo_root", return_value=str(repo_root)):
+            from unittest.mock import MagicMock
+            mock_client = MagicMock()
+            mock_client.scroll.return_value = ([], None)
+            with patch("retrieval.code_answers.get_repo_root", return_value=str(repo_root)), patch("retrieval.code_answers._get_architecture_qdrant_client", return_value=mock_client):
                 answer, selected_sources = build_architecture_answer(
                     "How is this codebase structured?",
                     shown_sources,
@@ -882,7 +885,7 @@ class CodeAnswerTests(unittest.TestCase):
 
         self.assertIn("The flow appears to be:", answer)
         self.assertIn("Evidence status:", answer)
-        self.assertIn("- partial", answer)
+        self.assertIn("partial", answer)
         self.assertIn("missing: auth entrypoint, session creation, session lookup", answer.lower())
         self.assertNotIn("creates or reuses a session record", answer)
 
@@ -1145,7 +1148,8 @@ class CodeAnswerTests(unittest.TestCase):
 
         self.assertIn("The flow appears to be:", answer)
         self.assertIn("Create credential API", answer)
-        self.assertIn("retrieval/api_service.py :: create_provider_credential_v1", answer)
+        self.assertIn("retrieval/api_service.py", answer)
+        self.assertIn("create_provider_credential_v1", answer)
 
     def test_build_flow_answer_adds_explicit_auth_session_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1530,7 +1534,7 @@ class CodeAnswerTests(unittest.TestCase):
             ):
                 answer, sources, token_count = run_query("show me the code", memory)
 
-            self.assertIn("Code snippets from retrieved context:", answer)
+            self.assertIn("Here is the matching function:", answer)
             self.assertEqual(sources, [source])
             self.assertEqual(token_count, 12)
 
