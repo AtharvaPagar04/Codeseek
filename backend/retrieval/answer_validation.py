@@ -382,5 +382,29 @@ def _preferred_source_location_sources(sources: list[dict], raw_query: str) -> l
 
     impl_sources = [src for src in sources if is_impl(src)]
     if impl_sources and not allow_docs_tests:
-        return _dedupe_sources(impl_sources)
+        try:
+            from retrieval.searcher import classify_source_role
+        except Exception:
+            classify_source_role = None
+
+        query_terms = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", q)
+
+        def _rank(src: dict) -> tuple[int, int, str, int]:
+            path = str(src.get("relative_path", "")).strip().lower()
+            symbol = str(src.get("symbol_name", "")).strip().lower()
+            role = classify_source_role(path) if classify_source_role else "implementation"
+            role_priority = {
+                "implementation": 0,
+                "unknown": 1,
+                "scratch/tooling": 2,
+                "test": 3,
+                "generated_eval": 4,
+                "docs": 5,
+                "answer_template": 6,
+            }.get(role, 4)
+            symbol_hit = 1 if symbol and any(term in symbol for term in query_terms) else 0
+            main_hit = 1 if symbol == "main" else 0
+            return (role_priority, -main_hit, -symbol_hit, path, int(src.get("start_line", 0) or 0))
+
+        return _dedupe_sources(sorted(impl_sources, key=_rank))
     return _dedupe_sources(sources)

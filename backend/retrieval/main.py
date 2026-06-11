@@ -25,6 +25,7 @@ from retrieval.code_answers import (
     is_symbol_deep_dive_request,
     filesystem_exact_symbol_sources_for_query,
     route_filesystem_sources_for_query,
+    rank_follow_up_sources_for_explanation,
 )
 from retrieval.answer_validation import validate_generated_answer
 from retrieval.config import (
@@ -211,6 +212,7 @@ class PostProcessingMemoryProxy:
             final_sources=list(final_sources),
             query_info=query_info if isinstance(query_info, dict) else None,
         )
+        self.last_validation = validation
         post_processed_ans = validation.get("repaired_answer") or post_processed_ans
         repaired_sources = validation.get("repaired_sources")
         if repaired_sources is not None:
@@ -684,6 +686,8 @@ def _run_query_impl(
     metrics.add_stage("query_processor", started)
     # Resolve intent early so the history cap can be applied before assembly.
     primary_intent = query_info.get("primary_intent") or query_info.get("intent")
+    meta["query_intent"] = str(query_info.get("intent") or "").strip()
+    meta["primary_intent"] = str(primary_intent or "").strip()
     history_cap = intent_history_cap(primary_intent)
     history_block_capped = memory.get_history_block_capped(history_cap)
     started = time.perf_counter()
@@ -766,6 +770,7 @@ def _run_query_impl(
             entities=cited_entities,
             primary_intent=primary_intent,
         )
+        meta["validation"] = getattr(memory, "last_validation", None)
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -891,6 +896,8 @@ def _run_query_impl(
         evaluation["reasoning_context"] = reasoning_context
         evaluation["reasoning_context_blocks"] = list(reasoning_context_blocks)
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
+    meta["display_sources"] = list(display_sources)
+    meta["reasoning_sources"] = list(reasoning_sources)
     if is_code_request(raw_query):
         started = time.perf_counter()
         from retrieval.searcher import match_code_topic_route
@@ -925,6 +932,7 @@ def _run_query_impl(
                 entities=cited_entities,
                 primary_intent=primary_intent,
             )
+            meta["validation"] = getattr(memory, "last_validation", None)
             meta.update(
                 {
                     "stage_latency_ms": metrics.stage_latency_ms,
@@ -983,6 +991,7 @@ def _run_query_impl(
             entities=cited_entities,
             primary_intent=primary_intent,
         )
+        meta["validation"] = getattr(memory, "last_validation", None)
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -1032,6 +1041,7 @@ def _run_query_impl(
             entities=cited_entities,
             primary_intent=primary_intent,
         )
+        meta["validation"] = getattr(memory, "last_validation", None)
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -1088,6 +1098,7 @@ def _run_query_impl(
             entities=cited_entities,
             primary_intent=primary_intent,
         )
+        meta["validation"] = getattr(memory, "last_validation", None)
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -1141,6 +1152,7 @@ def _run_query_impl(
             entities=cited_entities,
             primary_intent=primary_intent,
         )
+        meta["validation"] = getattr(memory, "last_validation", None)
         meta.update(
             {
                 "stage_latency_ms": metrics.stage_latency_ms,
@@ -1199,6 +1211,7 @@ def _run_query_impl(
                 entities=cited_entities,
                 primary_intent=primary_intent,
             )
+            meta["validation"] = getattr(memory, "last_validation", None)
             meta.update(
                 {
                     "stage_latency_ms": metrics.stage_latency_ms,
@@ -1242,6 +1255,8 @@ def _run_query_impl(
             return deep_dive_answer, shown_sources, token_count
         # Empty result: fall through to explanation or LLM
     if is_explanation_request(raw_query):
+        shown_sources = rank_follow_up_sources_for_explanation(shown_sources, raw_query)
+        reasoning_sources = rank_follow_up_sources_for_explanation(reasoning_sources, raw_query)
         # Weak evidence: let LLM handle instead of a thin deterministic explanation
         if evidence_confidence["level"] != "weak":
             answer = build_explanation_answer(raw_query, shown_sources, expanded)
@@ -1253,6 +1268,7 @@ def _run_query_impl(
                 entities=cited_entities,
                 primary_intent=primary_intent,
             )
+            meta["validation"] = getattr(memory, "last_validation", None)
             meta.update(
                 {
                     "stage_latency_ms": metrics.stage_latency_ms,
@@ -1299,6 +1315,8 @@ def _run_query_impl(
             reason="weak_evidence", count=evidence_confidence["count"]
         )
     response_sources = list(shown_sources)
+    if is_explanation_request(raw_query):
+        response_sources = rank_follow_up_sources_for_explanation(response_sources, raw_query)
     extra_context_blocks: list[str] = []
     support_blocks: list[dict] = []
     if not is_code_request(raw_query):
@@ -1375,6 +1393,7 @@ def _run_query_impl(
         entities=cited_entities,
         primary_intent=primary_intent,
     )
+    meta["validation"] = getattr(memory, "last_validation", None)
     meta.update(
         {
             "stage_latency_ms": metrics.stage_latency_ms,

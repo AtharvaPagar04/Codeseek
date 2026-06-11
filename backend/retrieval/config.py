@@ -15,6 +15,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -150,6 +161,10 @@ LOCAL_LLM_BASE_URL = os.getenv("RETRIEVAL_LOCAL_LLM_BASE_URL", "http://localhost
 LOCAL_LLM_TIMEOUT_SECONDS = float(os.getenv("RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS", "120.0"))
 LOCAL_LLM_PRIMARY_MODEL = os.getenv("RETRIEVAL_LOCAL_LLM_PRIMARY_MODEL", "qwen2.5-coder:3b-8k")
 LOCAL_LLM_COMPLEX_MODEL = os.getenv("RETRIEVAL_LOCAL_LLM_COMPLEX_MODEL", "qwen-coder-7b-8192")
+QUERY_NUM_CTX = _env_int("CODESEEK_QUERY_NUM_CTX", 4096)
+QUERY_MAX_TOKENS = _env_int("CODESEEK_QUERY_MAX_TOKENS", 1024)
+QUERY_OLLAMA_KEEP_ALIVE = os.getenv("CODESEEK_QUERY_OLLAMA_KEEP_ALIVE", "0s")
+INDEXING_STALE_AFTER_SECONDS = _env_positive_int("CODESEEK_INDEXING_STALE_AFTER_SECONDS", 900)
 RETRIEVAL_RETRY_ATTEMPTS = _env_int("RETRIEVAL_RETRY_ATTEMPTS", 3)
 RETRIEVAL_RETRY_BACKOFF_SECONDS = float(
     os.getenv("RETRIEVAL_RETRY_BACKOFF_SECONDS", "0.5")
@@ -170,4 +185,3 @@ ANSWER_TRACE_OUTPUT_PATH = os.getenv(
     "ANSWER_TRACE_OUTPUT_PATH",
     str(Path(__file__).resolve().parent.parent / "evals" / "reports" / "answer_traces.jsonl")
 )
-

@@ -17,6 +17,9 @@ from retrieval.config import (
     LOCAL_LLM_COMPLEX_MODEL,
     LOCAL_LLM_PRIMARY_MODEL,
     LOCAL_LLM_TIMEOUT_SECONDS,
+    QUERY_MAX_TOKENS,
+    QUERY_NUM_CTX,
+    QUERY_OLLAMA_KEEP_ALIVE,
     MAX_RESPONSE_TOKENS,
     RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS,
     RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -152,6 +155,7 @@ def generate_answer(
             model=resolved["model"],
             timeout_seconds=resolved["timeout_seconds"],
             base_url=resolved.get("base_url", ""),
+            max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
         )
         if (
             resolved["provider"] == "local"
@@ -176,6 +180,7 @@ def generate_answer(
                 model=LOCAL_LLM_COMPLEX_MODEL,
                 timeout_seconds=resolved["timeout_seconds"],
                 base_url=resolved.get("base_url", ""),
+                max_tokens=QUERY_MAX_TOKENS,
             )
             if selection_meta is not None:
                 selection_meta.update(
@@ -509,6 +514,7 @@ def _provider_answer(
     *,
     timeout_seconds: float,
     base_url: str = "",
+    max_tokens: int | None = None,
 ) -> str:
     global _llm_failures, _llm_circuit_open_until
     now = time.time()
@@ -534,6 +540,7 @@ def _provider_answer(
                 prompt=prompt,
                 timeout_seconds=timeout_seconds,
                 base_url=base_url,
+                max_tokens=max_tokens,
             )
             _llm_failures = 0
             content = _extract_message_content(response)
@@ -570,15 +577,17 @@ def _chat_completion_request(
         ],
         "temperature": 0.1,
     }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-        if provider == "local":
-            payload["options"] = {
-                "temperature": 0.1,
-                "num_predict": max_tokens,
-            }
-    else:
-        payload["max_tokens"] = MAX_RESPONSE_TOKENS
+    effective_max_tokens = max_tokens
+    if effective_max_tokens is None:
+        effective_max_tokens = QUERY_MAX_TOKENS if provider == "local" else MAX_RESPONSE_TOKENS
+    payload["max_tokens"] = effective_max_tokens
+    if provider == "local":
+        payload["options"] = {
+            "temperature": 0.1,
+            "num_ctx": QUERY_NUM_CTX,
+            "num_predict": effective_max_tokens,
+        }
+        payload["keep_alive"] = QUERY_OLLAMA_KEEP_ALIVE
 
     response = httpx.post(
         url,

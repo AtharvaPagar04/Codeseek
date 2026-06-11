@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SourceCard from './SourceCard';
+import { buildAnswerDiagnosticsRows } from './answerDiagnostics';
 
 /**
  * Three bouncing dots for the loading state.
@@ -109,6 +110,7 @@ export default function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [copiedUser, setCopiedUser] = useState(false);
+  const diagnosticsRows = buildAnswerDiagnosticsRows(message.diagnostics);
 
   const handleCopyUser = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
@@ -235,8 +237,55 @@ export default function MessageBubble({ message }) {
             </div>
           </div>
 
-          {message.sources && message.sources.length > 0 && (
-            <div className="border-t border-border bg-surface-3/30 px-4 py-3">
+          {(diagnosticsRows.length > 0 || (message.sources && message.sources.length > 0)) && (
+            <div className="border-t border-border bg-surface-3/30 px-4 py-3 space-y-3">
+              {diagnosticsRows.length > 0 && (
+                <details className="group">
+                  <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
+                    <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
+                      <svg
+                        className="h-3 w-3 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={3}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                      Diagnostics
+                    </div>
+                    <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
+                      {diagnosticsRows.length}
+                    </div>
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    {diagnosticsRows.map((row) => (
+                      <div key={row.label} className="rounded-xl border border-border bg-surface-2/80 px-3 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.22em] text-text-muted font-semibold">
+                          {row.label}
+                        </div>
+                        {row.kind === 'list' ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {row.value.map((item, index) => (
+                              <span
+                                key={`${row.label}-${index}-${item}`}
+                                className="rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-[10px] text-text-primary"
+                              >
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-xs leading-6 text-text-primary break-words">
+                            {row.value}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
               <details className="group">
                 <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
                   <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
@@ -252,11 +301,11 @@ export default function MessageBubble({ message }) {
                     Sources
                   </div>
                   <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
-                    {message.sources.length}
+                    {(message.sources || []).length}
                   </div>
                 </summary>
                 <div className="mt-3 flex flex-wrap gap-2 animate-fadeIn">
-                  {message.sources.map((src, i) => (
+                  {(message.sources || []).map((src, i) => (
                     <SourceCard key={i} source={src} />
                   ))}
                 </div>

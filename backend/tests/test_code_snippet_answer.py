@@ -570,6 +570,8 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 self.assertTrue(any(src.get("relative_path", "") == "backend/evals/run_safe_evals.py" for src in second_srcs))
                 self.assertFalse(any(src.get("relative_path", "") == "backend/retrieval/db.py" for src in captured.get("allowed_sources", [])))
                 self.assertFalse(any("AuthCallback" in src.get("relative_path", "") for src in captured.get("allowed_sources", [])))
+                self.assertTrue(captured.get("allowed_sources"))
+                self.assertEqual("main", captured["allowed_sources"][0].get("symbol_name"))
                 self.assertIn("backend/evals/run_safe_evals.py", _query_state_text(captured.get("query_info", {})))
                 self.assertIn("backend/evals/run_safe_evals.py", _query_state_text(captured.get("generate_query_info", {})))
                 self.assertTrue(

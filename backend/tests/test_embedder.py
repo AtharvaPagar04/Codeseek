@@ -251,7 +251,7 @@ def test_embedding_cooldown_triggers_after_300(capsys):
     assert "[embedding.cooldown] embedded=300 remaining=100 sleeping=30s" in captured.out
 
 
-def test_embedding_cooldown_default_sleep_duration(capsys):
+def test_embedding_cooldown_explicit_default_sleep_duration(capsys):
     from unittest.mock import patch, MagicMock
     from rag_ingestion.stages.embedder import embed_chunks
     from rag_ingestion.utils.counters import PipelineCounters
@@ -269,6 +269,8 @@ def test_embedding_cooldown_default_sleep_duration(capsys):
 
     with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
+         patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
          patch("rag_ingestion.stages.embedder._sleep", side_effect=fake_sleep):
 
         embed_chunks(chunks, counters)
@@ -450,4 +452,3 @@ def test_embedding_cooldown_variable_batch_sizes(capsys):
     captured = capsys.readouterr()
     assert "[embedding.cooldown] embedded=400 remaining=600 sleeping=15s" in captured.out
     assert "[embedding.cooldown] embedded=800 remaining=200 sleeping=15s" in captured.out
-

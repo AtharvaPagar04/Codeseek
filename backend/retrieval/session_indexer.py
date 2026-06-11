@@ -7,13 +7,13 @@ import os
 import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from qdrant_client import QdrantClient
 
 from rag_ingestion.main import run_pipeline
-from retrieval.config import QDRANT_HOST, QDRANT_PORT
+from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_PORT
 from retrieval.db import db_cursor, init_db
 from retrieval.isolation import expected_collection_name
 from retrieval.searcher import invalidate_lexical_index
@@ -34,10 +34,41 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_timestamp(value: str) -> datetime | None:
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def is_stale_indexing_session(session: dict, *, now: datetime | None = None) -> bool:
+    if session.get("status") != "indexing":
+        return False
+    if INDEXING_STALE_AFTER_SECONDS <= 0:
+        return False
+    if int(session.get("files_indexed", 0) or 0) > 0:
+        return False
+    if int(session.get("chunks_generated", 0) or 0) > 0:
+        return False
+    if int(session.get("embeddings_stored", 0) or 0) > 0:
+        return False
+    updated_at = _parse_timestamp(str(session.get("updated_at", "") or ""))
+    if not updated_at:
+        return False
+    current = now or datetime.now(timezone.utc)
+    return current - updated_at > timedelta(seconds=INDEXING_STALE_AFTER_SECONDS)
+
+
 def compute_repo_freshness_status(session: dict) -> str:
     status = session.get("status", "unknown")
     if status == "indexing":
-        return "indexing"
+        return "stale_indexing" if is_stale_indexing_session(session) else "indexing"
     if status == "failed":
         return "failed"
     current_sha = session.get("current_commit_sha", "")
@@ -51,8 +82,9 @@ def compute_repo_freshness_status(session: dict) -> str:
 
 
 def _populate_repo_status(session: dict) -> dict:
+    stale = is_stale_indexing_session(session)
     session["repo_status"] = {
-        "status": compute_repo_freshness_status(session),
+        "status": "stale_indexing" if stale else compute_repo_freshness_status(session),
         "indexed_commit_sha": session.get("last_indexed_commit", ""),
         "current_commit_sha": session.get("current_commit_sha", ""),
         "current_branch": session.get("current_branch", ""),
@@ -62,6 +94,8 @@ def _populate_repo_status(session: dict) -> dict:
         "files_indexed": int(session.get("files_indexed", 0)),
         "chunks_generated": int(session.get("chunks_generated", 0)),
         "embeddings_stored": int(session.get("embeddings_stored", 0)),
+        "is_stale_indexing": stale,
+        "error": session.get("error", ""),
     }
     return session
 
@@ -165,12 +199,11 @@ def _check_and_clean_stale_indexing_sessions(state: dict, exclude_session_id: st
         if s.get("status") == "indexing":
             if exclude_session_id and s.get("id") == exclude_session_id:
                 continue
-            
             job = _jobs.get(s["id"])
             if job and job.is_alive():
                 has_active_indexing = True
                 active_repo_name = s.get("repo_full_name", "another repository")
-            else:
+            elif is_stale_indexing_session(s):
                 stale_sessions.append(s)
 
     if stale_sessions:
@@ -363,6 +396,33 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
     return None
 
 
+def _record_indexing_failure(
+    session_id: str,
+    exc: Exception,
+    *,
+    job_finished_at: str | None = None,
+    chunks_generated: int | None = None,
+    embeddings_stored: int | None = None,
+    files_indexed: int | None = None,
+    last_indexed_commit: str | None = None,
+) -> dict | None:
+    updates: dict[str, object] = {
+        "status": "failed",
+        "error": str(exc),
+    }
+    if job_finished_at is not None:
+        updates["job_finished_at"] = job_finished_at
+    if chunks_generated is not None:
+        updates["chunks_generated"] = chunks_generated
+    if embeddings_stored is not None:
+        updates["embeddings_stored"] = embeddings_stored
+    if files_indexed is not None:
+        updates["files_indexed"] = files_indexed
+    if last_indexed_commit is not None:
+        updates["last_indexed_commit"] = last_indexed_commit
+    return _update_session(session_id, **updates)
+
+
 def _git_env(github_token: str = "") -> dict[str, str]:
     env = dict(os.environ)
     token = github_token.strip() or os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
@@ -501,6 +561,7 @@ def _index_job(session_id: str) -> None:
         return
     _update_session(session_id, status="indexing", job_started_at=_now(), error="")
     emit_indexing_event(session_id, "queued", "Indexing job started.")
+    counters = None
 
     try:
         repo_root = Path(session["repo_root"])
@@ -583,11 +644,13 @@ def _index_job(session_id: str) -> None:
             )
         except Exception:
             pass
-        _update_session(
+        _record_indexing_failure(
             session_id,
-            status="failed",
+            exc,
             job_finished_at=_now(),
-            error=str(exc),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else None,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else None,
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else None,
         )
 
 
@@ -844,7 +907,7 @@ def index_latest_version(session_id: str, user_id: str) -> dict:
         raise ValueError("Session not found")
     if session.get("user_id", "") != user_id:
         raise PermissionError("Access denied")
-    if session.get("status") == "indexing":
+    if session.get("status") == "indexing" and not is_stale_indexing_session(session):
         raise ValueError("Session is already indexing")
 
     with _lock:
@@ -890,6 +953,7 @@ def _index_latest_job(session_id: str, user_id: str) -> None:
     prev_chunks_generated = session.get("chunks_generated", 0)
     prev_embeddings_stored = session.get("embeddings_stored", 0)
     prev_files_indexed = session.get("files_indexed", 0)
+    counters = None
 
     try:
         repo_root = Path(session["repo_root"])
@@ -1000,15 +1064,14 @@ def _index_latest_job(session_id: str, user_id: str) -> None:
         except Exception:
             pass
 
-        _update_session(
+        _record_indexing_failure(
             session_id,
-            status="failed",
+            exc,
             job_finished_at=_now(),
-            error=str(exc),
             last_indexed_commit=prev_last_indexed_commit,
-            chunks_generated=prev_chunks_generated,
-            embeddings_stored=prev_embeddings_stored,
-            files_indexed=prev_files_indexed,
+            chunks_generated=int(getattr(counters, "chunks_generated", prev_chunks_generated)) if counters is not None else prev_chunks_generated,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", prev_embeddings_stored)) if counters is not None else prev_embeddings_stored,
+            files_indexed=int(getattr(counters, "files_parsed_ok", prev_files_indexed)) if counters is not None else prev_files_indexed,
         )
 
 
@@ -1031,4 +1094,3 @@ try:
 except Exception as e:
     # Do not block import if database is not initialized yet or throws an error.
     print(f"Warning: failed to clean up stale indexing sessions on startup: {e}")
-

@@ -606,6 +606,90 @@ def _log_http_error(event: str, request_id: str, status_code: int, detail: objec
     )
 
 
+def _compact_diagnostics_source(source: dict) -> dict:
+    if not isinstance(source, dict):
+        return {}
+
+    compact: dict[str, object] = {}
+    relative_path = str(source.get("relative_path") or source.get("file") or "").strip()
+    symbol_name = str(source.get("symbol_name") or source.get("symbol") or "").strip()
+    expansion_type = str(source.get("expansion_type") or "").strip()
+
+    if relative_path:
+        compact["relative_path"] = relative_path
+    if symbol_name:
+        compact["symbol_name"] = symbol_name
+    if expansion_type:
+        compact["expansion_type"] = expansion_type
+
+    try:
+        start_line = int(source.get("start_line") or 0)
+        if start_line > 0:
+            compact["start_line"] = start_line
+    except Exception:
+        pass
+
+    try:
+        end_line = int(source.get("end_line") or 0)
+        if end_line > 0 and end_line != compact.get("start_line"):
+            compact["end_line"] = end_line
+    except Exception:
+        pass
+
+    return compact
+
+
+def _build_query_diagnostics(
+    *,
+    meta: dict,
+    sources: list[dict],
+    token_count: int | None,
+    session: dict | None,
+    provider_config: dict | None,
+) -> dict:
+    llm_selection = meta.get("llm_selection") if isinstance(meta.get("llm_selection"), dict) else {}
+    evidence_confidence = meta.get("evidence_confidence") if isinstance(meta.get("evidence_confidence"), dict) else {}
+    source_filter = meta.get("source_filter") if isinstance(meta.get("source_filter"), dict) else {}
+
+    def _compact_sources(items: list[dict]) -> list[dict]:
+        compacted: list[dict] = []
+        for item in items[:6]:
+            summary = _compact_diagnostics_source(item)
+            if summary:
+                compacted.append(summary)
+        return compacted
+
+    diagnostics: dict[str, object] = {
+        "intent": str(meta.get("query_intent") or "").strip(),
+        "primary_intent": str(meta.get("primary_intent") or "").strip(),
+        "response_mode": str(meta.get("response_mode") or "").strip(),
+        "provider": str((llm_selection or {}).get("provider") or (provider_config or {}).get("provider") or "").strip(),
+        "model": str((llm_selection or {}).get("model") or (provider_config or {}).get("model") or "").strip(),
+        "routing_mode": str((llm_selection or {}).get("routing_mode") or "").strip(),
+        "context_tokens": token_count,
+        "evidence_confidence": evidence_confidence,
+        "source_filter": source_filter,
+        "session_status": str((session or {}).get("status") or "").strip(),
+        "session_error": str((session or {}).get("error") or "").strip(),
+        "selected_source_count": len(meta.get("display_sources") or []),
+        "reasoning_source_count": len(meta.get("reasoning_sources") or []),
+        "rendered_source_count": len(sources or []),
+        "selected_sources": _compact_sources(list(meta.get("display_sources") or [])),
+        "reasoning_sources": _compact_sources(list(meta.get("reasoning_sources") or [])),
+        "rendered_sources": _compact_sources(list(sources or [])),
+    }
+
+    validation = meta.get("validation")
+    if isinstance(validation, dict):
+        diagnostics["validation"] = {
+            "valid": validation.get("valid"),
+            "reasons": list(validation.get("reasons") or []),
+            "repaired": bool(validation.get("repaired_answer") or validation.get("repaired_sources")),
+        }
+
+    return diagnostics
+
+
 def _query_impl(
     body: QueryRequest,
     request: Request,
@@ -753,6 +837,13 @@ def _query_impl(
             "sources": sources,
             "context_tokens": token_count,
             "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
+            "diagnostics": _build_query_diagnostics(
+                meta=meta,
+                sources=sources,
+                token_count=token_count,
+                session=session,
+                provider_config=provider_config,
+            ),
             "metrics": {
                 "total_latency_ms": total_ms,
                 "stage_latency_ms": meta.get("stage_latency_ms", {}),

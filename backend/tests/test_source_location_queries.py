@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory
+from retrieval.source_filter import select_sources_for_display
 
 class SourceLocationQueriesTests(unittest.TestCase):
     def test_qdrant_upsert_deterministic_answer(self) -> None:
@@ -161,6 +162,121 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertIn("Environment variable handling is implemented in backend/retrieval/config.py", answer)
         self.assertNotIn("Low confidence", answer)
         generate_answer.assert_not_called()
+
+    def test_implementation_location_query_prefers_impl_over_docs(self) -> None:
+        sources = [
+            {
+                "relative_path": "backend/docs/retrieval_docs/safe_eval_runner.md",
+                "symbol_name": "safe_eval_runner_md",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "main",
+                "start_line": 1,
+                "end_line": 80,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "get_tail",
+                "start_line": 81,
+                "end_line": 110,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display("Where is safe eval implemented?", sources)
+        paths = [src["relative_path"] for src in selected]
+
+        self.assertGreaterEqual(len(selected), 1)
+        self.assertEqual("backend/evals/run_safe_evals.py", paths[0])
+        self.assertNotIn("backend/docs/retrieval_docs/safe_eval_runner.md", paths[:1])
+        self.assertNotIn("backend/docs/retrieval_docs/safe_eval_runner.md", paths)
+
+    def test_explicit_docs_query_keeps_docs_primary(self) -> None:
+        sources = [
+            {
+                "relative_path": "backend/docs/retrieval_docs/safe_eval_runner.md",
+                "symbol_name": "safe_eval_runner_md",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "main",
+                "start_line": 1,
+                "end_line": 80,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display("show me safe eval docs", sources)
+        self.assertEqual("backend/docs/retrieval_docs/safe_eval_runner.md", selected[0]["relative_path"])
+
+    def test_implementation_location_queries_prefer_code_over_docs_and_reports(self) -> None:
+        def src(path: str, symbol: str, start: int = 1, end: int = 40) -> dict:
+            return {
+                "relative_path": path,
+                "symbol_name": symbol,
+                "start_line": start,
+                "end_line": end,
+                "expansion_type": "primary",
+            }
+
+        cases = [
+            (
+                "Where is safe eval implemented?",
+                [
+                    src("backend/docs/retrieval_docs/safe_eval_runner.md", "safe_eval_runner_md"),
+                    src("backend/evals/run_safe_evals.py", "main"),
+                    src("backend/evals/run_safe_evals.py", "get_tail"),
+                ],
+                "backend/evals/run_safe_evals.py",
+            ),
+            (
+                "Where is evaluation report API implemented?",
+                [
+                    src("backend/docs/retrieval_docs/eval_report_api.md", "eval_report_api_md"),
+                    src("backend/retrieval/api_service.py", "get_latest_evaluation_report_v1"),
+                    src("backend/retrieval/eval_reports.py", "get_latest_evaluation_report"),
+                ],
+                "backend/retrieval/api_service.py",
+            ),
+            (
+                "Where is repo freshness implemented?",
+                [
+                    src("backend/reports/repo_freshness_report.md", "repo_freshness_report"),
+                    src("backend/retrieval/session_indexer.py", "compute_repo_freshness_status"),
+                ],
+                "backend/retrieval/session_indexer.py",
+            ),
+            (
+                "Where is description cooldown implemented?",
+                [
+                    src("backend/docs/retrieval_docs/description_cooldown.md", "description_cooldown_md"),
+                    src("backend/rag_ingestion/stages/description.py", "run_description_stage"),
+                ],
+                "backend/rag_ingestion/stages/description.py",
+            ),
+            (
+                "Where is embedding cooldown implemented?",
+                [
+                    src("backend/docs/retrieval_docs/embedding_cooldown.md", "embedding_cooldown_md"),
+                    src("backend/rag_ingestion/stages/embedder.py", "run_embedder_stage"),
+                ],
+                "backend/rag_ingestion/stages/embedder.py",
+            ),
+        ]
+
+        for query, sources, expected_primary in cases:
+            with self.subTest(query=query):
+                selected = select_sources_for_display(query, sources)
+                self.assertGreaterEqual(len(selected), 1)
+                self.assertEqual(expected_primary, selected[0]["relative_path"])
 
     def test_format_source_location_target_shape_reordering(self) -> None:
         from retrieval.code_answers import _format_source_location_target_shape

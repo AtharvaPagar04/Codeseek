@@ -137,7 +137,10 @@ def is_source_location_query(query: str) -> bool:
         r"\bwhere\s+is\b",
         r"\bwhere\s+are\b",
         r"\bwhere\s+implemented\b",
-        r"\bwhere\s+handled\b"
+        r"\bwhere\s+handled\b",
+        r"\bimplementation\s+of\b",
+        r"\bwhere\s+located\b",
+        r"\bwhere\s+defined\b",
     ]
     for pattern in source_location_markers:
         if re.search(pattern, q):

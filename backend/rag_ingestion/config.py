@@ -21,6 +21,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_positive_int(name: str) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return 0
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = _env_int("QDRANT_PORT", 6333)
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "repository_chunks")
@@ -130,5 +142,5 @@ CODESEEK_OLLAMA_STOP_MODEL_EVERY = _env_int("CODESEEK_OLLAMA_STOP_MODEL_EVERY", 
 CODESEEK_DESCRIPTION_COOLDOWN_EVERY = _env_int("CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 200)
 CODESEEK_DESCRIPTION_COOLDOWN_SECONDS = _env_int("CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 60)
 
-CODESEEK_EMBEDDING_COOLDOWN_EVERY = _env_int("CODESEEK_EMBEDDING_COOLDOWN_EVERY", 200)
-CODESEEK_EMBEDDING_COOLDOWN_SECONDS = _env_int("CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30)
+CODESEEK_EMBEDDING_COOLDOWN_EVERY = _env_positive_int("CODESEEK_EMBEDDING_COOLDOWN_EVERY")
+CODESEEK_EMBEDDING_COOLDOWN_SECONDS = _env_positive_int("CODESEEK_EMBEDDING_COOLDOWN_SECONDS")

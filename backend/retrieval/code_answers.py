@@ -1742,7 +1742,7 @@ def build_architecture_answer(
 
 
 def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
-    selected_sources = _preferred_sources(sources)
+    selected_sources = _preferred_explanation_sources(raw_query, sources)
     if not selected_sources:
         return "Insufficient context in retrieved code to explain this confidently."
 
@@ -1786,6 +1786,13 @@ def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[d
     lines.append("Sources:")
     lines.extend(_source_reference_lines(all_sources[:5]))
     return "\n".join(lines)
+
+
+def _preferred_explanation_sources(raw_query: str, sources: list[dict]) -> list[dict]:
+    ranked = rank_follow_up_sources_for_explanation(sources, raw_query)
+    primary = [source for source in ranked if source.get("expansion_type") == "primary"]
+    chosen = primary or ranked or list(sources)
+    return chosen[:2]
 
 
 def _select_best_snippet(raw_query: str, sources: list[dict]) -> str | None:
@@ -1899,6 +1906,73 @@ def _preferred_sources(sources: list[dict]) -> list[dict]:
         ),
     )
     return chosen[:2]
+
+
+def rank_follow_up_sources_for_explanation(sources: list[dict], raw_query: str) -> list[dict]:
+    """Rank sources for vague follow-up explanations.
+
+    Prefers exact queried symbols, primary implementation symbols like
+    ``main`` or route handlers, and larger public implementations over tiny
+    helpers. Keeps the current file family intact; it only reorders the list.
+    """
+    from retrieval.query_processor import _extract_symbols
+
+    query_lower = raw_query.lower()
+    exact_query_symbols = {
+        sym.lower()
+        for sym in _extract_symbols(raw_query)
+        if sym.strip()
+    }
+
+    def _score(source: dict) -> tuple[int, int, int, int, str, int, int]:
+        symbol = str(source.get("symbol_name", "")).strip()
+        symbol_lower = symbol.lower()
+        rel_path = str(source.get("relative_path", "")).strip().lower()
+        start_line = int(source.get("start_line", 0) or 0)
+        end_line = int(source.get("end_line", 0) or 0)
+        span = max(0, end_line - start_line)
+        is_primary = 1 if source.get("expansion_type") == "primary" else 0
+
+        score = 0
+        if symbol_lower in exact_query_symbols:
+            score += 500
+        if symbol_lower == "main":
+            score += 420
+        if re.search(r"(^|_)(v\d+)$", symbol_lower):
+            score += 160
+        if any(token in symbol_lower for token in ("handler", "endpoint", "route", "view", "class")):
+            score += 140
+        if symbol_lower.startswith("get_") or symbol_lower.startswith("_format_") or symbol_lower.startswith("_helper_"):
+            score -= 120
+        if symbol_lower.startswith("_") and symbol_lower not in {"_main"}:
+            score -= 40
+        if symbol_lower == "<file>" or not symbol_lower:
+            score -= 200
+        if not symbol_lower.startswith("_"):
+            score += 30
+        if span >= 40:
+            score += 40
+        elif span >= 15:
+            score += 20
+        elif span > 0:
+            score += 5
+        if query_lower and symbol_lower and symbol_lower in query_lower:
+            score += 25
+        if rel_path and rel_path in query_lower:
+            score += 20
+        if is_primary:
+            score += 20
+        return (
+            score,
+            span,
+            is_primary,
+            -start_line,
+            rel_path,
+            -end_line,
+            len(symbol_lower),
+        )
+
+    return sorted(list(sources), key=_score, reverse=True)
 
 
 def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:

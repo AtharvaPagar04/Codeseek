@@ -147,6 +147,54 @@ def _query_matches_general_project_intent(intent: str | None, mode: str | None) 
     )
 
 
+def _query_prefers_implementation_sources(raw_query: str) -> bool:
+    from retrieval.query_intent import is_source_location_query
+
+    if _query_is_general_project_query(raw_query):
+        return False
+    if _query_explicitly_allows_non_implementation_artifacts(raw_query):
+        return False
+    if not is_source_location_query(raw_query):
+        return False
+
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+
+    return any(
+        phrase in q
+        for phrase in (
+            "implementation of",
+            "where is",
+            "where are",
+            "where implemented",
+            "where located",
+            "where defined",
+            "implemented in",
+            "defined in",
+            "located in",
+            "implemented",
+            "defined",
+            "located",
+        )
+    )
+
+
+def _source_location_role_rank(src: dict) -> int:
+    from retrieval.searcher import classify_source_role
+
+    role = classify_source_role(str(src.get("relative_path", "")))
+    return {
+        "implementation": 0,
+        "unknown": 1,
+        "scratch/tooling": 2,
+        "test": 3,
+        "generated_eval": 4,
+        "docs": 5,
+        "answer_template": 6,
+    }.get(role, 4)
+
+
 def classify_negative_filter_topic(raw_query: str) -> str | None:
     if _query_is_general_project_query(raw_query):
         return None
@@ -401,14 +449,18 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
     primary_cap = _primary_source_cap(raw_query, wants_auth_trace, wants_phase1_flow, wants_compound, wants_overview)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
-    chosen_primary = (
-        strong_primary[:primary_cap]
-        if strong_primary
-        else (primary_relevant[:primary_cap] if primary_relevant else primary[:primary_cap])
-    )
+    if _query_prefers_implementation_sources(raw_query):
+        chosen_primary = primary[:primary_cap]
+        chosen_expanded = expanded[:expanded_cap]
+    else:
+        chosen_primary = (
+            strong_primary[:primary_cap]
+            if strong_primary
+            else (primary_relevant[:primary_cap] if primary_relevant else primary[:primary_cap])
+        )
+        chosen_expanded = expanded_relevant[:expanded_cap]
     chosen_primary = _inject_trace_anchors(raw_query, primary, chosen_primary, primary_cap)
     chosen_primary = _inject_phase1_flow_anchors(raw_query, primary, chosen_primary, primary_cap)
-    chosen_expanded = expanded_relevant[:expanded_cap]
     trimmed = chosen_primary + chosen_expanded
 
     seen = set()
@@ -432,6 +484,18 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     if suppress_overview_meta:
         filtered_unique = _filter_overview_noise(unique)
         unique = filtered_unique
+
+    if _query_prefers_implementation_sources(raw_query):
+        unique = sorted(
+            unique,
+            key=lambda src: (
+                _source_location_role_rank(src),
+                -source_relevance_score(src, query_tokens),
+                str(src.get("relative_path", "")),
+                int(src.get("start_line", 0)),
+                int(src.get("end_line", 0)),
+            ),
+        )
 
     matched_code_topic_route = match_code_topic_route(raw_query, "CODE_REQUEST")
     unique = apply_query_negative_filters(
