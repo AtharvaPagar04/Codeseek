@@ -98,6 +98,8 @@ def generate_answer(
             response_mode = "code_snippet"
         elif intent == "CONFIG":
             response_mode = "source_location"
+        elif str(query_info.get("response_mode", "")).strip().lower() == "docs_summary":
+            response_mode = "docs_summary"
             
     if evidence_confidence:
         if isinstance(evidence_confidence, dict):
@@ -213,6 +215,8 @@ def _build_prompt(
         header = "EXPLANATION"
     elif response_mode == "source_location":
         header = "SOURCE_LOCATION"
+    elif response_mode == "docs_summary":
+        header = "DOCS_SUMMARY"
     elif response_mode == "flow_summary":
         header = "FLOW_SUMMARY"
     elif response_mode == "low_context":
@@ -261,6 +265,18 @@ def _build_prompt(
             "- Do not mention internal routing, injection, ranking, or scoring.\n"
             "- If the exact implementation is uncertain, start with:\n"
             "  'I found partial evidence. The likely implementation is in:'"
+        )
+    elif header == "DOCS_SUMMARY":
+        parts.append(
+            "The user explicitly asked for docs or documentation. Answer in docs-summary mode.\n"
+            "Use the current retrieved docs as the source of truth.\n"
+            "Summarize what the docs explain, mention the relevant doc files, and keep the answer in documentation language.\n\n"
+            "Rules:\n"
+            "- Do not say 'The implementation is in'.\n"
+            "- Do not use 'symbol/function' wording.\n"
+            "- Do not treat .md files as implementation files.\n"
+            "- Do not summarize prior turns unless the current question is vague.\n"
+            "- Prefer short, direct documentation summaries and list related docs when useful."
         )
     elif header == "FLOW_SUMMARY":
         parts.append(
@@ -347,6 +363,9 @@ def _build_prompt(
         "The CURRENT USER QUESTION is the source of truth for this answer.\n"
         "Conversation history is only for resolving vague follow-ups. If the current question explicitly names a file, function, class, symbol, endpoint, feature, or subsystem, answer using the current question and current allowed sources. Do not reuse previous-turn sources unless they directly match the current question.\n"
         "Use conversation history only when the current question is ambiguous, such as \"that\", \"it\", \"same function\", \"same file\", \"continue\", or \"explain that\"."
+    )
+    parts.append(
+        "If the current question explicitly asks for docs, documentation, markdown, reports, policy, guide, or a named document, answer from the current retrieved docs and do not summarize prior turns unless the current question is vague."
     )
 
     if allowed_sources:

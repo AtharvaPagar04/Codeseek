@@ -62,6 +62,8 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertTrue(is_flow_explanation_request("walk me through backend request orchestration"))
         self.assertTrue(is_flow_explanation_request("how does deployment configuration work"))
         self.assertTrue(is_flow_explanation_request("explain provider credential lifecycle"))
+        self.assertTrue(is_flow_explanation_request("How does the retrieval pipeline work?"))
+        self.assertTrue(is_flow_explanation_request("Explain query processor to searcher to answer generation."))
         self.assertFalse(is_flow_explanation_request("what is this project about"))
 
     def test_prompt_includes_code_mode_when_requested(self) -> None:

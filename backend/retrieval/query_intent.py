@@ -141,6 +141,7 @@ def is_source_location_query(query: str) -> bool:
         r"\bimplementation\s+of\b",
         r"\bwhere\s+located\b",
         r"\bwhere\s+defined\b",
+        r"\blocation\b",
     ]
     for pattern in source_location_markers:
         if re.search(pattern, q):

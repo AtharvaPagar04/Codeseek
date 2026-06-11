@@ -31,6 +31,39 @@ _INTERNAL_PHRASES = (
 _FILE_RE = re.compile(r"`?([A-Za-z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md))`?")
 
 
+def _explicit_docs_request(raw_query: str) -> bool:
+    q = (raw_query or "").lower()
+    implementation_markers = (
+        "where is",
+        "where are",
+        "implemented",
+        "implementation",
+        "located",
+        "defined",
+        "endpoint",
+        "api",
+        "function",
+        "handler",
+        "code",
+    )
+    if "report" in q and any(marker in q for marker in implementation_markers):
+        return False
+    return any(
+        term in q
+        for term in (
+            "docs",
+            "documentation",
+            "markdown",
+            ".md",
+            "readme",
+            "report",
+            "policy",
+            "guide",
+            "runbook",
+        )
+    )
+
+
 def validate_generated_answer(
     *,
     answer: str,
@@ -63,6 +96,14 @@ def validate_generated_answer(
             final_sources=final_sources or allowed_sources,
             reasons=cleaned_reasons,
         )
+    if response_mode == "docs_summary" or _explicit_docs_request(raw_query):
+        return _validate_docs_summary(
+            raw_query=raw_query,
+            answer=cleaned_answer,
+            allowed_sources=allowed_sources,
+            final_sources=final_sources or allowed_sources,
+            reasons=cleaned_reasons,
+        )
     if response_mode == "source_location":
         return _validate_source_location(
             raw_query=raw_query,
@@ -86,6 +127,51 @@ def validate_generated_answer(
         "repaired_answer": cleaned_answer.strip(),
         "repaired_sources": repaired_sources,
         "reasons": cleaned_reasons,
+    }
+
+
+def _validate_docs_summary(
+    *,
+    raw_query: str,
+    answer: str,
+    allowed_sources: list[dict],
+    final_sources: list[dict],
+    reasons: list[str],
+) -> dict:
+    from retrieval.code_answers import build_docs_summary_answer, preferred_docs_summary_sources
+
+    docs_sources = preferred_docs_summary_sources(final_sources or allowed_sources)
+    if not docs_sources:
+        return {
+            "valid": False,
+            "repaired_answer": LOW_CONTEXT_FALLBACK,
+            "repaired_sources": [],
+            "reasons": reasons + ["low_context"],
+        }
+
+    docs_answer = build_docs_summary_answer(raw_query, docs_sources, docs_sources)
+    impl_phrases = (
+        "the implementation is in",
+        "implemented in",
+        "symbol/function",
+        "source-location",
+    )
+    invalid_impl_language = any(phrase in answer.lower() for phrase in impl_phrases)
+    valid = not invalid_impl_language and not reasons
+    repaired_sources = _prune_sources_to_allowed(docs_sources, _source_paths(docs_sources))
+    if not valid:
+        return {
+            "valid": False,
+            "repaired_answer": docs_answer.strip(),
+            "repaired_sources": repaired_sources,
+            "reasons": reasons + ["rebuilt_docs_summary"],
+        }
+
+    return {
+        "valid": True,
+        "repaired_answer": answer.strip(),
+        "repaired_sources": repaired_sources,
+        "reasons": reasons,
     }
 
 
@@ -384,10 +470,15 @@ def _preferred_source_location_sources(sources: list[dict], raw_query: str) -> l
     if impl_sources and not allow_docs_tests:
         try:
             from retrieval.searcher import classify_source_role
+            from retrieval.searcher import match_code_topic_route
         except Exception:
             classify_source_role = None
+            match_code_topic_route = None
 
         query_terms = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", q)
+        matched_route = match_code_topic_route(raw_query, "CODE_REQUEST") if match_code_topic_route else None
+        route_paths = [str(path).lower() for path in (matched_route or {}).get("target_paths", [])]
+        route_symbols = [str(sym).lower() for sym in (matched_route or {}).get("target_symbols", [])]
 
         def _rank(src: dict) -> tuple[int, int, str, int]:
             path = str(src.get("relative_path", "")).strip().lower()
@@ -402,9 +493,11 @@ def _preferred_source_location_sources(sources: list[dict], raw_query: str) -> l
                 "docs": 5,
                 "answer_template": 6,
             }.get(role, 4)
+            route_path_hit = 1 if route_paths and any(path == rp or path.endswith(f"/{rp}") or rp.endswith(f"/{path}") for rp in route_paths) else 0
+            route_symbol_hit = 1 if route_symbols and symbol and any(symbol == rs for rs in route_symbols) else 0
             symbol_hit = 1 if symbol and any(term in symbol for term in query_terms) else 0
             main_hit = 1 if symbol == "main" else 0
-            return (role_priority, -main_hit, -symbol_hit, path, int(src.get("start_line", 0) or 0))
+            return (-route_path_hit, -route_symbol_hit, role_priority, -main_hit, -symbol_hit, path, int(src.get("start_line", 0) or 0))
 
         return _dedupe_sources(sorted(impl_sources, key=_rank))
     return _dedupe_sources(sources)

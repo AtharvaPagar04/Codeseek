@@ -167,6 +167,16 @@ LOOKUP_PHRASES = (
 )
 
 FLOW_SYMBOLS = {
+    "retrieval_pipeline": [
+        "process_query",
+        "classify_query_intent",
+        "search",
+        "assemble",
+        "assemble_for_reasoning",
+        "build_flow_answer",
+        "generate_answer",
+        "validate_generated_answer",
+    ],
     "orchestration": ["_query_impl", "run_query"],
     "auth_session": [
         "auth_github",
@@ -195,6 +205,16 @@ FLOW_SYMBOLS = {
 }
 
 FLOW_FILES = {
+    "retrieval_pipeline": [
+        "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+        "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+        "backend/retrieval/query_processor.py",
+        "backend/retrieval/searcher.py",
+        "backend/retrieval/main.py",
+        "backend/retrieval/code_answers.py",
+        "backend/retrieval/llm.py",
+        "backend/retrieval/answer_validation.py",
+    ],
     "deployment_config": [
         "docker-compose.yml",
         "Dockerfile",
@@ -402,6 +422,21 @@ def _inject_config_files(query: str, entities: dict) -> None:
 
 def _flow_kind(query: str) -> str:
     lower = query.lower()
+    if any(
+        term in lower
+        for term in (
+            "retrieval pipeline",
+            "query processor",
+            "context assembly",
+            "answer generation",
+            "merge results",
+            "reciprocal rank fusion",
+            "rerank",
+            "reranking",
+            "hybrid retrieval",
+        )
+    ) or ("retrieval" in lower and "pipeline" in lower):
+        return "retrieval_pipeline"
     if not any(
         marker in lower
         for marker in (

@@ -147,6 +147,14 @@ CODE_REQUEST_TOPIC_ROUTES = (
         "phrases": [
             "evaluation report api endpoint code",
             "evaluation report endpoint code",
+            "where is evaluation report api implemented",
+            "where is the evaluation report api implemented",
+            "where is the evaluation report endpoint implemented",
+            "where is latest evaluation report implemented",
+            "where is the latest evaluation report endpoint",
+            "where is evaluation diagnostics endpoint implemented",
+            "evaluation report api location",
+            "evaluation report endpoint location",
             "latest evaluation report endpoint",
             "evaluation latest endpoint",
             "evaluation diagnostics endpoint",
@@ -172,6 +180,61 @@ CODE_REQUEST_TOPIC_ROUTES = (
         "multi_intro": "I found multiple evaluation-report endpoint snippets:",
         "single_intro": "Here is the matching function/code:",
         "preferred_display_count": 2,
+    },
+    {
+        "id": "retrieval_internals",
+        "phrases": [
+            "where is reranking handled in searcher.py",
+            "show me the reranking code in searcher.py",
+            "where is final score computed",
+            "where is final_score computed",
+            "where are source boosts applied",
+            "where are retrieval candidates reranked",
+            "explain searcher.py reranking",
+            "show me the searcher internals for reranking",
+            "where does source_filter apply in retrieval",
+            "where does source filter apply in retrieval",
+            "searcher internals",
+            "searcher.py reranking",
+            "final score computed",
+            "source boosts applied",
+            "candidate ranking",
+            "source filter apply",
+            "source filter in retrieval",
+            "searcher source filter",
+        ],
+        "target_paths": [
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/source_filter.py",
+        ],
+        "target_symbols": [
+            "_merge_results",
+            "_rerank_with_query_tokens",
+            "feature_specific_routing_boost",
+            "artifact_penalty_for_intent",
+            "symbol_definition_boost",
+            "content_exact_match_boost",
+            "classify_source_role",
+            "apply_query_negative_filters",
+        ],
+        "symbol_path_hints": {
+            "_merge_results": "backend/retrieval/searcher.py",
+            "_rerank_with_query_tokens": "backend/retrieval/searcher.py",
+            "feature_specific_routing_boost": "backend/retrieval/searcher.py",
+            "artifact_penalty_for_intent": "backend/retrieval/searcher.py",
+            "symbol_definition_boost": "backend/retrieval/searcher.py",
+            "content_exact_match_boost": "backend/retrieval/searcher.py",
+            "classify_source_role": "backend/retrieval/searcher.py",
+            "apply_query_negative_filters": "backend/retrieval/source_filter.py",
+        },
+        "exclude_paths": [
+            "backend/scripts/lexical_layer_benchmark.py",
+            "backend/scripts/ragas_eval.py",
+            "backend/scripts/retrieval_eval.py",
+        ],
+        "multi_intro": "I found multiple reranking/searcher-internals snippets:",
+        "single_intro": "Here is the matching function/code:",
+        "preferred_display_count": 5,
     },
 )
 
@@ -204,13 +267,25 @@ def query_explicitly_requests_non_implementation_artifacts(raw_query: str) -> bo
     q = _normalized_query_text(raw_query)
     if not q:
         return False
-    if any(term in q for term in ("test", "tests", "doc", "docs", "documentation", ".md", "markdown")):
+    implementation_markers = (
+        "where is",
+        "where are",
+        "implemented",
+        "implementation",
+        "located",
+        "defined",
+        "endpoint",
+        "api",
+        "function",
+        "handler",
+        "code",
+    )
+    if any(term in q for term in ("test", "tests", "doc", "docs", "documentation", ".md", "markdown", "policy", "guide", "runbook")):
         return True
     if any(term in q for term in ("scratch", "benchmark", "plan")):
         return True
     if "report" in q:
-        implementation_markers = (" code", " endpoint", " api", " function", " handler", " implemented")
-        if not any(marker in f" {q}" for marker in implementation_markers):
+        if not any(marker in q for marker in implementation_markers):
             return True
     return False
 
@@ -223,9 +298,22 @@ def query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
             "retrieval routing",
             "reranking",
             "reranker",
+            "rerank",
+            "final score",
+            "final_score",
+            "source boost",
+            "source boosts",
+            "candidate ranking",
+            "retrieval candidates",
             "searcher internals",
             "searcher.py",
             "retrieval/searcher.py",
+            "source filter",
+            "source_filter",
+            "where is reranking handled",
+            "where is final score computed",
+            "where are source boosts applied",
+            "where does source filter apply in retrieval",
         )
     )
 
@@ -263,7 +351,12 @@ def match_code_topic_route(raw_query: str, primary_intent: str | None = None) ->
     raw_lower = (raw_query or "").lower()
     if not q:
         return None
-    allow_source_location = primary_intent in {"FILE", "SYMBOL", "CODE_REQUEST"} or "where is" in q or "where are" in q
+    allow_source_location = (
+        primary_intent in {"FILE", "SYMBOL", "CODE_REQUEST"}
+        or "where is" in q
+        or "where are" in q
+        or "location" in q
+    )
     if not allow_source_location:
         return None
     for route in CODE_REQUEST_TOPIC_ROUTES:
@@ -1725,6 +1818,8 @@ def classify_source_role(relative_path: str) -> str:
         "safe_eval_latest/" in path_lower or 
         path_lower.startswith("safe_eval_latest/")):
         return "generated_eval"
+    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("eval", "ragas", "report")):
+        return "generated_eval"
         
     # 3. test
     if (path_lower.startswith("backend/tests/") or 
@@ -1796,6 +1891,18 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
     ):
         if path in {"backend/retrieval/session_indexer.py", "backend/retrieval/api_service.py"}:
             return 0.9
+    # 3. evaluation report API implementation
+    if (
+        "evaluation report api" in q
+        or "evaluation report endpoint" in q
+        or "latest evaluation report" in q
+        or "evaluation diagnostics endpoint" in q
+        or "where is evaluation report" in q
+    ):
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"}:
+            return 1.0
+        if path == "backend/scripts/ragas_eval.py":
+            return -0.8
             
     # 4. auth/session validation
     if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:

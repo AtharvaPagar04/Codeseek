@@ -86,10 +86,19 @@ _SEARCHER_INTERNALS_TERMS = (
     "retrieval routing",
     "reranking",
     "reranker",
+    "rerank",
+    "final score",
+    "final_score",
+    "source boost",
+    "source boosts",
+    "candidate ranking",
+    "retrieval candidates",
     "searcher internals",
     "searcher.py",
     "retrieval/searcher.py",
     "source filtering",
+    "source filter",
+    "source_filter",
     "query intent",
     "code answer builder",
     "routing internals",
@@ -136,6 +145,24 @@ def _query_is_general_project_query(raw_query: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def _query_is_retrieval_pipeline_flow(raw_query: str) -> bool:
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+    return bool(
+        "retrieval pipeline" in q
+        or "query processor" in q
+        or "context assembly" in q
+        or "answer generation" in q
+        or "merge results" in q
+        or "reciprocal rank fusion" in q
+        or "rerank" in q
+        or "reranking" in q
+        or "hybrid retrieval" in q
+        or ("retrieval" in q and "pipeline" in q)
+    )
 
 
 def _query_matches_general_project_intent(intent: str | None, mode: str | None) -> bool:
@@ -285,10 +312,10 @@ def source_excluded_for_query(
 
     if is_tests and not (allow_tests or explicit_non_impl):
         return True
-    if is_docs and not (allow_docs or explicit_non_impl):
+    if is_docs and not (allow_docs or explicit_non_impl) and not _query_is_retrieval_pipeline_flow(raw_query):
         return True
 
-    if not wants_searcher_internals and path_lower in {
+    if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
         "backend/retrieval/searcher.py",
         "backend/retrieval/source_filter.py",
         "backend/retrieval/query_intent.py",
@@ -336,7 +363,15 @@ def source_excluded_for_query(
             # Keep api_service out of qdrant-only queries unless the query itself is about api handlers.
             return True
 
-    if topic not in {"retrieval_internals"} and not wants_searcher_internals:
+    if query_is_phase1_flow(raw_query) and any(
+        term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "answer generation", "context assembly")
+    ):
+        if path_lower.startswith("backend/scripts/") and any(
+            term in path_lower for term in ("benchmark", "ragas", "eval")
+        ):
+            return True
+
+    if topic not in {"retrieval_internals"} and not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query):
         if path_lower in {
             "backend/retrieval/searcher.py",
             "backend/retrieval/source_filter.py",
@@ -427,6 +462,15 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         expanded_filtered = _filter_overview_noise(expanded)
         primary = primary_filtered
         expanded = expanded_filtered
+    if _query_is_retrieval_pipeline_flow(raw_query):
+        primary = [
+            s for s in primary
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+        ] or primary
+        expanded = [
+            s for s in expanded
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+        ] or expanded
 
     def overlap(src: dict) -> int:
         return source_relevance_score(src, query_tokens)
@@ -970,6 +1014,8 @@ def _primary_source_cap(
     from retrieval.query_intent import is_code_request_query
     if is_code_request_query(raw_query) and any(w in q for w in auth_words):
         return 8
+    if wants_phase1_flow and any(term in q for term in ("retrieval", "pipeline", "search", "rerank", "answer", "context")):
+        return 10
     if wants_phase1_flow and any(term in q for term in ("provider", "credential", "credentials", "api key", "llm", "model")):
         return 9
     if wants_auth_trace or wants_phase1_flow:
@@ -1052,6 +1098,21 @@ def _phase1_flow_anchors(raw_query: str) -> list[str]:
     q = raw_query.lower()
     if not query_is_phase1_flow(raw_query):
         return []
+    if any(term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "reranking", "context assembly", "answer generation")):
+        return [
+            "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+            "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+            "process_query",
+            "search",
+            "_merge_results",
+            "_rerank_with_query_tokens",
+            "_run_query_impl",
+            "assemble",
+            "assemble_for_reasoning",
+            "build_flow_answer",
+            "generate_answer",
+            "validate_generated_answer",
+        ]
     if any(term in q for term in ("auth", "oauth", "login", "cookie", "credential")):
         return [
             "auth_github",
@@ -1151,6 +1212,16 @@ def query_is_phase1_flow(raw_query: str) -> bool:
             "trace",
             "walk me through",
             "step",
+            "pipeline",
+            "retrieval",
+            "search",
+            "searcher",
+            "rerank",
+            "reranking",
+            "merge",
+            "context",
+            "answer",
+            "generation",
             "deployment",
             "configuration",
             "config",
@@ -1169,6 +1240,16 @@ def query_is_phase1_flow(raw_query: str) -> bool:
             "backend",
             "request",
             "query",
+            "retrieval",
+            "pipeline",
+            "search",
+            "searcher",
+            "rerank",
+            "reranking",
+            "merge",
+            "context",
+            "answer",
+            "generation",
             "api",
             "auth",
             "oauth",

@@ -86,6 +86,20 @@ class LlmPromptTests(unittest.TestCase):
         self.assertIn("Prefer executable implementation files over docs/tests when implementation sources are available.", prompt)
         self.assertIn("Docs/tests may be related sources only when the user explicitly asks for docs/tests or no implementation file is available.", prompt)
 
+    def test_explicit_docs_query_ignores_previous_turns_in_prompt_rules(self) -> None:
+        prompt = _build_prompt(
+            raw_query="show me safe eval docs",
+            context="backend/docs/retrieval_docs/safe_eval_runner.md :: safe_eval_runner_md\n",
+            history_block="Previous turn: Where is safe eval implemented?",
+            allowed_sources=[],
+            response_mode="technical_trace",
+        )
+        self.assertIn(
+            "If the current question explicitly asks for docs, documentation, markdown, reports, policy, guide, or a named document",
+            prompt,
+        )
+        self.assertIn("do not summarize prior turns unless the current question is vague", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

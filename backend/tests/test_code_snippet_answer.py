@@ -873,6 +873,64 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("_rerank_with_query_tokens", answer)
 
     @patch("retrieval.code_answers._read_source_excerpt")
+    def test_explicit_searcher_internals_query_includes_reranking_helpers(self, mock_read) -> None:
+        mock_read.side_effect = lambda src: src.get("content", "")
+        sources = [
+            {
+                "relative_path": "backend/retrieval/searcher.py",
+                "symbol_name": "_rerank_with_query_tokens",
+                "chunk_type": "function",
+                "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
+                "start_line": 1,
+                "end_line": 2,
+            },
+            {
+                "relative_path": "backend/retrieval/searcher.py",
+                "symbol_name": "_merge_results",
+                "chunk_type": "function",
+                "content": "def _merge_results(a, b):\n    return a + b",
+                "start_line": 3,
+                "end_line": 4,
+            },
+            {
+                "relative_path": "backend/retrieval/searcher.py",
+                "symbol_name": "feature_specific_routing_boost",
+                "chunk_type": "function",
+                "content": "def feature_specific_routing_boost(path, query):\n    return 0.0",
+                "start_line": 5,
+                "end_line": 6,
+            },
+            {
+                "relative_path": "backend/retrieval/source_filter.py",
+                "symbol_name": "apply_query_negative_filters",
+                "chunk_type": "function",
+                "content": "def apply_query_negative_filters(sources, raw_query, **kwargs):\n    return sources",
+                "start_line": 7,
+                "end_line": 8,
+            },
+            {
+                "relative_path": "backend/scripts/lexical_layer_benchmark.py",
+                "symbol_name": "run_lexical_layer_benchmark",
+                "chunk_type": "function",
+                "content": "def run_lexical_layer_benchmark():\n    pass",
+                "start_line": 9,
+                "end_line": 10,
+            },
+        ]
+
+        answer = build_code_snippet_answer(
+            raw_query="show me the reranking code in searcher.py",
+            sources=sources,
+            chunks=sources,
+        )
+        self.assertIn("backend/retrieval/searcher.py", answer)
+        self.assertIn("_rerank_with_query_tokens", answer)
+        self.assertIn("_merge_results", answer)
+        self.assertIn("feature_specific_routing_boost", answer)
+        self.assertNotIn("backend/scripts/lexical_layer_benchmark.py", answer)
+        self.assertNotIn("Low confidence", answer)
+
+    @patch("retrieval.code_answers._read_source_excerpt")
     def test_evaluation_report_api_endpoint_routes_correctly(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=2)

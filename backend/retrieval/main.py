@@ -8,6 +8,7 @@ import time
 from retrieval.assembler import assemble, assemble_for_reasoning, intent_history_cap
 from retrieval.code_answers import (
     build_architecture_answer,
+    build_docs_summary_answer,
     build_explanation_answer,
     build_code_answer,
     build_code_snippet_answer,
@@ -24,6 +25,7 @@ from retrieval.code_answers import (
     is_overview_request,
     is_symbol_deep_dive_request,
     filesystem_exact_symbol_sources_for_query,
+    preferred_docs_summary_sources,
     route_filesystem_sources_for_query,
     rank_follow_up_sources_for_explanation,
 )
@@ -49,7 +51,9 @@ from retrieval.memory import ConversationMemory
 from retrieval.observability import StageMetrics, log_event, new_request_id
 from retrieval.query_processor import process_query
 from retrieval.isolation import validate_collection_binding
+from retrieval.query_intent import is_source_location_query
 from retrieval.searcher import search
+from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
 from retrieval.source_filter import (
     explain_source_filter_decision,
     score_evidence_confidence,
@@ -378,9 +382,10 @@ def post_process_answer_and_sources(
         or "skills" in q_lower
         or "skill" in q_lower
     )
+    is_flow_query = "flow" in q_lower or "pipeline" in q_lower or "retrieval pipeline" in q_lower
 
     final_sources = list(sources)
-    if implementation_sources and not explicit_request:
+    if implementation_sources and not explicit_request and not is_flow_query:
         final_sources = implementation_sources
         
         # Clean answer lines referencing docs/tests/scratch
@@ -677,7 +682,10 @@ def _run_query_impl(
     log_event("retrieval.request.start", rid, query=raw_query)
     validate_collection_binding(get_collection_name(), get_repo_root())
     started = time.perf_counter()
+    explicit_non_impl_request = query_explicitly_requests_non_implementation_artifacts(raw_query)
     history_block = memory.get_history_block()  # full, for search/follow-up rewrite
+    if explicit_non_impl_request:
+        history_block = ""
     metrics.add_stage("history", started)
     started = time.perf_counter()
     # WS7: load recent cited entities and pass them into query resolution.
@@ -690,6 +698,8 @@ def _run_query_impl(
     meta["primary_intent"] = str(primary_intent or "").strip()
     history_cap = intent_history_cap(primary_intent)
     history_block_capped = memory.get_history_block_capped(history_cap)
+    if explicit_non_impl_request:
+        history_block_capped = ""
     started = time.perf_counter()
     candidates = search(query_info)
     metrics.add_stage("search", started)
@@ -760,6 +770,116 @@ def _run_query_impl(
         flow_sources = select_sources_for_display(raw_query, expanded)
         if flow_sources:
             shown_sources = flow_sources
+    if explicit_non_impl_request:
+        docs_sources = preferred_docs_summary_sources(shown_sources)
+        if not docs_sources:
+            answer = LOW_CONTEXT_FALLBACK
+            cited_entities = {}
+            response_mode = "low_context"
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "low_context",
+                    "evidence_confidence": {"level": "weak", "reason": "no docs sources assembled", "count": 0},
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "low_context"
+                evaluation["display_sources"] = list(shown_sources)
+                evaluation["reasoning_sources"] = list(reasoning_sources)
+                evaluation["answer_context"] = ""
+                evaluation["answer_context_blocks"] = []
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                fallback="no_docs_sources",
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(docs_sources),
+                source_filter=meta["source_filter"],
+                response_mode="low_context",
+                evidence_confidence="weak",
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=[],
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if return_meta:
+                return answer, [], token_count, meta
+            return answer, [], token_count
+        started = time.perf_counter()
+        answer = build_docs_summary_answer(raw_query, docs_sources, expanded)
+        metrics.add_stage("docs_summary_answer", started)
+        cited_entities = extract_cited_entities(docs_sources)
+        response_mode = "docs_summary"
+        memory.add(
+            raw_query, answer,
+            resolved_query=_resolved_query_text(query_info, raw_query),
+            entities=cited_entities,
+            primary_intent=primary_intent,
+        )
+        meta["validation"] = getattr(memory, "last_validation", None)
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "backend_latency_ms": metrics.total_ms(),
+                "provider_latency_ms": 0,
+                "errors": metrics.errors,
+                "response_mode": "docs_summary",
+                "evidence_confidence": evidence_confidence,
+            }
+        )
+        if evaluation is not None:
+            evaluation["response_mode"] = "docs_summary"
+            evaluation["display_sources"] = list(docs_sources)
+            evaluation["reasoning_sources"] = list(reasoning_sources)
+            evaluation["answer_context"] = ""
+            evaluation["answer_context_blocks"] = []
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(docs_sources),
+            source_filter=meta["source_filter"],
+            response_mode="docs_summary",
+            evidence_confidence=evidence_confidence["level"],
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=docs_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
+        )
+        if return_meta:
+            return answer, docs_sources, token_count, meta
+        return answer, docs_sources, token_count
     if not shown_sources:
         answer = LOW_CONTEXT_FALLBACK
         cited_entities = {}
@@ -1140,6 +1260,79 @@ def _run_query_impl(
         return answer, shown_sources, token_count
 
     # Phase 2.5: source-location queries with strong evidence
+    if is_source_location_query(raw_query):
+        from retrieval.searcher import match_code_topic_route, path_matches_topic_route
+
+        matched_route = match_code_topic_route(raw_query, primary_intent)
+        if matched_route and matched_route.get("id") in {"evaluation_report_api", "retrieval_internals"}:
+            route_sources = [
+                src for src in shown_sources
+                if path_matches_topic_route(src.get("relative_path", ""), matched_route)
+            ]
+            if not route_sources:
+                route_sources = [
+                    src for src in expanded
+                    if path_matches_topic_route(src.get("relative_path", ""), matched_route)
+                ]
+            if not route_sources:
+                route_sources = route_filesystem_sources_for_query(raw_query)
+            if route_sources:
+                shown_sources = route_sources
+                display_sources = route_sources
+                reasoning_sources = route_sources
+                started = time.perf_counter()
+                answer = build_source_location_answer(raw_query, route_sources, query_info)
+                metrics.add_stage("source_location_answer", started)
+                cited_entities = extract_cited_entities(route_sources)
+                response_mode = "source_location"
+                memory.add(
+                    raw_query, answer,
+                    resolved_query=_resolved_query_text(query_info, raw_query),
+                    entities=cited_entities,
+                    primary_intent=primary_intent,
+                )
+                meta["validation"] = getattr(memory, "last_validation", None)
+                meta.update(
+                    {
+                        "stage_latency_ms": metrics.stage_latency_ms,
+                        "total_latency_ms": metrics.total_ms(),
+                        "backend_latency_ms": metrics.total_ms(),
+                        "provider_latency_ms": 0,
+                        "errors": metrics.errors,
+                        "response_mode": "source_location",
+                        "evidence_confidence": evidence_confidence,
+                    }
+                )
+                if evaluation is not None:
+                    evaluation["response_mode"] = "source_location"
+                    evaluation["answer_context"] = context
+                    evaluation["answer_context_blocks"] = list(context_blocks)
+                log_event(
+                    "retrieval.request.end",
+                    rid,
+                    status="ok",
+                    stage_latency_ms=metrics.stage_latency_ms,
+                    total_latency_ms=metrics.total_ms(),
+                    candidates=len(candidates),
+                    expanded=len(expanded),
+                    shown_sources=len(route_sources),
+                    source_filter=meta["source_filter"],
+                    response_mode="source_location",
+                    evidence_confidence=evidence_confidence["level"],
+                )
+                _write_trace_for_query(
+                    raw_query=raw_query,
+                    answer=answer,
+                    response_sources=route_sources,
+                    expanded=expanded,
+                    memory=memory,
+                    metrics=metrics,
+                    primary_intent=primary_intent,
+                    query_info=query_info,
+                )
+                if return_meta:
+                    return answer, route_sources, token_count, meta
+                return answer, route_sources, token_count
     if has_strong_source_location_evidence(raw_query, shown_sources, query_info):
         started = time.perf_counter()
         answer = build_source_location_answer(raw_query, shown_sources, query_info)
@@ -1517,6 +1710,7 @@ def _resolve_query_info(
     if topic_shift:
         return query_info
 
+    explicit_non_impl_request = query_explicitly_requests_non_implementation_artifacts(raw_query)
     if not _should_rewrite_follow_up(raw_query, query_info, memory):
         return query_info
 
@@ -1552,8 +1746,8 @@ def _resolve_query_info(
         if "intent" in combined_info:
             combined_info["intent"] = orig_intent
 
-    combined_info["is_followup"] = bool(is_followup_detected and not topic_shift)
-    if is_vague_follow_up_query(raw_query) and latest_entity_set:
+    combined_info["is_followup"] = bool(is_followup_detected and not topic_shift and not explicit_non_impl_request)
+    if is_vague_follow_up_query(raw_query) and latest_entity_set and not explicit_non_impl_request:
         combined_info["follow_up_anchor_paths"] = list(latest_entity_set.get("files", []) or [])
         combined_info["follow_up_anchor_symbols"] = list(latest_entity_set.get("symbols", []) or [])
     if is_low_context_detected and not is_explanation_query(raw_query):
@@ -1580,6 +1774,9 @@ def _should_rewrite_follow_up(
     raw_query: str, query_info: dict, memory: ConversationMemory
 ) -> bool:
     if not memory.turns:
+        return False
+
+    if query_explicitly_requests_non_implementation_artifacts(raw_query):
         return False
 
     entities = query_info.get("entities", {})

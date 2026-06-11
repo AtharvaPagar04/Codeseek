@@ -70,6 +70,22 @@ IMPORT_TRACE_DEPTH_LIMIT = 3
 
 _FLOW_TERMS = {
     "orchestration": {"query", "request", "api", "run_query", "provider", "thread", "source", "response"},
+    "retrieval_pipeline": {
+        "retrieval",
+        "pipeline",
+        "query",
+        "search",
+        "searcher",
+        "rerank",
+        "reranking",
+        "merge",
+        "assembly",
+        "context",
+        "answer",
+        "generation",
+        "llm",
+        "validate",
+    },
     "auth_session": {"auth", "authentication", "oauth", "github", "session", "cookie", "login", "logout", "credential"},
     "indexing_session": {"index", "indexing", "ingestion", "session", "repo", "clone", "collection", "qdrant"},
     "deployment_config": {
@@ -127,6 +143,62 @@ FLOW_EVIDENCE_MODEL = {
                 "name": "LLM fallback",
                 "symbols": {"generate_answer"},
                 "step": "If no deterministic response path applies, the assembled context is sent to the configured LLM provider.",
+                "required": False,
+            },
+        ],
+    },
+    "retrieval_pipeline": {
+        "title": "Retrieval Pipeline",
+        "roles": [
+            {
+                "name": "Pipeline documentation",
+                "paths": {
+                    "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+                    "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+                },
+                "step": "The retrieval pipeline documentation explains the end-to-end query flow, the retrieval stages, and how context and validation are layered on top of the indexed repository.",
+                "required": False,
+            },
+            {
+                "name": "Query processor",
+                "paths": {"backend/retrieval/query_processor.py"},
+                "symbols": {"process_query", "classify_query_intent"},
+                "step": "`process_query()` classifies the query, extracts symbols/files/entities, and prepares the intent signals used by the rest of the pipeline.",
+                "required": True,
+            },
+            {
+                "name": "Searcher",
+                "paths": {"backend/retrieval/searcher.py"},
+                "symbols": {"search"},
+                "step": "`search()` runs dense retrieval, lexical retrieval, metadata matching, entity matching, and dependency-aware candidate discovery.",
+                "required": True,
+            },
+            {
+                "name": "Merge and rerank",
+                "paths": {"backend/retrieval/searcher.py"},
+                "symbols": {"_merge_results", "_rerank_with_query_tokens"},
+                "step": "The searcher merges candidate pools and reranks them using query overlap, labels, and path/symbol boosts.",
+                "required": False,
+            },
+            {
+                "name": "Context assembly",
+                "paths": {"backend/retrieval/main.py"},
+                "symbols": {"_run_query_impl", "assemble", "assemble_for_reasoning", "select_sources_for_display"},
+                "step": "`_run_query_impl()` and the assembler shape the final context by selecting display sources, reasoning sources, and the assembled context blocks passed forward.",
+                "required": True,
+            },
+            {
+                "name": "Answer generation",
+                "paths": {"backend/retrieval/code_answers.py", "backend/retrieval/llm.py"},
+                "symbols": {"build_flow_answer", "generate_answer"},
+                "step": "Deterministic flow responses and the LLM fallback convert the assembled evidence into the final grounded answer.",
+                "required": False,
+            },
+            {
+                "name": "Validation and repair",
+                "paths": {"backend/retrieval/answer_validation.py"},
+                "symbols": {"validate_generated_answer"},
+                "step": "Answer validation repairs weakly sourced flow answers and removes unsupported references before the response is returned.",
                 "required": False,
             },
         ],
@@ -575,6 +647,28 @@ def is_flow_explanation_request(raw_query: str) -> bool:
     query = raw_query.strip().lower()
     if not query:
         return False
+    try:
+        from retrieval.searcher import query_explicitly_requests_searcher_internals
+
+        if query_explicitly_requests_searcher_internals(raw_query):
+            return False
+    except Exception:
+        pass
+    if any(
+        phrase in query
+        for phrase in (
+            "retrieval pipeline",
+            "query processor",
+            "context assembly",
+            "answer generation",
+            "merge results",
+            "reciprocal rank fusion",
+            "rerank",
+            "reranking",
+            "hybrid retrieval",
+        )
+    ):
+        return True
     tokens = _query_tokens(query)
     flow_markers = {
         "flow",
@@ -622,7 +716,10 @@ def build_flow_answer(
     model = FLOW_EVIDENCE_MODEL.get(flow_kind, FLOW_EVIDENCE_MODEL["orchestration"])
     role_matches = _flow_role_matches(flow_kind, selected_sources)
 
-    lines = ["The flow appears to be:", ""]
+    if flow_kind == "retrieval_pipeline":
+        lines = ["The retrieval pipeline appears to be:", ""]
+    else:
+        lines = ["The flow appears to be:", ""]
 
     index = 1
     for role in model["roles"]:
@@ -686,7 +783,8 @@ def build_flow_answer(
 
     answer = "\n".join(lines).strip()
     if return_sources:
-        return answer, selected_sources[:7]
+        limit = 10 if flow_kind == "retrieval_pipeline" else 7
+        return answer, selected_sources[:limit]
     return answer
 
 
@@ -1528,6 +1626,8 @@ def route_filesystem_sources_for_query(raw_query: str) -> list[dict]:
         return _qdrant_upsert_filesystem_sources(matched_code_topic_route)
     if route_id == "evaluation_report_api":
         return _evaluation_report_api_filesystem_sources(matched_code_topic_route)
+    if route_id == "retrieval_internals":
+        return _retrieval_internals_filesystem_sources(matched_code_topic_route)
     return []
 
 
@@ -1739,6 +1839,179 @@ def build_architecture_answer(
     if return_sources:
         return answer, selected_sources[:6]
     return answer
+
+
+def preferred_docs_summary_sources(sources: list[dict]) -> list[dict]:
+    """Return docs/report/markdown sources preferred for explicit docs questions."""
+    if not sources:
+        return []
+
+    def _is_docs_source(src: dict) -> bool:
+        if not isinstance(src, dict):
+            return False
+        path = str(src.get("relative_path", "")).lower()
+        return (
+            path.endswith(".md")
+            or "docs/" in path
+            or path.startswith("backend/docs/")
+            or path.startswith("reports/")
+            or "/reports/" in path
+            or path.endswith("readme")
+            or path.endswith("readme.md")
+        )
+
+    def _rank(src: dict) -> tuple[int, int, str]:
+        if not isinstance(src, dict):
+            return (999, 0, str(src).lower())
+        path = str(src.get("relative_path", "")).lower()
+        symbol = str(src.get("symbol_name", "")).lower()
+        score = 0
+        if "safe_eval_runner" in path:
+            score -= 40
+        if "evaluation_policy" in path:
+            score -= 30
+        if "ragas_validation_design" in path:
+            score -= 28
+        if "evaluation_report" in path:
+            score -= 24
+        if "readme" in path:
+            score -= 18
+        if "docs/" in path or path.endswith(".md"):
+            score -= 8
+        if symbol in {"", "<file>"}:
+            score += 1
+        return (score, int(src.get("start_line", 0) or 0), path)
+
+    docs_sources = [src for src in sources if _is_docs_source(src)]
+    if not docs_sources:
+        docs_sources = list(sources)
+    ranked = sorted(docs_sources, key=_rank)
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, int, int]] = set()
+    for src in ranked:
+        if not isinstance(src, dict):
+            continue
+        key = (
+            str(src.get("relative_path", "")).strip(),
+            str(src.get("symbol_name", "")).strip(),
+            int(src.get("start_line", 0) or 0),
+            int(src.get("end_line", 0) or 0),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(src)
+    return deduped
+
+
+def build_docs_summary_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
+    """Produce a docs/documentation-style summary for explicit docs requests."""
+    del chunks
+    selected_sources = preferred_docs_summary_sources(sources)
+    if not selected_sources:
+        return (
+            "I could not find strong evidence for that in the indexed repository context.\n\n"
+            "Try asking with:\n"
+            "* a file name\n"
+            "* a function name\n"
+            "* a feature name"
+        )
+
+    def _topic_from_query(query: str) -> str:
+        text = re.sub(r"[`\"']", "", (query or "").lower())
+        for token in (
+            "show",
+            "me",
+            "please",
+            "open",
+            "read",
+            "what",
+            "does",
+            "do",
+            "the",
+            "a",
+            "an",
+            "for",
+            "of",
+            "about",
+            "docs",
+            "documentation",
+            "markdown",
+            "report",
+            "policy",
+            "guide",
+            "runbook",
+            "file",
+            "md",
+            "summarize",
+            "summary",
+        ):
+            text = re.sub(rf"\b{re.escape(token)}\b", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text or "requested feature"
+
+    def _doc_title(path: str) -> str:
+        lower = path.lower()
+        if "safe_eval_runner" in lower:
+            return "Safe Evaluation Runner"
+        if "evaluation_policy" in lower:
+            return "Evaluation Policy"
+        if "ragas_validation_design" in lower:
+            return "RAGAS Validation Design"
+        if "evaluation_report" in lower:
+            return "Evaluation Report API"
+        if "repo_freshness" in lower:
+            return "Repo Freshness"
+        if lower.endswith("readme.md") or lower.endswith("readme"):
+            return "README"
+        stem = Path(path).stem.replace("_", " ").strip()
+        return stem.title() if stem else "Documentation"
+
+    def _doc_summary(src: dict) -> str:
+        path = str(src.get("relative_path", "")).lower()
+        summary = str(src.get("summary") or src.get("content_excerpt") or "").strip()
+        if "safe_eval_runner" in path:
+            return "It explains how the runner executes CodeSeek's evaluation pipeline, runs retrieval and conversation evals, applies policy gates, writes summary reports, and records diagnostics."
+        if "evaluation_policy" in path:
+            return "It documents the evaluation policy, the gates used to judge answers, and how failures or low-confidence results should be handled."
+        if "ragas_validation_design" in path:
+            return "It covers the RAGAS validation design, including metrics, validation flow, and how evaluation outputs are interpreted."
+        if "evaluation_report" in path:
+            return "It documents how the latest evaluation report is loaded, shaped, and returned by the API."
+        if "repo_freshness" in path:
+            return "It documents repository freshness checks, indexing status, and operational reporting."
+        if summary:
+            return summary.splitlines()[0].rstrip(".") + "."
+        return "It documents the requested feature and related behavior."
+
+    lines = []
+    topic = _topic_from_query(raw_query)
+    primary_title = _doc_title(str(selected_sources[0].get("relative_path", "")))
+    lines.append(f"The {topic} docs describe the {primary_title}.")
+    lines.append("")
+    lines.append("Key points from the docs:")
+    lines.append("")
+
+    seen_paths = set()
+    for src in selected_sources[:5]:
+        path = str(src.get("relative_path", "")).strip()
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        lines.append(f"* `{path}`: {_doc_summary(src)}")
+
+    related = []
+    for src in selected_sources[1:]:
+        path = str(src.get("relative_path", "")).strip()
+        if path and path not in related:
+            related.append(path)
+    if related:
+        lines.append("")
+        lines.append("Related docs:")
+        for path in related[:3]:
+            lines.append(f"* `{path}`")
+
+    return "\n".join(lines).strip()
 
 
 def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
@@ -2046,6 +2319,27 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
             )
         ):
             score += 12
+        if flow_kind == "retrieval_pipeline":
+            if path.endswith(("retrieval_pipeline_docs.md", "retrieval_pipeline_architecture.md")):
+                score += 20
+            if path.endswith("query_processor.py"):
+                score += 18
+            if path.endswith("searcher.py"):
+                score += 18
+            if path.endswith("main.py"):
+                score += 14
+            if path.endswith("code_answers.py"):
+                score += 12
+            if path.endswith("llm.py"):
+                score += 12
+            if path.endswith("answer_validation.py"):
+                score += 10
+            if path.endswith("source_filter.py"):
+                score += 10
+            if symbol in {"process_query", "search", "_merge_results", "_rerank_with_query_tokens", "assemble", "assemble_for_reasoning", "build_flow_answer", "generate_answer", "validate_generated_answer"}:
+                score += 20
+            if "/scripts/" in path or "benchmark" in path or "ragas" in path:
+                score -= 90
         if score > 0:
             scored.append((score, source))
 
@@ -2060,13 +2354,14 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
     selected = role_sources + supplemental
     deduped: list[dict] = []
     seen: set[tuple[str, str, int, int]] = set()
+    limit = 10 if flow_kind == "retrieval_pipeline" else 7
     for source in selected:
         key = _source_key(source)
         if key in seen:
             continue
         deduped.append(source)
         seen.add(key)
-        if len(deduped) >= 7:
+        if len(deduped) >= limit:
             break
     return deduped
 
@@ -2622,6 +2917,53 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
                     }
                 )
 
+    return results
+
+
+def _retrieval_internals_filesystem_sources(route: dict) -> list[dict]:
+    targets = [
+        ("backend/retrieval/searcher.py", "_rerank_with_query_tokens"),
+        ("backend/retrieval/searcher.py", "_merge_results"),
+        ("backend/retrieval/searcher.py", "feature_specific_routing_boost"),
+        ("backend/retrieval/searcher.py", "artifact_penalty_for_intent"),
+        ("backend/retrieval/searcher.py", "symbol_definition_boost"),
+        ("backend/retrieval/searcher.py", "content_exact_match_boost"),
+        ("backend/retrieval/searcher.py", "classify_source_role"),
+        ("backend/retrieval/source_filter.py", "apply_query_negative_filters"),
+    ]
+    results: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for relative_path, symbol in targets:
+        key = (relative_path, symbol)
+        if key in seen:
+            continue
+        seen.add(key)
+        path = _resolve_repo_file(relative_path)
+        if path is None:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        rng = _extract_symbol_range(lines, symbol, ".py")
+        if not rng:
+            rng = _extract_python_block_for_terms(lines, (symbol.replace("_", " "), symbol))
+        if not rng:
+            continue
+        start_line, end_line = rng
+        content = "\n".join(lines[start_line - 1 : end_line]).rstrip()
+        if not content:
+            continue
+        results.append(
+            {
+                "relative_path": relative_path,
+                "symbol_name": symbol,
+                "chunk_type": "function",
+                "start_line": start_line,
+                "end_line": end_line,
+                "content": content,
+            }
+        )
     return results
 
 
@@ -3534,6 +3876,21 @@ def _extract_tech_stack(sources: list[dict]) -> list[str]:
 
 def _flow_kind(raw_query: str) -> str:
     tokens = _query_tokens(raw_query)
+    if any(
+        term in raw_query.lower()
+        for term in (
+            "retrieval pipeline",
+            "query processor",
+            "context assembly",
+            "answer generation",
+            "merge results",
+            "reciprocal rank fusion",
+            "rerank",
+            "reranking",
+            "hybrid retrieval",
+        )
+    ) or ("retrieval" in raw_query.lower() and "pipeline" in raw_query.lower()):
+        return "retrieval_pipeline"
     scores = {
         kind: len(tokens & terms)
         for kind, terms in _FLOW_TERMS.items()
@@ -4163,6 +4520,77 @@ def build_source_location_answer(
         )
         return _format_source_location_target_shape(sources, explanation, is_weak)
 
+    if (
+        "reranking" in q
+        or "rerank" in q
+        or "final score" in q
+        or "final_score" in q
+        or "source boost" in q
+        or "source boosts" in q
+        or "source filter" in q
+        or "source_filter" in q
+        or "searcher.py" in q
+    ):
+        preferred_paths = (
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/source_filter.py",
+        )
+        preferred = []
+        seen = set()
+        for target_path in preferred_paths:
+            for src in sources:
+                rel = str(src.get("relative_path", "")).strip()
+                if not rel or rel in seen:
+                    continue
+                rel_lower = rel.lower()
+                target_lower = target_path.lower()
+                if rel_lower == target_lower or rel_lower.endswith("/" + target_lower) or target_lower.endswith("/" + rel_lower):
+                    preferred.append(src)
+                    seen.add(rel)
+                    break
+        if preferred:
+            explanation = (
+                "Reranking is mainly handled in backend/retrieval/searcher.py :: _rerank_with_query_tokens. "
+                "_merge_results merges dense, lexical, metadata, exact-entity, dependency, history, and injected candidates before final scoring. "
+                "feature_specific_routing_boost, artifact_penalty_for_intent, symbol_definition_boost, content_exact_match_boost, and classify_source_role influence the final score, "
+                "and backend/retrieval/source_filter.py :: apply_query_negative_filters removes unrelated candidates before the answer is selected."
+            )
+            ordered = preferred + [src for src in sources if str(src.get("relative_path", "")).strip() not in seen]
+            return _format_source_location_target_shape(ordered, explanation, is_weak, keep_primary_searcher=True)
+
+    if (
+        "evaluation report api" in q
+        or "evaluation report endpoint" in q
+        or "latest evaluation report" in q
+        or "evaluation diagnostics endpoint" in q
+        or "where is evaluation report" in q
+    ):
+        preferred_paths = (
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/eval_reports.py",
+        )
+        preferred = []
+        seen = set()
+        for target_path in preferred_paths:
+            for src in sources:
+                rel = str(src.get("relative_path", "")).strip()
+                if not rel or rel in seen:
+                    continue
+                rel_lower = rel.lower()
+                target_lower = target_path.lower()
+                if rel_lower == target_lower or rel_lower.endswith("/" + target_lower) or target_lower.endswith("/" + rel_lower):
+                    preferred.append(src)
+                    seen.add(rel)
+                    break
+        if preferred:
+            explanation = (
+                "The implementation is in backend/retrieval/api_service.py :: get_latest_evaluation_report_v1 "
+                "and backend/retrieval/eval_reports.py :: get_latest_evaluation_report. "
+                "The API wrapper authenticates and checks session visibility, then calls the report loader to return the latest evaluation report data."
+            )
+            ordered = preferred + [src for src in sources if str(src.get("relative_path", "")).strip() not in seen]
+            return _format_source_location_target_shape(ordered, explanation, is_weak)
+
     # 2. Generic generator for any other source-location queries
     return _format_source_location_target_shape(sources, None, is_weak)
 
@@ -4171,6 +4599,7 @@ def _format_source_location_target_shape(
     sources: list[dict],
     why_override: str | None = None,
     is_weak: bool = False,
+    keep_primary_searcher: bool = False,
 ) -> str:
     if not sources:
         return (
@@ -4201,7 +4630,7 @@ def _format_source_location_target_shape(
                     break
 
     # Do not display code_answers.py/searcher.py as the main implementation source if other files exist
-    if sources and sources[0].get("relative_path", "") in {"backend/retrieval/code_answers.py", "backend/retrieval/searcher.py"}:
+    if not keep_primary_searcher and sources and sources[0].get("relative_path", "") in {"backend/retrieval/code_answers.py", "backend/retrieval/searcher.py"}:
         for idx, src in enumerate(sources):
             s_path = src.get("relative_path", "")
             if s_path and s_path not in {"backend/retrieval/code_answers.py", "backend/retrieval/searcher.py"}:
