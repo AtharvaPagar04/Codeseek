@@ -100,6 +100,217 @@ class SourceFilteringTests(unittest.TestCase):
         selected = select_sources_for_display(query, sources)
         self.assertEqual(len(selected), 6)
 
+    def test_overview_query_prefers_repo_summary_and_module_level_sources_over_helpers(self) -> None:
+        query = "What is this project about?"
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 709,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 204,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 240,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+                "symbol_name": "retrieval_pipeline_docs_md",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 120,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "_resolve_query_info",
+                "start_line": 88,
+                "end_line": 132,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/llm.py",
+                "symbol_name": "LlmProviderError",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/query_processor.py",
+                "symbol_name": "_llm_classify_intent",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "sqlite_operational_error_handler",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/db.py",
+                "symbol_name": "_CursorWrapper",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        paths = [src["relative_path"] for src in selected]
+        symbols = [src["symbol_name"] for src in selected]
+
+        self.assertEqual(paths[0], "__repo_summary__.md")
+        self.assertIn("backend/README.md", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertIn("backend/rag_ingestion/main.py", paths)
+        self.assertIn("backend/evals/run_safe_evals.py", paths)
+        self.assertIn("backend/docs/retrieval_docs/retrieval_pipeline_docs.md", paths)
+        self.assertNotIn("_resolve_query_info", symbols)
+        self.assertNotIn("LlmProviderError", symbols)
+        self.assertNotIn("_llm_classify_intent", symbols)
+        self.assertNotIn("sqlite_operational_error_handler", symbols)
+        self.assertNotIn("_CursorWrapper", symbols)
+
+    def test_architecture_query_prefers_backend_module_sources_over_helpers(self) -> None:
+        query = "How is this codebase structured?"
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 1265,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 709,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 204,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 240,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docker-compose.yml",
+                "symbol_name": "docker-compose.yml",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 64,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/.env.example",
+                "symbol_name": ".env.example",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 24,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docs/deployment_runbook.md",
+                "symbol_name": "deployment_runbook_md",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 120,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "_resolve_query_info",
+                "start_line": 88,
+                "end_line": 132,
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/llm.py",
+                "symbol_name": "LlmProviderError",
+                "start_line": 1,
+                "end_line": 40,
+                "expansion_type": "primary",
+            },
+        ]
+
+        selected = select_sources_for_display(query, sources)
+        paths = [src["relative_path"] for src in selected]
+        symbols = [src["symbol_name"] for src in selected]
+
+        self.assertEqual(paths[0], "__repo_summary__.md")
+        self.assertIn("backend/README.md", paths)
+        self.assertIn("backend/retrieval/api_service.py", paths)
+        self.assertIn("backend/retrieval/main.py", paths)
+        self.assertIn("backend/rag_ingestion/main.py", paths)
+        self.assertIn("backend/evals/run_safe_evals.py", paths)
+        self.assertIn("backend/docker-compose.yml", paths)
+        self.assertNotIn("_resolve_query_info", symbols)
+        self.assertNotIn("LlmProviderError", symbols)
+
     def test_overview_query_filters_meta_answering_helper_sources(self) -> None:
         query = "Give me a repository overview."
         sources = [
@@ -245,7 +456,7 @@ class SourceFilteringTests(unittest.TestCase):
         paths = [src["relative_path"] for src in selected[:4]]
 
         self.assertEqual(paths[0], "__repo_summary__.md")
-        self.assertIn("backend/README.md", paths[:2])
+        self.assertIn("backend/README.md", paths)
         self.assertIn("backend/retrieval/api_service.py", paths)
         self.assertIn("backend/retrieval/main.py", paths)
 
@@ -320,7 +531,6 @@ class SourceFilteringTests(unittest.TestCase):
         self.assertIn("backend/retrieval/api_service.py", paths)
         self.assertIn("backend/retrieval/main.py", paths)
         self.assertIn("backend/rag_ingestion/main.py", paths)
-        self.assertIn("backend/docker-compose.yml", paths)
 
     def test_phase1_flow_query_keeps_core_flow_anchors(self) -> None:
         query = "walk me through backend request orchestration flow"

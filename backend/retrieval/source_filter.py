@@ -32,6 +32,17 @@ _OVERVIEW_NOISE_SYMBOLS = frozenset(
         "_inject_architecture_files",
         "_inject_overview_candidates",
         "_preferred_overview_sources",
+        "_resolve_query_info",
+        "_llm_classify_intent",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
     }
 )
 
@@ -134,6 +145,12 @@ def _query_is_general_project_query(raw_query: str) -> bool:
             "codebase structure",
             "what are the main modules",
             "what are the core modules",
+            "what are the main backend modules",
+            "what are the backend modules",
+            "list the backend modules",
+            "explain backend modules",
+            "backend architecture modules",
+            "main backend subsystems",
         )
     ):
         return True
@@ -438,6 +455,133 @@ def apply_query_negative_filters(
     return filtered
 
 
+def _find_better_source(path: str, pool: list[dict]) -> dict | None:
+    candidates = [src for src in pool if src.get("relative_path") == path]
+    if not candidates:
+        return None
+    
+    clean_candidates = []
+    for c in candidates:
+        sym = str(c.get("symbol_name", "")).strip()
+        sym_lower = sym.lower()
+        if sym_lower in {
+            "post_process_answer_and_sources",
+            "sqlite_operational_error_handler",
+            "_init_postgres",
+            "_postgres_schema_sql",
+            "__init__",
+            "llmprovidererror",
+            "_llm_classify_intent",
+            "_resolve_query_info",
+            "_cursorwrapper",
+            "_has_architecture_markers",
+            "main",
+        }:
+            continue
+        clean_candidates.append(c)
+        
+    if not clean_candidates:
+        for c in candidates:
+            if c.get("symbol_name") == "<file>" or c.get("chunk_type") == "file_summary":
+                return c
+        return None
+    
+    if path == "backend/rag_ingestion/main.py":
+        for c in clean_candidates:
+            if c.get("symbol_name") == "run_pipeline":
+                return c
+    elif path == "backend/retrieval/main.py":
+        for c in clean_candidates:
+            if c.get("symbol_name") == "run_query":
+                return c
+                
+    for c in clean_candidates:
+        if c.get("symbol_name") == "<file>" or c.get("chunk_type") == "file_summary":
+            return c
+            
+    return clean_candidates[0]
+
+
+def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: list[dict]) -> list[dict]:
+    q_lower = raw_query.lower()
+    db_specific = any(k in q_lower for k in ("db", "database", "postgres", "sql", "storage", "qdrant"))
+    
+    noisy_symbols = {
+        "post_process_answer_and_sources",
+        "sqlite_operational_error_handler",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_resolve_query_info",
+        "_cursorwrapper",
+        "_has_architecture_markers",
+    }
+    
+    new_selected = []
+    seen_paths = set()
+    
+    def add_to_selected(src: dict) -> bool:
+        path = src.get("relative_path", "")
+        if path not in seen_paths:
+            seen_paths.add(path)
+            new_selected.append(src)
+            return True
+        return False
+
+    for src in selected:
+        path = src.get("relative_path", "")
+        sym = str(src.get("symbol_name", "")).strip()
+        sym_lower = sym.lower()
+        
+        if path.endswith("db.py") and not db_specific:
+            continue
+            
+        is_noisy = (
+            sym_lower in noisy_symbols
+            or (path == "backend/rag_ingestion/main.py" and sym == "main")
+        )
+        
+        if is_noisy:
+            better = _find_better_source(path, pool)
+            if better:
+                add_to_selected(better)
+            else:
+                synthetic = {
+                    "relative_path": path,
+                    "symbol_name": "<file>",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 100,
+                    "summary": f"File source for {path}",
+                    "expansion_type": "primary",
+                }
+                add_to_selected(synthetic)
+        else:
+            add_to_selected(src)
+            
+    if len(new_selected) < 6:
+        for src in pool:
+            if len(new_selected) >= 6:
+                break
+            path = src.get("relative_path", "")
+            sym = str(src.get("symbol_name", "")).strip()
+            sym_lower = sym.lower()
+            
+            if path.endswith("db.py") and not db_specific:
+                continue
+                
+            is_noisy = (
+                sym_lower in noisy_symbols
+                or (path == "backend/rag_ingestion/main.py" and sym == "main")
+            )
+            if not is_noisy:
+                add_to_selected(src)
+                
+    return new_selected
+
+
 def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict]:
     """Prefer query-relevant primary citations and cap output noise."""
     from retrieval.searcher import (
@@ -525,9 +669,23 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         unique = _prepend_overview_anchors(raw_query, sources, unique)
     if wants_architecture:
         unique = _prepend_architecture_anchors(raw_query, sources, unique)
+    if wants_overview or wants_architecture:
+        unique = refine_overview_display_sources(raw_query, unique, sources)
     if suppress_overview_meta:
         filtered_unique = _filter_overview_noise(unique)
         unique = filtered_unique
+
+    if wants_overview or wants_architecture:
+        unique = sorted(
+            unique,
+            key=lambda src: (
+                -_overview_architecture_display_priority(src, wants_architecture=wants_architecture),
+                -source_relevance_score(src, query_tokens),
+                str(src.get("relative_path", "")),
+                int(src.get("start_line", 0)),
+                int(src.get("end_line", 0)),
+            ),
+        )
 
     if _query_prefers_implementation_sources(raw_query):
         unique = sorted(
@@ -688,6 +846,135 @@ def _source_key(src: dict) -> tuple:
         int(src.get("end_line", 0)),
         src.get("expansion_type", ""),
     )
+
+
+def _overview_architecture_display_priority(src: dict, *, wants_architecture: bool) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    chunk_type = str(src.get("chunk_type", "")).strip().lower()
+    file_type = str(src.get("file_type", "")).strip().lower()
+
+    score = 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        score += 10000
+    elif relative_path == "backend/readme.md":
+        score += 9800
+    elif relative_path == "readme.md" or relative_path.endswith("/readme.md"):
+        score += 9700
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/main.py",
+            "backend/rag_ingestion/main.py",
+            "backend/evals/run_safe_evals.py",
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/query_processor.py",
+            "backend/retrieval/assembler.py",
+            "backend/retrieval/code_answers.py",
+            "backend/retrieval/llm.py",
+            "backend/retrieval/source_filter.py",
+            "backend/retrieval/answer_validation.py",
+            "backend/retrieval/follow_up_memory.py",
+            "backend/retrieval/db.py",
+        )
+    ):
+        score += 9200
+    elif relative_path.startswith("backend/docs/"):
+        score += 8500
+    elif relative_path.startswith("backend/tests/"):
+        score += 8300
+    elif relative_path.startswith("frontend/"):
+        score += 8200
+    elif any(part in relative_path for part in ("config", ".env", "docker", "vite", "tailwind", "requirements.txt", "pyproject.toml", "package.json")):
+        score += 9000
+    elif chunk_type == "file_summary" or symbol_name in {"", "<file>", "readme", "repo_summary"}:
+        score += 8600
+
+    module_paths = (
+        "backend/retrieval/api_service.py",
+        "backend/retrieval/main.py",
+        "backend/rag_ingestion/main.py",
+        "backend/evals/run_safe_evals.py",
+        "backend/retrieval/searcher.py",
+        "backend/retrieval/query_processor.py",
+        "backend/retrieval/assembler.py",
+        "backend/retrieval/code_answers.py",
+        "backend/retrieval/llm.py",
+        "backend/retrieval/source_filter.py",
+        "backend/retrieval/answer_validation.py",
+        "backend/retrieval/follow_up_memory.py",
+        "backend/retrieval/db.py",
+        "backend/docs/retrieval_docs",
+    )
+    if any(part in relative_path for part in module_paths):
+        score += 80
+    if relative_path.startswith("backend/docs/"):
+        score += 60
+    if relative_path.startswith("backend/tests/"):
+        score += 50
+    if relative_path.startswith("frontend/"):
+        score += 55
+
+    major_symbols = {
+        "run_query",
+        "_run_query_impl",
+        "process_query",
+        "search",
+        "_merge_results",
+        "_rerank_with_query_tokens",
+        "assemble",
+        "assemble_for_reasoning",
+        "run_pipeline",
+        "main",
+        "app",
+        "_query_impl",
+        "run_safe_evals",
+        "get_latest_evaluation_report_v1",
+        "get_latest_evaluation_report",
+    }
+    helper_noise = {
+        "_resolve_query_info",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_is_overview_query",
+        "query_is_overview_summary",
+        "build_overview_answer",
+        "build_architecture_answer",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+    }
+    if symbol_name in major_symbols:
+        score += 600
+    elif symbol_name and not symbol_name.startswith("_"):
+        score += 50
+    elif symbol_name.startswith("_"):
+        score -= 200
+    if symbol_name in helper_noise:
+        score -= 1200
+
+    if chunk_type in {"function", "method", "class"}:
+        score -= 120
+    if chunk_type in {"file_summary", "repo_summary"}:
+        score += 100
+    if file_type == "repo_summary":
+        score += 40
+
+    if wants_architecture:
+        if relative_path.startswith("backend/"):
+            score += 20
+        if relative_path.startswith("backend/docs/"):
+            score += 20
+        if relative_path.startswith("frontend/"):
+            score -= 20
+
+    return score
 
 
 def _prepend_overview_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
@@ -1320,6 +1607,8 @@ def query_is_overview_summary(raw_query: str) -> bool:
         return True
     if ("module" in tokens or "modules" in tokens) and tokens & {"main", "core", "top", "level"}:
         return True
+    if "backend" in tokens and (("module" in tokens or "modules" in tokens) or ("subsystem" in tokens or "subsystems" in tokens)):
+        return True
     if ("subsystem" in tokens or "subsystems" in tokens) and tokens & {"top", "level"}:
         return True
     if tokens & {"architecture", "structure", "overview", "repository", "codebase", "project"}:
@@ -1371,6 +1660,8 @@ def should_suppress_overview_meta_sources(raw_query: str) -> bool:
         for phrase in (
             "main modules",
             "core modules",
+            "main backend modules",
+            "backend modules",
             "top-level subsystems",
             "top level subsystems",
             "repository overview",

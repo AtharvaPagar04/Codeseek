@@ -88,6 +88,43 @@ def validate_generated_answer(
         visible_paths=visible_paths,
     )
 
+    module_tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
+    wants_backend_modules = (
+        "backend" in module_tokens
+        and (
+            "module" in module_tokens
+            or "modules" in module_tokens
+            or "subsystem" in module_tokens
+            or "subsystems" in module_tokens
+        )
+    )
+    if wants_backend_modules:
+        bad_patterns = [
+            r"(?i)Function:\s*main",
+            r"(?i)Function:\s*run_query",
+            r"(?i)The implementation is in",
+            r"(?i)symbol/function",
+        ]
+        if any(re.search(pat, cleaned_answer) for pat in bad_patterns):
+            from retrieval.code_answers import DETERMINISTIC_BACKEND_MODULES_SUMMARY, _source_reference_lines
+            from retrieval.source_filter import _OVERVIEW_NOISE_SYMBOLS
+            lines = [DETERMINISTIC_BACKEND_MODULES_SUMMARY, ""]
+            lines.append("Sources:")
+            lines.extend(_source_reference_lines(final_sources[:5] or allowed_sources[:5]))
+            repaired_answer = "\n".join(lines).strip()
+            repaired_sources = _prune_sources_to_allowed(final_sources or allowed_sources, _source_paths(final_sources or allowed_sources))
+            bad_symbols = _OVERVIEW_NOISE_SYMBOLS | {"main", "run_query", "_query_impl"}
+            repaired_sources = [
+                src for src in repaired_sources
+                if str(src.get("symbol_name", "")).strip().lower() not in bad_symbols
+            ]
+            return {
+                "valid": False,
+                "repaired_answer": repaired_answer,
+                "repaired_sources": repaired_sources,
+                "reasons": cleaned_reasons + ["rebuilt_backend_modules"],
+            }
+
     if response_mode == "code_snippet":
         return _validate_code_snippet(
             cleaned_answer=cleaned_answer,

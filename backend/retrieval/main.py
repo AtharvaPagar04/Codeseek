@@ -377,6 +377,8 @@ def post_process_answer_and_sources(
         or "codebase" in q_lower
         or "about" in q_lower
         or "project" in q_lower
+        or "backend modules" in q_lower
+        or "backend subsystems" in q_lower
         or "what does" in q_lower
         or "repo do" in q_lower
         or "skills" in q_lower

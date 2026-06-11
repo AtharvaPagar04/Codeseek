@@ -613,6 +613,17 @@ def is_overview_request(raw_query: str) -> bool:
     tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", query))
     if {"tech", "stack"} <= tokens:
         return True
+    if (
+        "backend" in tokens
+        and ("module" in tokens or "modules" in tokens or "subsystem" in tokens or "subsystems" in tokens)
+    ):
+        return True
+    if (
+        ("main" in tokens or "core" in tokens or "top" in tokens)
+        and "backend" in tokens
+        and ("module" in tokens or "modules" in tokens or "subsystem" in tokens or "subsystems" in tokens)
+    ):
+        return True
     return bool(
         tokens & {"overview", "project", "architecture", "stack", "repository", "codebase", "repo"}
     ) and bool(tokens & {"about", "purpose", "summary", "explain", "describe", "what", "do"})
@@ -1690,8 +1701,43 @@ def filesystem_exact_symbol_sources_for_query(
     return results
 
 
+DETERMINISTIC_BACKEND_MODULES_SUMMARY = (
+    "The main backend modules are top-level backend subsystems, not individual functions/files:\n\n"
+    "* backend/retrieval\n"
+    "  * API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.\n"
+    "* backend/rag_ingestion\n"
+    "  * repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.\n"
+    "* backend/evals\n"
+    "  * safe eval runner, retrieval/conversation evals, evaluation reports.\n"
+    "* backend/tests\n"
+    "  * focused regression and behavior tests.\n"
+    "* backend/docs\n"
+    "  * retrieval docs, evaluation policy, pipeline docs, design/runbooks.\n"
+    "* backend/scripts\n"
+    "  * developer utilities/benchmarks, not core runtime."
+)
+
+
 def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
-    selected_sources = _preferred_overview_sources(sources)
+    selected_sources = _preferred_overview_sources(raw_query, sources)
+    module_tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
+    wants_backend_modules = (
+        "backend" in module_tokens
+        and (
+            "module" in module_tokens
+            or "modules" in module_tokens
+            or "subsystem" in module_tokens
+            or "subsystems" in module_tokens
+        )
+    )
+    if wants_backend_modules:
+        lines = [
+            DETERMINISTIC_BACKEND_MODULES_SUMMARY,
+            "",
+            "Sources:"
+        ]
+        lines.extend(_source_reference_lines(selected_sources[:5]))
+        return "\n".join(lines).strip()
     
     is_structured_test = False
     for item in list(sources) + list(chunks):
@@ -1720,16 +1766,22 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
                 break
 
     if has_codeseek:
-        lines = [
-            "CodeSeek is a repository-aware search and grounded answer generator.",
-            "",
-            "At a high level:",
-            "",
-            "1. Ingests source code repositories and indexes them into Qdrant vector database.",
-            "2. Performs hybrid dense-sparse semantic retrieval based on query intent analysis.",
-            "3. Generates structured, grounded, and context-bound answers for repository queries.",
-            ""
-        ]
+        if wants_backend_modules:
+            lines = [
+                "The main backend modules are:",
+                "",
+            ]
+        else:
+            lines = [
+                "CodeSeek is a repository-aware search and grounded answer generator.",
+                "",
+                "At a high level:",
+                "",
+                "1. Ingests source code repositories and indexes them into Qdrant vector database.",
+                "2. Performs hybrid dense-sparse semantic retrieval based on query intent analysis.",
+                "3. Generates structured, grounded, and context-bound answers for repository queries.",
+                ""
+            ]
         key_areas = []
         seen_paths = set()
         for src in selected_sources:
@@ -1741,12 +1793,33 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
                 role = role.split(".")[0].strip() + "."
                 key_areas.append(f"* `{path}`: {role}")
         if key_areas:
-            lines.append("Key areas from the retrieved sources:")
-            lines.append("")
-            lines.extend(key_areas[:4])
+            if wants_backend_modules:
+                lines.extend(key_areas[:5])
+            else:
+                lines.append("Key areas from the retrieved sources:")
+                lines.append("")
+                lines.extend(key_areas[:4])
         lines.append("")
         lines.append("Sources:")
-        lines.extend(_source_reference_lines(selected_sources[:5]))
+        if wants_backend_modules:
+            source_ref_sources: list[dict] = []
+            seen_paths: set[str] = set()
+            from retrieval.source_filter import refine_overview_display_sources
+            refined_sources = refine_overview_display_sources(raw_query, list(sources) + list(chunks), list(sources) + list(chunks))
+            for src in refined_sources:
+                path = str(src.get("relative_path", "")).strip()
+                if not path or path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                source_ref_sources.append(src)
+            for src in source_ref_sources[:5]:
+                path = str(src.get("relative_path", "")).strip()
+                symbol = str(src.get("symbol_name", "")).strip() or "<file>"
+                start_line = int(src.get("start_line", 0) or 0)
+                end_line = int(src.get("end_line", 0) or 0)
+                lines.append(f"- `{path}` :: {symbol} (lines {start_line}-{end_line})")
+        else:
+            lines.extend(_source_reference_lines(selected_sources[:5]))
         return "\n".join(lines).strip()
     
     # General repository overview summary
@@ -1761,9 +1834,55 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
     technologies = _extract_tech_stack(selected_sources)
     architecture = _overview_architecture_points(selected_sources)
     subsystem_points = _overview_subsystem_points(selected_sources)
+    if wants_backend_modules:
+        module_bullets: list[str] = []
+        evidence_sources = list(sources) + list(chunks)
+        has_retrieval = any(str(src.get("relative_path", "")).lower().startswith("backend/retrieval/") for src in evidence_sources)
+        has_ingestion = any(str(src.get("relative_path", "")).lower().startswith("backend/rag_ingestion/") for src in evidence_sources)
+        has_evals = any(str(src.get("relative_path", "")).lower().startswith("backend/evals/") for src in evidence_sources)
+        has_tests = any(str(src.get("relative_path", "")).lower().startswith("backend/tests/") for src in evidence_sources)
+        has_docs = any(str(src.get("relative_path", "")).lower().startswith("backend/docs/") for src in evidence_sources)
+        if has_retrieval:
+            module_bullets.append("backend/retrieval handles query processing, search, answer generation, sessions, and diagnostics.")
+        if has_ingestion:
+            module_bullets.append("backend/rag_ingestion handles repository parsing, chunking, embedding, and Qdrant storage.")
+        if has_evals:
+            module_bullets.append("backend/evals handles safe eval execution, retrieval/conversation evals, and report generation.")
+        if has_tests:
+            module_bullets.append("backend/tests contains regression and behavior tests.")
+        if has_docs:
+            module_bullets.append("backend/docs contains design docs and retrieval documentation.")
+        if not module_bullets:
+            module_bullets = subsystem_points[:5] or architecture[:4]
+        if not module_bullets:
+            module_bullets = ["Retrieved overview evidence describes the general repository files and structure."]
+        lines = ["The main backend modules are:", ""]
+        for idx, bullet in enumerate(module_bullets, 1):
+            lines.append(f"{idx}. {bullet}")
+        lines.append("")
+        key_areas = []
+        seen_paths = set()
+        for src in selected_sources:
+            path = src.get("relative_path", "")
+            if path and path not in seen_paths:
+                seen_paths.add(path)
+                if path.startswith("__"):
+                    continue
+                default_role = src.get("summary") or "Contains implementation details matching the query."
+                role = _get_user_facing_why(path, default_role)
+                role = role.split(".")[0].strip() + "."
+                key_areas.append(f"* `{path}`: {role}")
+        if key_areas:
+            lines.append("Key areas from the retrieved sources:")
+            lines.append("")
+            lines.extend(key_areas[:5])
+        lines.append("")
+        lines.append("Sources:")
+        lines.extend(_source_reference_lines(selected_sources[:5]))
+        return "\n".join(lines).strip()
     if technologies:
         bullets.append(f"Tech stack: {', '.join(technologies[:8])}.")
-    bullets.extend(subsystem_points[:3])
+    bullets.extend(subsystem_points[:9])
     bullets.extend(architecture[:4])
     if not bullets:
         bullets.append("Retrieved overview evidence describes the general repository files and structure.")
@@ -1804,7 +1923,7 @@ def build_architecture_answer(
     chunks: list[dict],
     return_sources: bool = False,
 ) -> str | tuple[str, list[dict]]:
-    selected_sources = _preferred_architecture_sources(sources, chunks)
+    selected_sources = _preferred_architecture_sources(raw_query, sources, chunks)
     if not selected_sources:
         answer = "Insufficient context in retrieved code to describe the architecture confidently."
         if return_sources:
@@ -2366,8 +2485,8 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
     return deduped
 
 
-def _preferred_overview_sources(sources: list[dict]) -> list[dict]:
-    return sorted(
+def _preferred_overview_sources(raw_query: str, sources: list[dict]) -> list[dict]:
+    selected = sorted(
         list(sources),
         key=lambda item: (
             -_overview_source_priority(item),
@@ -2375,9 +2494,11 @@ def _preferred_overview_sources(sources: list[dict]) -> list[dict]:
             int(item.get("start_line", 0)),
         ),
     )[:5]
+    from retrieval.source_filter import refine_overview_display_sources
+    return refine_overview_display_sources(raw_query, selected, sources)
 
 
-def _preferred_architecture_sources(sources: list[dict], chunks: list[dict]) -> list[dict]:
+def _preferred_architecture_sources(raw_query: str, sources: list[dict], chunks: list[dict]) -> list[dict]:
     candidates: list[dict] = []
     seen: set[tuple[str, str, int, int]] = set()
     for item in list(sources) + list(chunks):
@@ -2412,7 +2533,7 @@ def _preferred_architecture_sources(sources: list[dict], chunks: list[dict]) -> 
         ),
     )
     if not ranked:
-        return _preferred_overview_sources(sources)
+        return _preferred_overview_sources(raw_query, sources)
 
     selected: list[dict] = []
     selected_keys: set[tuple[str, str, int, int]] = set()
@@ -2452,7 +2573,8 @@ def _preferred_architecture_sources(sources: list[dict], chunks: list[dict]) -> 
         selected_keys.add(key)
         if relative_path:
             selected_paths.add(relative_path)
-    return selected[:6]
+    from retrieval.source_filter import refine_overview_display_sources
+    return refine_overview_display_sources(raw_query, selected, candidates)[:6]
 
 
 _architecture_qdrant_client: QdrantClient | None = None
@@ -3721,9 +3843,28 @@ def _overview_architecture_points(sources: list[dict]) -> list[str]:
 
 def _overview_subsystem_points(sources: list[dict]) -> list[str]:
     points: list[str] = []
+    seen_labels: set[str] = set()
     for source in sources:
         relative_path = str(source.get("relative_path", "")).strip()
         lower = relative_path.lower()
+        if lower.startswith("backend/retrieval/") and "retrieval" not in seen_labels:
+            points.append("backend/retrieval handles query processing, search, answer generation, sessions, and diagnostics.")
+            seen_labels.add("retrieval")
+        if lower.startswith("backend/rag_ingestion/") and "ingestion" not in seen_labels:
+            points.append("backend/rag_ingestion handles repository parsing, chunking, embedding, and Qdrant storage.")
+            seen_labels.add("ingestion")
+        if lower.startswith("backend/evals/") and "evals" not in seen_labels:
+            points.append("backend/evals handles safe eval execution, retrieval/conversation evals, and report generation.")
+            seen_labels.add("evals")
+        if lower.startswith("backend/tests/") and "tests" not in seen_labels:
+            points.append("backend/tests contains regression and behavior tests.")
+            seen_labels.add("tests")
+        if lower.startswith("backend/docs/") and "docs" not in seen_labels:
+            points.append("backend/docs contains design docs and retrieval documentation.")
+            seen_labels.add("docs")
+        if lower.startswith("frontend/") and "frontend" not in seen_labels:
+            points.append("frontend contains the UI and session views.")
+            seen_labels.add("frontend")
         if _is_repo_summary_source(source):
             entrypoints = [str(item).strip() for item in (source.get("entrypoints") or []) if str(item).strip()]
             if any("retrieval.api_service" in item or "uvicorn" in item for item in entrypoints):
@@ -3733,17 +3874,17 @@ def _overview_subsystem_points(sources: list[dict]) -> list[str]:
             services = [str(item).strip() for item in (source.get("services") or []) if str(item).strip()]
             if services:
                 points.append(f"Infrastructure/services layer is surfaced through: {', '.join(services[:6])}.")
-        elif "retrieval/api_service.py" in lower:
+        if "retrieval/api_service.py" in lower:
             points.append("Backend API layer is implemented in `retrieval/api_service.py`.")
-        elif "retrieval/main.py" in lower:
+        if "retrieval/main.py" in lower:
             points.append("Retrieval orchestration layer is implemented in `retrieval/main.py`.")
-        elif "rag_ingestion/main.py" in lower:
+        if "rag_ingestion/main.py" in lower:
             points.append("Ingestion/indexing layer is implemented in `rag_ingestion/main.py`.")
-        elif lower.endswith("docker-compose.yml") or lower.endswith("docker-compose.yaml"):
+        if lower.endswith("docker-compose.yml") or lower.endswith("docker-compose.yaml"):
             points.append("Container/infrastructure wiring is defined in `docker-compose.yml`.")
-        elif lower.endswith("package.json") and lower.startswith("frontend/"):
+        if lower.endswith("package.json") and lower.startswith("frontend/"):
             points.append("Frontend application metadata is defined in `frontend/package.json`.")
-        elif lower == "readme.md" or lower == "backend/readme.md":
+        if lower == "readme.md" or lower == "backend/readme.md":
             points.append(f"Repository documentation and developer entrypoint are described in `{relative_path}`.")
     return _dedupe(points)
 
@@ -3774,6 +3915,7 @@ def _architecture_runtime_points(sources: list[dict]) -> list[str]:
 
 def _architecture_module_points(sources: list[dict]) -> list[str]:
     points: list[str] = []
+    seen_labels: set[str] = set()
     for source in sources:
         relative_path = str(source.get("relative_path", "")).strip()
         lower = relative_path.lower()
@@ -3790,6 +3932,8 @@ def _architecture_module_points(sources: list[dict]) -> list[str]:
             points.append("`retrieval/main.py` orchestrates query processing, retrieval, expansion, assembly, and response mode selection.")
         elif "rag_ingestion/main.py" in lower:
             points.append("`rag_ingestion/main.py` runs the ingestion pipeline that parses files, generates chunks, embeds them, and stores them.")
+        elif "evals/run_safe_evals.py" in lower:
+            points.append("`evals/run_safe_evals.py` drives safe eval execution, cleanup, step orchestration, and report writing.")
         elif "retrieval/searcher.py" in lower:
             points.append("`retrieval/searcher.py` handles evidence retrieval, result fusion, and overview-candidate injection.")
         elif "retrieval/code_answers.py" in lower:
@@ -3798,6 +3942,15 @@ def _architecture_module_points(sources: list[dict]) -> list[str]:
             points.append(f"{relative_path} provides an application/API entrypoint through `{symbol}`.")
         elif "session_indexer.py" in lower:
             points.append(f"{relative_path} owns repository session creation and indexing orchestration.")
+        elif lower.startswith("backend/tests/") and "tests" not in seen_labels:
+            points.append("`backend/tests/` holds focused regression coverage for routing, retrieval, and validation.")
+            seen_labels.add("tests")
+        elif lower.startswith("backend/docs/") and "docs" not in seen_labels:
+            points.append("`backend/docs/` holds architecture notes, retrieval docs, and evaluation guidance.")
+            seen_labels.add("docs")
+        elif lower.startswith("frontend/") and "frontend" not in seen_labels:
+            points.append("`frontend/` provides the UI, diagnostics, and session views.")
+            seen_labels.add("frontend")
         elif "rag_ingestion" in lower:
             points.append(f"{relative_path} is part of the ingestion pipeline that parses, chunks, embeds, or stores repository evidence.")
         elif "retrieval/" in lower:
@@ -4233,33 +4386,90 @@ def _overview_source_priority(source: dict) -> int:
     relative_path = str(source.get("relative_path", "")).lower()
     chunk_type = str(source.get("chunk_type", "")).lower()
     file_type = str(source.get("file_type", "")).lower()
+    symbol_name = str(source.get("symbol_name", "")).lower()
     score = 0
     if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
-        score += 100
-    if relative_path == "backend/readme.md":
-        score += 58
-    if relative_path.endswith("retrieval/api_service.py"):
-        score += 46
-    if relative_path.endswith("retrieval/main.py"):
-        score += 44
-    if relative_path.endswith("rag_ingestion/main.py"):
-        score += 42
-    if relative_path.startswith("readme"):
-        score += 40
-    if relative_path.endswith("retrieval/searcher.py"):
-        score += 32
-    if relative_path.endswith("retrieval/code_answers.py"):
-        score += 26
-    if relative_path.endswith("package.json"):
-        score += 40
-    if relative_path.startswith("frontend/") and relative_path.endswith("package.json"):
-        score -= 8
-    if relative_path.endswith(("requirements.txt", "pyproject.toml")):
-        score += 36
-    if any(part in relative_path for part in ("config", ".env", "docker", "vite", "tailwind")):
-        score += 18
-    if "/src/" in relative_path or relative_path.startswith("src/"):
-        score += 12
+        score += 10000
+    elif relative_path == "backend/readme.md":
+        score += 9800
+    elif relative_path == "readme.md" or relative_path.endswith("/readme.md"):
+        score += 9700
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "retrieval/api_service.py",
+            "retrieval/main.py",
+            "rag_ingestion/main.py",
+            "evals/run_safe_evals.py",
+        )
+    ):
+        score += 9200
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "retrieval/searcher.py",
+            "retrieval/code_answers.py",
+            "retrieval/query_processor.py",
+            "retrieval/assembler.py",
+            "retrieval/llm.py",
+            "retrieval/source_filter.py",
+            "retrieval/answer_validation.py",
+            "retrieval/follow_up_memory.py",
+            "retrieval/db.py",
+        )
+    ):
+        score += 9100
+    elif relative_path.startswith("backend/docs/"):
+        score += 8500
+    elif relative_path.endswith("package.json"):
+        score += 8400
+    elif relative_path.startswith("frontend/") and relative_path.endswith("package.json"):
+        score += 8350
+    elif relative_path.endswith(("requirements.txt", "pyproject.toml")):
+        score += 8300
+    elif any(part in relative_path for part in ("config", ".env", "docker", "vite", "tailwind")):
+        score += 8250
+    elif "/src/" in relative_path or relative_path.startswith("src/"):
+        score += 8200
+    elif chunk_type == "file_summary" or symbol_name in {"", "<file>", "readme", "repo_summary"}:
+        score += 8000
+
+    major_symbols = {
+        "run_query",
+        "_run_query_impl",
+        "process_query",
+        "search",
+        "_merge_results",
+        "_rerank_with_query_tokens",
+        "assemble",
+        "assemble_for_reasoning",
+        "run_pipeline",
+        "main",
+        "app",
+        "_query_impl",
+        "run_safe_evals",
+    }
+    noisy_symbols = {
+        "_resolve_query_info",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+    }
+    if symbol_name in major_symbols:
+        score += 600
+    elif symbol_name and not symbol_name.startswith("_"):
+        score += 50
+    elif symbol_name.startswith("_"):
+        score -= 200
+    if symbol_name in noisy_symbols:
+        score -= 1200
     return score
 
 
@@ -4268,35 +4478,90 @@ def _architecture_source_priority(source: dict) -> int:
     chunk_type = str(source.get("chunk_type", "")).lower()
     file_type = str(source.get("file_type", "")).lower()
     expansion_type = str(source.get("expansion_type", "")).lower()
+    symbol_name = str(source.get("symbol_name", "")).lower()
     score = 0
     if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
-        score += 100
-    if relative_path.endswith("backend/retrieval/api_service.py"):
-        score += 98
-    if relative_path.endswith("backend/retrieval/main.py"):
-        score += 96
-    if relative_path.endswith("backend/rag_ingestion/main.py"):
-        score += 94
-    if relative_path.endswith("backend/docker-compose.yml"):
-        score += 92
-    if relative_path.endswith("backend/.env.example"):
-        score += 90
-    if relative_path.endswith("backend/docs/deployment_runbook.md"):
-        score += 88
-    if relative_path.endswith("backend/retrieval/db.py"):
-        score += 86
-    if relative_path == "backend/readme.md":
-        score += 84
-    if relative_path == "readme.md":
-        score += 40
-    if relative_path.endswith("docker-compose.yml"):
-        score += 38
-    if relative_path.endswith(".env.example"):
-        score += 36
-    if relative_path.endswith("docs/deployment_runbook.md"):
-        score += 34
+        score += 10000
+    elif relative_path == "backend/readme.md":
+        score += 9800
+    elif relative_path == "readme.md" or relative_path.endswith("/readme.md"):
+        score += 9700
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "retrieval/api_service.py",
+            "retrieval/main.py",
+            "rag_ingestion/main.py",
+            "evals/run_safe_evals.py",
+        )
+    ):
+        score += 9500
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "retrieval/searcher.py",
+            "retrieval/query_processor.py",
+            "retrieval/code_answers.py",
+            "retrieval/llm.py",
+            "retrieval/source_filter.py",
+            "retrieval/answer_validation.py",
+            "retrieval/follow_up_memory.py",
+            "retrieval/db.py",
+        )
+    ):
+        score += 9300
+    elif relative_path.endswith(("backend/docker-compose.yml", "backend/.env.example", "backend/docs/deployment_runbook.md")):
+        score += 9000
+    elif relative_path.startswith("backend/docs/"):
+        score += 8600
+    elif relative_path.startswith("backend/tests/"):
+        score += 8400
+    elif relative_path.startswith("frontend/"):
+        score += 8300
+    elif any(part in relative_path for part in ("docker-compose.yml", ".env.example", "docs/deployment_runbook.md")):
+        score += 8200
+    elif chunk_type == "file_summary" or symbol_name in {"", "<file>", "readme", "repo_summary"}:
+        score += 8100
     if expansion_type == "local_fallback":
         score -= 3
+    major_symbols = {
+        "run_query",
+        "_run_query_impl",
+        "process_query",
+        "search",
+        "_merge_results",
+        "_rerank_with_query_tokens",
+        "assemble",
+        "assemble_for_reasoning",
+        "run_pipeline",
+        "main",
+        "app",
+        "_query_impl",
+        "run_safe_evals",
+        "get_latest_evaluation_report_v1",
+        "get_latest_evaluation_report",
+    }
+    noisy_symbols = {
+        "_resolve_query_info",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+    }
+    if symbol_name in major_symbols:
+        score += 600
+    elif symbol_name and not symbol_name.startswith("_"):
+        score += 50
+    elif symbol_name.startswith("_"):
+        score -= 220
+    if symbol_name in noisy_symbols:
+        score -= 1200
     return score
 
 

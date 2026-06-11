@@ -354,6 +354,90 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertIn("backend/retrieval/api_service.py :: _query_impl", answer)
         self.assertIn("backend/retrieval/main.py :: run_query", answer)
 
+    def test_build_overview_answer_lists_main_backend_modules(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "entrypoints": ["retrieval.api_service:app", "rag_ingestion.main:run_pipeline"],
+                "services": ["api", "qdrant"],
+                "summary": "Purpose: CodeSeek indexes repositories and answers questions with cited evidence",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/README.md",
+                "symbol_name": "README",
+                "start_line": 1,
+                "end_line": 20,
+                "summary": "Backend readme",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 709,
+                "summary": "Retrieval orchestration and answer generation",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 204,
+                "summary": "Ingestion pipeline for repository chunks and embeddings",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 240,
+                "summary": "Safe eval runner, report generation, and diagnostics",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/tests/test_routing.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 80,
+                "summary": "Focused regression tests",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+                "symbol_name": "retrieval_pipeline_docs_md",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 120,
+                "summary": "Retrieval pipeline documentation",
+                "expansion_type": "primary",
+            },
+        ]
+
+        answer = build_overview_answer("What are the main backend modules?", sources, sources)
+
+        self.assertIn("The main backend modules are top-level backend subsystems, not individual functions/files:", answer)
+        self.assertIn("backend/retrieval", answer)
+        self.assertIn("API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.", answer)
+        self.assertIn("backend/rag_ingestion", answer)
+        self.assertIn("repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.", answer)
+        self.assertIn("backend/evals", answer)
+        self.assertIn("safe eval runner, retrieval/conversation evals, evaluation reports.", answer)
+        self.assertIn("backend/tests", answer)
+        self.assertIn("focused regression and behavior tests.", answer)
+        self.assertIn("backend/docs", answer)
+        self.assertIn("retrieval docs, evaluation policy, pipeline docs, design/runbooks.", answer)
+
     def test_build_architecture_answer_uses_structured_repo_evidence(self) -> None:
         sources = [
             {
@@ -1700,6 +1784,140 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(meta["response_mode"], "architecture_summary")
         generate_answer.assert_not_called()
 
+    def test_run_query_lists_main_backend_modules_as_overview_request(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "purpose": "CodeSeek indexes repositories and answers questions with cited evidence",
+                "services": ["api", "qdrant"],
+                "entrypoints": ["retrieval.api_service:app"],
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 553,
+                "summary": "Function: run_query",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "_query_impl",
+                "chunk_type": "function",
+                "start_line": 512,
+                "end_line": 678,
+                "summary": "Function: _query_impl",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 42,
+                "end_line": 108,
+                "summary": "Function: run_pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/evals/run_safe_evals.py",
+                "symbol_name": "main",
+                "chunk_type": "function",
+                "start_line": 101,
+                "end_line": 245,
+                "summary": "Function: main",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/tests/test_code_answers.py",
+                "symbol_name": "test_run_query_bypasses_llm_for_architecture_requests",
+                "chunk_type": "function",
+                "start_line": 1731,
+                "end_line": 1762,
+                "summary": "Function: test_run_query_bypasses_llm_for_architecture_requests",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+                "symbol_name": "retrieval_pipeline_docs",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 80,
+                "summary": "Retrieval pipeline docs",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/query_processor.py",
+                "symbol_name": "_has_architecture_markers",
+                "chunk_type": "function",
+                "start_line": 664,
+                "end_line": 690,
+                "summary": "Function: _has_architecture_markers",
+                "expansion_type": "primary",
+            },
+        ]
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={
+                    "raw_query": "What are the main backend modules?",
+                    "intent": "SEMANTIC",
+                    "primary_intent": "SEMANTIC",
+                    "entities": {},
+                },
+            ), patch(
+                "retrieval.main.search", return_value=sources
+            ), patch(
+                "retrieval.main.expand", return_value=sources
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", sources, 12)
+            ), patch(
+                "retrieval.main.generate_answer"
+            ) as generate_answer:
+                answer, final_sources, token_count, meta = run_query(
+                    "What are the main backend modules?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertEqual(meta["response_mode"], "overview_summary")
+        self.assertIn("The main backend modules are top-level backend subsystems, not individual functions/files:", answer)
+        self.assertIn("backend/retrieval", answer)
+        self.assertIn("API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.", answer)
+        self.assertIn("backend/rag_ingestion", answer)
+        self.assertIn("repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.", answer)
+        self.assertIn("backend/evals", answer)
+        self.assertIn("safe eval runner, retrieval/conversation evals, evaluation reports.", answer)
+        self.assertIn("backend/tests", answer)
+        self.assertIn("focused regression and behavior tests.", answer)
+        self.assertIn("backend/docs", answer)
+        self.assertIn("retrieval docs, evaluation policy, pipeline docs, design/runbooks.", answer)
+        self.assertNotIn("Function: main", answer)
+        self.assertNotIn("Function: run_query", answer)
+        self.assertNotIn("The implementation is in", answer)
+        self.assertNotIn("_has_architecture_markers", answer)
+        self.assertNotIn("symbol/function", answer)
+        self.assertTrue(any(src["relative_path"] == "__repo_summary__.md" for src in final_sources))
+        self.assertFalse(any(src.get("symbol_name") == "_has_architecture_markers" for src in final_sources))
+        self.assertEqual(token_count, 12)
+        generate_answer.assert_not_called()
+
     def test_run_query_returns_architecture_bucket_sources_not_only_display_input(self) -> None:
         shown_source = {
             "relative_path": "backend/README.md",
@@ -1898,6 +2116,369 @@ class CodeAnswerTests(unittest.TestCase):
             _, kwargs = generate_answer.call_args
             self.assertTrue(any(src["symbol_name"] == "skillCategories" for src in kwargs["allowed_sources"]))
             self.assertTrue(kwargs["extra_context_blocks"])
+
+    def test_live_behavior_what_are_the_main_backend_modules(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "summary": "CodeSeek indexes repositories",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "post_process_answer_and_sources",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 120,
+                "summary": "Helper to format and process answers",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 121,
+                "end_line": 200,
+                "summary": "Orchestrate query flow",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "main",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 40,
+                "summary": "CLI entry point",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 41,
+                "end_line": 100,
+                "summary": "Run whole ingestion pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "sqlite_operational_error_handler",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 30,
+                "summary": "Handle sqlite error",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 500,
+                "summary": "File summary",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/db.py",
+                "symbol_name": "_init_postgres",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 20,
+                "summary": "Database init helper",
+                "expansion_type": "primary",
+            },
+        ]
+        memory = ConversationMemory(max_turns=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={"raw_query": "What are the main backend modules?", "intent": "SEMANTIC", "entities": {}},
+            ), patch(
+                "retrieval.main.search", return_value=sources
+            ), patch(
+                "retrieval.main.expand", return_value=sources
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", sources, 12)
+            ), patch(
+                "retrieval.main.generate_answer", return_value="The implementation is in backend/retrieval/main.py under Function: run_query"
+            ) as generate_answer:
+                answer, final_sources, token_count, meta = run_query(
+                    "What are the main backend modules?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertEqual(meta["response_mode"], "overview_summary")
+        self.assertIn("backend/retrieval", answer)
+        self.assertIn("backend/rag_ingestion", answer)
+        self.assertIn("backend/evals", answer)
+        self.assertIn("backend/tests", answer)
+        self.assertIn("backend/docs", answer)
+        self.assertNotIn("Function: main", answer)
+        self.assertNotIn("Function: run_query", answer)
+        self.assertNotIn("The implementation is in", answer)
+        self.assertNotIn("symbol/function", answer)
+        self.assertNotIn("_has_architecture_markers", answer)
+
+        # Check source card filtering & replacements
+        returned_symbols = {src.get("symbol_name") for src in final_sources}
+        self.assertNotIn("post_process_answer_and_sources", returned_symbols)
+        self.assertNotIn("_init_postgres", returned_symbols)
+        self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
+        
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
+        self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))
+
+    def test_live_behavior_what_is_this_project_about(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "summary": "CodeSeek indexes repositories",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "post_process_answer_and_sources",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 120,
+                "summary": "Helper to format and process answers",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 121,
+                "end_line": 200,
+                "summary": "Orchestrate query flow",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "main",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 40,
+                "summary": "CLI entry point",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 41,
+                "end_line": 100,
+                "summary": "Run whole ingestion pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "sqlite_operational_error_handler",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 30,
+                "summary": "Handle sqlite error",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 500,
+                "summary": "File summary",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/db.py",
+                "symbol_name": "_init_postgres",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 20,
+                "summary": "Database init helper",
+                "expansion_type": "primary",
+            },
+        ]
+        memory = ConversationMemory(max_turns=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={"raw_query": "What is this project about?", "intent": "SEMANTIC", "entities": {}},
+            ), patch(
+                "retrieval.main.search", return_value=sources
+            ), patch(
+                "retrieval.main.expand", return_value=sources
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", sources, 12)
+            ), patch(
+                "retrieval.main.generate_answer", return_value="CodeSeek indexes repositories and answers questions with cited evidence"
+            ) as generate_answer:
+                answer, final_sources, token_count, meta = run_query(
+                    "What is this project about?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertEqual(meta["response_mode"], "overview_summary")
+        self.assertNotIn("backend/retrieval\n  * API surface", answer)
+
+        # Check source card filtering & replacements
+        returned_symbols = {src.get("symbol_name") for src in final_sources}
+        self.assertNotIn("post_process_answer_and_sources", returned_symbols)
+        self.assertNotIn("_init_postgres", returned_symbols)
+        self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
+        
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
+        self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))
+
+    def test_live_behavior_how_is_this_codebase_structured(self) -> None:
+        sources = [
+            {
+                "relative_path": "__repo_summary__.md",
+                "symbol_name": "repo_summary",
+                "chunk_type": "repo_summary",
+                "file_type": "repo_summary",
+                "start_line": 1,
+                "end_line": 12,
+                "summary": "CodeSeek indexes repositories",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "post_process_answer_and_sources",
+                "chunk_type": "function",
+                "start_line": 88,
+                "end_line": 120,
+                "summary": "Helper to format and process answers",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/main.py",
+                "symbol_name": "run_query",
+                "chunk_type": "function",
+                "start_line": 121,
+                "end_line": 200,
+                "summary": "Orchestrate query flow",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "main",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 40,
+                "summary": "CLI entry point",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/rag_ingestion/main.py",
+                "symbol_name": "run_pipeline",
+                "chunk_type": "function",
+                "start_line": 41,
+                "end_line": 100,
+                "summary": "Run whole ingestion pipeline",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "sqlite_operational_error_handler",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 30,
+                "summary": "Handle sqlite error",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/api_service.py",
+                "symbol_name": "<file>",
+                "chunk_type": "file_summary",
+                "start_line": 1,
+                "end_line": 500,
+                "summary": "File summary",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "backend/retrieval/db.py",
+                "symbol_name": "_init_postgres",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 20,
+                "summary": "Database init helper",
+                "expansion_type": "primary",
+            },
+        ]
+        memory = ConversationMemory(max_turns=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={"raw_query": "How is this codebase structured?", "intent": "SEMANTIC", "entities": {}},
+            ), patch(
+                "retrieval.main.search", return_value=sources
+            ), patch(
+                "retrieval.main.expand", return_value=sources
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", sources, 12)
+            ), patch(
+                "retrieval.main.generate_answer", return_value="The codebase has a backend directory and a frontend directory"
+            ) as generate_answer:
+                answer, final_sources, token_count, meta = run_query(
+                    "How is this codebase structured?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertEqual(meta["response_mode"], "architecture_summary")
+        self.assertNotIn("backend/retrieval\n  * API surface", answer)
+
+        # Check source card filtering & replacements
+        returned_symbols = {src.get("symbol_name") for src in final_sources}
+        self.assertNotIn("post_process_answer_and_sources", returned_symbols)
+        self.assertNotIn("_init_postgres", returned_symbols)
+        self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
+        
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
+        self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))
 
 
 if __name__ == "__main__":
