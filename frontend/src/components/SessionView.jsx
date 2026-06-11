@@ -5,7 +5,7 @@ import ConfirmDialog from './ConfirmDialog';
 import IndexingLiveLog from './IndexingLiveLog';
 import EvaluationPanel from './EvaluationPanel';
 import { useChat } from '../hooks/useChat';
-import { listProviderCredentials, fetchSessionRepoStatus, indexLatestVersion, fetchLatestEvaluationReport } from '../utils/api';
+import { listProviderCredentials, fetchSessionRepoStatus, fetchSessionFreshness, indexLatestVersion, fetchLatestEvaluationReport } from '../utils/api';
 
 
 function getProviderFallbackModel(provider) {
@@ -41,6 +41,8 @@ export default function SessionView({
   const [evalReport, setEvalReport] = useState(null);
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalError, setEvalError] = useState(null);
+  const [isReindexing, setIsReindexing] = useState(false);
+  const [reindexingError, setReindexingError] = useState(null);
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
   const metadataRef = useRef(null);
@@ -58,12 +60,23 @@ export default function SessionView({
     }
   };
 
+  const fetchFreshness = async () => {
+    if (session.status === 'indexing') return;
+    try {
+      const data = await fetchSessionFreshness(session.id);
+      updateSession?.(session.id, { freshness: data });
+    } catch (err) {
+      console.warn('Failed to fetch freshness:', err);
+    }
+  };
+
   const fetchRepoStatus = async () => {
     if (session.status === 'indexing') return;
     setCheckingStatus(true);
     try {
       const data = await fetchSessionRepoStatus(session.id);
       updateSession?.(session.id, { repo_status: data.repo_status });
+      await fetchFreshness();
     } catch (err) {
       console.warn('Failed to fetch repo status:', err);
     } finally {
@@ -96,6 +109,21 @@ export default function SessionView({
   useEffect(() => {
     fetchRepoStatus();
   }, [session.id, session.status]);
+
+  useEffect(() => {
+    let intervalId = null;
+    const isCurrentlyIndexing = session.status === 'indexing' || freshnessStatus === 'indexing';
+    if (isCurrentlyIndexing) {
+      intervalId = setInterval(() => {
+        fetchRepoStatus();
+      }, 3000);
+    }
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [session.id, session.status, freshnessStatus]);
 
   useEffect(() => {
     fetchEvaluationReport();
@@ -220,16 +248,28 @@ export default function SessionView({
   };
 
   const handleIndexLatest = async (force = false) => {
-    if (!force && repoStatus?.status === 'up_to_date') {
-      setShowUpToDatePopup(true);
-      return;
-    }
+    if (isReindexing) return;
+    setIsReindexing(true);
+    setReindexingError(null);
     try {
       updateSession?.(session.id, { status: 'indexing' });
-      await indexLatestVersion(session.id);
+      const data = await indexLatestVersion(session.id);
+      updateSession?.(session.id, {
+        status: data.status || 'indexing',
+        freshness: {
+          ...session.freshness,
+          freshness_status: data.freshness_status || 'indexing',
+          can_index_latest: false
+        }
+      });
+      await fetchFreshness();
+      await fetchRepoStatus();
     } catch (err) {
       console.error('Failed to trigger index latest:', err);
+      setReindexingError(err.message || 'Failed to start indexing.');
       updateSession?.(session.id, { status: 'failed', error: err.message });
+    } finally {
+      setIsReindexing(false);
     }
   };
 
@@ -296,6 +336,8 @@ export default function SessionView({
 
   const hasMessages = (activeThread?.messages || []).length > 0;
   const repoStatus = session.repo_status;
+  const freshness = session.freshness;
+  const freshnessStatus = freshness?.freshness_status || (session.status === 'indexing' ? 'indexing' : (repoStatus?.status === 'up_to_date' ? 'latest' : (repoStatus?.status === 'out_of_date' ? 'stale_commit' : repoStatus?.status)));
 
   const repoNamePart = session.repo_full_name ? session.repo_full_name.split('/').pop() : '';
   const isSubdirectorySession = !!(session.repo_root && repoNamePart && !session.repo_root.endsWith(repoNamePart) && !session.repo_root.endsWith(repoNamePart + '/'));
@@ -308,23 +350,21 @@ export default function SessionView({
           <span className="font-mono text-sm font-semibold tracking-wide text-text-primary truncate">
             {session.repo_full_name}
           </span>
-          {session.status === 'indexing' ? (
-            <FreshnessBadge status="indexing" />
-          ) : repoStatus?.status ? (
-            <FreshnessBadge status={repoStatus.status} />
+          {freshnessStatus ? (
+            <FreshnessBadge status={freshnessStatus} />
           ) : (
             <FreshnessBadge status={null} />
           )}
         </div>
         
         <div className="flex items-center gap-2">
-          {repoStatus && repoStatus.status !== 'up_to_date' && (
+          {(freshness || repoStatus) && (freshnessStatus !== 'latest' && repoStatus?.status !== 'up_to_date') && (
             <div className="hidden md:flex items-center gap-4 text-text-muted text-[11px] font-mono mr-4 select-none">
-              <span>Indexed: <code className="text-text-secondary">{repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}</code></span>
-              {repoStatus.status === 'out_of_date' && (
-                <span>Latest: <code className="text-warning">{repoStatus.current_commit_sha?.slice(0, 7)}</code></span>
+              <span>Indexed: <code className="text-text-secondary">{(freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha)?.slice(0, 7) || 'N/A'}</code></span>
+              {(freshnessStatus === 'stale_commit' || repoStatus?.status === 'out_of_date') && (
+                <span>Latest: <code className="text-warning">{(freshness?.current_commit_sha || repoStatus?.current_commit_sha)?.slice(0, 7) || 'N/A'}</code></span>
               )}
-              {repoStatus.files_indexed > 0 && (
+              {repoStatus?.files_indexed > 0 && (
                 <span>Files: <code className="text-text-secondary">{repoStatus.files_indexed}</code></span>
               )}
             </div>
@@ -418,7 +458,7 @@ export default function SessionView({
               </div>
               <div className="flex flex-col">
                 <span className="text-[9px] text-text-muted">Branch</span>
-                <span className="text-text-primary font-semibold">{repoStatus?.current_branch || 'N/A'}</span>
+                <span className="text-text-primary font-semibold">{freshness?.current_branch || repoStatus?.current_branch || 'N/A'}</span>
               </div>
             </div>
             
@@ -426,20 +466,22 @@ export default function SessionView({
               <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Git Binding</h4>
               <div className="flex flex-col">
                 <span className="text-[9px] text-text-muted">Indexed Commit</span>
-                <span className="text-text-primary select-text font-semibold" title={repoStatus?.indexed_commit_sha || 'N/A'}>
-                  {repoStatus?.indexed_commit_sha ? repoStatus.indexed_commit_sha : 'N/A'}
+                <span className="text-text-primary select-text font-semibold" title={freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha || 'N/A'}>
+                  {freshness?.indexed_commit_sha ? freshness.indexed_commit_sha : (repoStatus?.indexed_commit_sha ? repoStatus.indexed_commit_sha : 'N/A')}
                 </span>
               </div>
               <div className="flex flex-col">
                 <span className="text-[9px] text-text-muted">Current Commit</span>
-                <span className={`select-text font-semibold ${repoStatus?.current_commit_sha !== repoStatus?.indexed_commit_sha ? 'text-warning' : 'text-text-primary'}`} title={repoStatus?.current_commit_sha || 'N/A'}>
-                  {repoStatus?.current_commit_sha ? repoStatus.current_commit_sha : 'N/A'}
+                <span className={`select-text font-semibold ${(freshness?.current_commit_sha || repoStatus?.current_commit_sha) !== (freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha) ? 'text-warning' : 'text-text-primary'}`} title={freshness?.current_commit_sha || repoStatus?.current_commit_sha || 'N/A'}>
+                  {freshness?.current_commit_sha ? freshness.current_commit_sha : (repoStatus?.current_commit_sha ? repoStatus.current_commit_sha : 'N/A')}
                 </span>
               </div>
               <div className="flex flex-col">
                 <span className="text-[9px] text-text-muted">Worktree Status</span>
-                <span className={repoStatus?.dirty_worktree ? 'text-offline font-bold' : 'text-online font-semibold'}>
-                  {repoStatus?.dirty_worktree ? 'Dirty (Uncommitted changes)' : 'Clean'}
+                <span className={(freshness?.worktree_dirty || repoStatus?.dirty_worktree) ? 'text-offline font-bold' : 'text-online font-semibold'}>
+                  {(freshness?.worktree_dirty || repoStatus?.dirty_worktree)
+                    ? `Dirty (${freshness?.modified_files_count ?? repoStatus?.modified_files_count ?? 0}m, ${freshness?.untracked_files_count ?? repoStatus?.untracked_files_count ?? 0}u, ${freshness?.deleted_files_count ?? repoStatus?.deleted_files_count ?? 0}d)`
+                    : 'Clean'}
                 </span>
               </div>
             </div>
@@ -516,25 +558,89 @@ export default function SessionView({
       )}
 
       {/* Safety Warnings & Notices */}
-      {(isSubdirectorySession || repoStatus?.dirty_worktree || repoStatus?.status === 'out_of_date') && (
-        <div className="shrink-0 px-6 pt-3 flex flex-col items-center">
+      {(isSubdirectorySession ||
+        freshnessStatus === 'dirty_worktree' ||
+        freshnessStatus === 'stale_commit' ||
+        freshnessStatus === 'stale_indexing' ||
+        freshnessStatus === 'indexing' ||
+        session.status === 'indexing' ||
+        reindexingError) && (
+        <div className="shrink-0 px-6 pt-3 flex flex-col items-center animate-fadeIn">
+          {reindexingError && (
+            <StatusNotice
+              tone="error"
+              message={`Reindexing Error: ${reindexingError}`}
+              actionLabel="Dismiss"
+              onAction={() => setReindexingError(null)}
+            />
+          )}
+          {(freshnessStatus === 'indexing' || session.status === 'indexing') && (
+            <div className="w-full max-w-xl mb-4 bg-online/5 border border-online/20 rounded-xl px-4 py-3 font-mono text-xs flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-online">
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
+                </svg>
+                <span className="font-semibold text-text-primary">Indexing latest repository state...</span>
+                {freshness?.current_stage && (
+                  <span className="text-text-muted">({freshness.current_stage})</span>
+                )}
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-4 text-text-secondary text-[11px]">
+                  <span>Files: <code className="text-text-primary font-bold">{freshness?.files_indexed ?? repoStatus?.files_indexed ?? 0}</code></span>
+                  <span>Chunks: <code className="text-text-primary font-bold">{freshness?.chunks_generated ?? repoStatus?.chunks_generated ?? 0}</code></span>
+                  <span>Embeddings: <code className="text-text-primary font-bold">{freshness?.embeddings_stored ?? repoStatus?.embeddings_stored ?? 0}</code></span>
+                  {freshness?.updated_at && (
+                    <span className="text-text-muted text-[10px]">
+                      Last Update: {new Date(freshness.updated_at).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={fetchRepoStatus}
+                  disabled={checkingStatus}
+                  className="py-1 px-2 bg-surface-3 hover:bg-surface-4 border border-border rounded text-[10px] text-text-primary transition-colors flex items-center gap-1 disabled:opacity-50"
+                  title="Manual Refresh"
+                >
+                  <svg className={`w-3 h-3 ${checkingStatus ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
+                  </svg>
+                  Refresh
+                </button>
+              </div>
+            </div>
+          )}
           {isSubdirectorySession && (
             <StatusNotice
               tone="warning"
               message={`Subdirectory Session: This session is bound to a subdirectory (${session.repo_root}). Git operations or freshness status checks outside this folder may not be indexed.`}
             />
           )}
-          {repoStatus?.dirty_worktree && (
+          {freshnessStatus === 'dirty_worktree' && (
             <StatusNotice
               tone="warning"
-              message="Uncommitted Changes: There are uncommitted changes in your repository. The indexed code segments may not match your active worktree."
+              message={`Uncommitted Changes: There are uncommitted changes in your repository (${freshness?.modified_files_count ?? repoStatus?.modified_files_count ?? 0} modified, ${freshness?.untracked_files_count ?? repoStatus?.untracked_files_count ?? 0} untracked, ${freshness?.deleted_files_count ?? repoStatus?.deleted_files_count ?? 0} deleted). The indexed code segments may not match your active worktree.`}
+              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
+              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
+              onAction={() => handleIndexLatest()}
             />
           )}
-          {repoStatus?.status === 'out_of_date' && (
+          {freshnessStatus === 'stale_commit' && (
             <StatusNotice
               tone="warning"
-              message={`Repository Stale: The indexed commit (${repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}) differs from the current commit (${repoStatus.current_commit_sha?.slice(0, 7) || 'N/A'}).`}
-              actionLabel="Index Latest"
+              message={`Repository Stale: The indexed commit (${(freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha)?.slice(0, 7) || 'N/A'}) differs from the current commit (${(freshness?.current_commit_sha || repoStatus?.current_commit_sha)?.slice(0, 7) || 'N/A'}).`}
+              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
+              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
+              onAction={() => handleIndexLatest()}
+            />
+          )}
+          {freshnessStatus === 'stale_indexing' && (
+            <StatusNotice
+              tone="warning"
+              message="Indexing Stale: Indexing appears stuck or stale. You can retry indexing."
+              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Retry Indexing')}
+              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
               onAction={() => handleIndexLatest()}
             />
           )}
@@ -636,7 +742,7 @@ export default function SessionView({
         />
       )}
 
-      {repoStatus?.status === 'out_of_date' && !dismissedFreshnessPrompt && (
+      {freshnessStatus === 'stale_commit' && !dismissedFreshnessPrompt && (
         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
           <div className="w-full max-w-sm bg-surface-2 border border-border rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-warning">
@@ -649,8 +755,8 @@ export default function SessionView({
               The indexed commits do not match the latest version available on the remote repository.
             </p>
             <div className="bg-surface-3 p-3 rounded-lg border border-border text-[11px] font-mono space-y-1 text-text-muted">
-              <div>Indexed SHA: <span className="text-text-primary">{repoStatus.indexed_commit_sha?.slice(0, 7) || 'N/A'}</span></div>
-              <div>Latest SHA: <span className="text-warning">{repoStatus.current_commit_sha?.slice(0, 7) || 'N/A'}</span></div>
+              <div>Indexed SHA: <span className="text-text-primary">{(freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha)?.slice(0, 7) || 'N/A'}</span></div>
+              <div>Latest SHA: <span className="text-warning">{(freshness?.current_commit_sha || repoStatus?.current_commit_sha)?.slice(0, 7) || 'N/A'}</span></div>
             </div>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
@@ -660,13 +766,14 @@ export default function SessionView({
                 Dismiss
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   setDismissedFreshnessPrompt(true);
-                  handleIndexLatest();
+                  await handleIndexLatest();
                 }}
-                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary transition-colors"
+                disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-text-primary text-[#0a0a0a] hover:bg-text-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                Index Latest Version
+                {isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
               </button>
             </div>
           </div>
@@ -766,7 +873,7 @@ function statusCopy(session) {
   return '';
 }
 
-function StatusNotice({ tone, message, actionLabel = '', onAction = null }) {
+function StatusNotice({ tone, message, actionLabel = '', onAction = null, disabled = false }) {
   const toneClass =
     tone === 'error'
       ? 'border-offline/40 bg-offline/10 text-offline'
@@ -778,7 +885,8 @@ function StatusNotice({ tone, message, actionLabel = '', onAction = null }) {
         {actionLabel && onAction && (
           <button
             onClick={onAction}
-            className="shrink-0 rounded-full border border-current/30 px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors hover:bg-black/10"
+            disabled={disabled}
+            className="shrink-0 rounded-full border border-current/30 px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors hover:bg-black/10 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {actionLabel}
           </button>
@@ -1056,20 +1164,20 @@ function FreshnessBadge({ status }) {
     );
   }
   
-  if (status === 'up_to_date') {
+  if (status === 'latest' || status === 'up_to_date') {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-online/30 bg-online/10 text-online select-none">
         <span className="w-1.5 h-1.5 rounded-full bg-online" />
-        Up to date
+        Indexed to latest
       </span>
     );
   }
   
-  if (status === 'out_of_date') {
+  if (status === 'stale_commit' || status === 'out_of_date') {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-warning/30 bg-warning/10 text-warning select-none">
         <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
-        Out of date
+        Repo has new commits
       </span>
     );
   }
@@ -1078,7 +1186,7 @@ function FreshnessBadge({ status }) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-offline/30 bg-offline/10 text-offline select-none" title="Uncommitted changes in local workspace">
         <span className="w-1.5 h-1.5 rounded-full bg-offline" />
-        Dirty worktree
+        Uncommitted changes
       </span>
     );
   }
@@ -1087,7 +1195,16 @@ function FreshnessBadge({ status }) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-online/30 bg-online/10 text-online select-none">
         <span className="w-1.5 h-1.5 rounded-full bg-online animate-pulse" />
-        Indexing...
+        Indexing
+      </span>
+    );
+  }
+
+  if (status === 'stale_indexing') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-warning/30 bg-warning/10 text-warning select-none">
+        <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+        Indexing appears stuck
       </span>
     );
   }
@@ -1096,7 +1213,7 @@ function FreshnessBadge({ status }) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-offline/30 bg-offline/10 text-offline select-none">
         <span className="w-1.5 h-1.5 rounded-full bg-offline" />
-        Failed
+        Indexing failed
       </span>
     );
   }
@@ -1104,7 +1221,7 @@ function FreshnessBadge({ status }) {
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium font-mono border border-border bg-surface-2 text-text-muted select-none">
       <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" />
-      Unknown
+      Freshness unknown
     </span>
   );
 }

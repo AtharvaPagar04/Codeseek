@@ -570,6 +570,19 @@ export const fetchSessionRepoStatus = async (sessionId) => {
   return res.json();
 };
 
+export const fetchSessionFreshness = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/freshness`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch session freshness status'
+  );
+  if (!res.ok) await throwApiError('Fetch session freshness status', res);
+  return res.json();
+};
+
 export const indexLatestVersion = async (sessionId) => {
   const res = await withNetworkError(
     () =>
@@ -583,6 +596,8 @@ export const indexLatestVersion = async (sessionId) => {
   if (!res.ok) await throwApiError('Index latest version', res);
   return res.json();
 };
+
+export const indexLatestSession = indexLatestVersion;
 
 export const fetchLatestEvaluationReport = async (sessionId) => {
   const res = await withNetworkError(

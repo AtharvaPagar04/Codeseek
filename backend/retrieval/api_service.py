@@ -1302,6 +1302,23 @@ def get_session_repo_status_v1(
         raise HTTPException(status_code=403, detail=str(exc))
 
 
+@v1.get("/sessions/{session_id}/freshness")
+def get_session_freshness_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_freshness
+        freshness_info = get_session_freshness(session_id, auth_user["id"])
+        return freshness_info
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+
 @v1.get("/sessions/{session_id}/evaluation/latest")
 def get_latest_evaluation_report_v1(
     session_id: str,
@@ -1327,8 +1344,14 @@ def index_latest_session_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.get("status") == "indexing":
-        raise HTTPException(status_code=409, detail="Session is already indexing")
+    from retrieval.session_indexer import is_stale_indexing_session
+    if session.get("status") == "indexing" and not is_stale_indexing_session(session):
+        return {
+            "session_id": session_id,
+            "status": "indexing",
+            "message": "Indexing is already in progress.",
+            "freshness_status": "indexing"
+        }
 
     if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
         try:

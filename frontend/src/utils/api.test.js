@@ -107,3 +107,42 @@ test('querySession invokes the correct endpoint and includes credentials/auth he
     delete globalThis.localStorage;
   }
 });
+
+test('indexLatestSession invokes the correct endpoint and includes headers', async () => {
+  const originalFetch = globalThis.fetch;
+  let calledUrl = null;
+  let calledOptions = null;
+
+  globalThis.localStorage = {
+    getItem: (key) => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  globalThis.fetch = async (url, options) => {
+    calledUrl = url;
+    calledOptions = options;
+    return {
+      ok: true,
+      json: async () => ({
+        session_id: 'session-123',
+        status: 'indexing',
+        message: 'Indexing latest repository state started.',
+        freshness_status: 'indexing',
+      })
+    };
+  };
+
+  try {
+    const { indexLatestSession } = await import('./api.js');
+    const result = await indexLatestSession('session-123');
+    assert.equal(result.status, 'indexing');
+    assert.equal(result.freshness_status, 'indexing');
+    assert.match(calledUrl, /\/api\/v1\/sessions\/session-123\/index-latest/);
+    assert.equal(calledOptions.method, 'POST');
+    assert.equal(calledOptions.credentials, 'include');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});

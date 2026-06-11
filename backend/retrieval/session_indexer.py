@@ -89,6 +89,9 @@ def _populate_repo_status(session: dict) -> dict:
         "current_commit_sha": session.get("current_commit_sha", ""),
         "current_branch": session.get("current_branch", ""),
         "dirty_worktree": bool(session.get("repo_dirty", False)),
+        "modified_files_count": int(session.get("modified_files_count", 0) or 0),
+        "untracked_files_count": int(session.get("untracked_files_count", 0) or 0),
+        "deleted_files_count": int(session.get("deleted_files_count", 0) or 0),
         "checked_at": session.get("repo_status_checked_at", ""),
         "indexed_at": session.get("job_finished_at", ""),
         "files_indexed": int(session.get("files_indexed", 0)),
@@ -793,10 +796,30 @@ def _get_local_git_status(repo_root: str, github_token: str = "") -> dict:
     current_branch = _run_git_command(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], github_token=github_token)
     status_porcelain = _run_git_command(repo_root, ["status", "--porcelain"], github_token=github_token)
     dirty_worktree = bool(status_porcelain.strip())
+    
+    modified = 0
+    untracked = 0
+    deleted = 0
+    
+    for line in status_porcelain.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        code = line[:2]
+        if "??" in code:
+            untracked += 1
+        elif "D" in code or "d" in code:
+            deleted += 1
+        else:
+            modified += 1
+            
     return {
         "current_commit_sha": current_commit_sha,
         "current_branch": current_branch,
         "dirty_worktree": dirty_worktree,
+        "modified_files_count": modified,
+        "untracked_files_count": untracked,
+        "deleted_files_count": deleted,
     }
 
 
@@ -857,6 +880,9 @@ def get_session_repo_status(session_id: str, user_id: str) -> dict:
                 "current_commit_sha": "",
                 "current_branch": "",
                 "dirty_worktree": False,
+                "modified_files_count": 0,
+                "untracked_files_count": 0,
+                "deleted_files_count": 0,
                 "checked_at": session["repo_status_checked_at"],
                 "indexed_at": session.get("job_finished_at", ""),
                 "files_indexed": int(session.get("files_indexed", 0)),
@@ -885,6 +911,9 @@ def get_session_repo_status(session_id: str, user_id: str) -> dict:
     session["current_branch"] = local_status["current_branch"]
     session["repo_dirty"] = local_status["dirty_worktree"]
     session["repo_status_checked_at"] = _now()
+    session["modified_files_count"] = local_status.get("modified_files_count", 0)
+    session["untracked_files_count"] = local_status.get("untracked_files_count", 0)
+    session["deleted_files_count"] = local_status.get("deleted_files_count", 0)
 
     _update_session(
         session_id,
@@ -895,9 +924,18 @@ def get_session_repo_status(session_id: str, user_id: str) -> dict:
     )
 
     updated_session = get_session(session_id)
+    if updated_session:
+        updated_session["modified_files_count"] = local_status.get("modified_files_count", 0)
+        updated_session["untracked_files_count"] = local_status.get("untracked_files_count", 0)
+        updated_session["deleted_files_count"] = local_status.get("deleted_files_count", 0)
+        _populate_repo_status(updated_session)
+        return {
+            "session_id": session_id,
+            "repo_status": updated_session["repo_status"]
+        }
     return {
         "session_id": session_id,
-        "repo_status": updated_session["repo_status"]
+        "repo_status": session["repo_status"]
     }
 
 
@@ -907,8 +945,14 @@ def index_latest_version(session_id: str, user_id: str) -> dict:
         raise ValueError("Session not found")
     if session.get("user_id", "") != user_id:
         raise PermissionError("Access denied")
+
     if session.get("status") == "indexing" and not is_stale_indexing_session(session):
-        raise ValueError("Session is already indexing")
+        return {
+            "session_id": session_id,
+            "status": "indexing",
+            "message": "Indexing is already in progress.",
+            "freshness_status": "indexing"
+        }
 
     with _lock:
         state = _load_state()
@@ -934,7 +978,8 @@ def index_latest_version(session_id: str, user_id: str) -> dict:
     return {
         "session_id": session_id,
         "status": "indexing",
-        "message": "Indexing latest repository version."
+        "message": "Indexing latest repository state started.",
+        "freshness_status": "indexing"
     }
 
 
@@ -1075,7 +1120,156 @@ def _index_latest_job(session_id: str, user_id: str) -> None:
         )
 
 
+def get_session_freshness(session_id: str, user_id: str) -> dict:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if session.get("user_id", "") != user_id:
+        raise PermissionError("Access denied")
+
+    repo_root = session.get("repo_root", "")
+    has_git = bool(repo_root and Path(repo_root).exists() and (Path(repo_root) / ".git").exists())
+
+    # Default/Unknown state values
+    current_commit_sha = ""
+    current_branch = ""
+    worktree_dirty = False
+    modified_files_count = 0
+    untracked_files_count = 0
+    deleted_files_count = 0
+    checked_at = session.get("repo_status_checked_at", "")
+
+    if has_git:
+        github_token = _session_tokens.get(session_id, "")
+        try:
+            _refresh_remote_state(repo_root, github_token=github_token)
+        except Exception as e:
+            print(f"Warning: git fetch failed during freshness check: {e}")
+
+        try:
+            local_status = _get_local_git_status(repo_root, github_token=github_token)
+            current_commit_sha = local_status["current_commit_sha"]
+            current_branch = local_status["current_branch"]
+            worktree_dirty = local_status["dirty_worktree"]
+            modified_files_count = local_status.get("modified_files_count", 0)
+            untracked_files_count = local_status.get("untracked_files_count", 0)
+            deleted_files_count = local_status.get("deleted_files_count", 0)
+
+            # Try upstream branch commit check
+            try:
+                upstream_branch = _run_git_command(
+                    repo_root,
+                    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                    github_token=github_token,
+                )
+                if upstream_branch:
+                    current_commit_sha = _run_git_command(
+                        repo_root,
+                        ["rev-parse", "@{u}"],
+                        github_token=github_token,
+                    )
+            except Exception:
+                pass
+
+            checked_at = _now()
+            session["current_commit_sha"] = current_commit_sha
+            session["current_branch"] = current_branch
+            session["repo_dirty"] = worktree_dirty
+            session["repo_status_checked_at"] = checked_at
+            session["modified_files_count"] = modified_files_count
+            session["untracked_files_count"] = untracked_files_count
+            session["deleted_files_count"] = deleted_files_count
+
+            _update_session(
+                session_id,
+                current_commit_sha=current_commit_sha,
+                current_branch=current_branch,
+                repo_dirty=worktree_dirty,
+                repo_status_checked_at=checked_at,
+            )
+        except Exception as e:
+            print(f"Warning: failed to get local git status: {e}")
+            has_git = False
+
+    # Determine freshness status
+    session_status = session.get("status", "unknown")
+    indexed_commit_sha = session.get("last_indexed_commit", "")
+
+    if session_status == "indexing":
+        if is_stale_indexing_session(session):
+            freshness_status = "stale_indexing"
+        else:
+            freshness_status = "indexing"
+    elif session_status == "failed":
+        freshness_status = "failed"
+    elif not has_git:
+        freshness_status = "unknown"
+    elif worktree_dirty or modified_files_count > 0 or untracked_files_count > 0 or deleted_files_count > 0:
+        freshness_status = "dirty_worktree"
+    elif not indexed_commit_sha or not current_commit_sha:
+        freshness_status = "unknown"
+    elif indexed_commit_sha != current_commit_sha:
+        freshness_status = "stale_commit"
+    else:
+        freshness_status = "latest"
+
+    # Human-readable message
+    messages = {
+        "latest": "This session is indexed to the latest commit.",
+        "dirty_worktree": "The repository has uncommitted changes.",
+        "stale_commit": "The repository has new commits since this session was indexed.",
+        "indexing": "Indexing is currently in progress.",
+        "failed": "Indexing failed. See error for details.",
+        "stale_indexing": "Indexing appears stuck or stale.",
+        "unknown": "Repository freshness could not be determined.",
+    }
+    message = messages.get(freshness_status, "Repository freshness could not be determined.")
+
+    # can_index_latest rule
+    if freshness_status == "indexing":
+        can_index_latest = False
+    elif freshness_status in ("stale_commit", "dirty_worktree", "failed", "stale_indexing"):
+        can_index_latest = True
+    elif freshness_status == "latest":
+        can_index_latest = False
+    else: # unknown
+        can_index_latest = has_git
+
+    from retrieval.indexing_events import get_indexing_events
+    events = get_indexing_events(session_id)
+    current_stage = ""
+    if events:
+        current_stage = events[-1].get("stage", "")
+
+    return {
+        "session_id": session_id,
+        "repo_full_name": session.get("repo_full_name", ""),
+        "repo_root": repo_root,
+        "status": session_status,
+        "freshness_status": freshness_status,
+        "indexed_commit_sha": indexed_commit_sha,
+        "current_commit_sha": current_commit_sha,
+        "indexed_branch": session.get("current_branch", "") or current_branch,
+        "current_branch": current_branch or session.get("current_branch", ""),
+        "worktree_dirty": worktree_dirty,
+        "modified_files_count": modified_files_count,
+        "untracked_files_count": untracked_files_count,
+        "deleted_files_count": deleted_files_count,
+        "last_freshness_check_at": checked_at,
+        "indexed_at": session.get("job_finished_at", ""),
+        "error": session.get("error") or None,
+        "message": message,
+        "can_index_latest": can_index_latest,
+        "files_indexed": session.get("files_indexed", 0),
+        "chunks_generated": session.get("chunks_generated", 0),
+        "embeddings_stored": session.get("embeddings_stored", 0),
+        "current_stage": current_stage,
+        "updated_at": session.get("updated_at", checked_at),
+    }
+
+
 # Cleanup any stale indexing sessions left in the DB from a previous run/server crash.
+
 try:
     init_db()
     with db_cursor() as (_conn, cursor):
