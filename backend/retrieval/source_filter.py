@@ -475,6 +475,10 @@ def _find_better_source(path: str, pool: list[dict]) -> dict | None:
             "_resolve_query_info",
             "_cursorwrapper",
             "_has_architecture_markers",
+            "_local_file_hint_priority",
+            "_cors_origin_regex",
+            "_check_and_clean_stale_indexing_sessions",
+            "is_index_health_query",
             "main",
         }:
             continue
@@ -517,6 +521,10 @@ def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: 
         "_resolve_query_info",
         "_cursorwrapper",
         "_has_architecture_markers",
+        "_local_file_hint_priority",
+        "_cors_origin_regex",
+        "_check_and_clean_stale_indexing_sessions",
+        "is_index_health_query",
     }
     
     new_selected = []
