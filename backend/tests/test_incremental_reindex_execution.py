@@ -218,3 +218,169 @@ def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
     sess_failed = get_session("session-a")
     assert sess_failed["status"] == "failed"
     assert "Qdrant write failed!" in sess_failed["error"]
+
+
+def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "test_codeseek_detailed.sqlite3"
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(db_path))
+    init_db(force=True)
+
+    repo_dir = tmp_path / "repo_detailed"
+    repo_dir.mkdir()
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
+
+    # 3 files
+    (repo_dir / "unchanged.py").write_text("print('unchanged')", encoding="utf-8")
+    (repo_dir / "modified.py").write_text("print('original modified')", encoding="utf-8")
+    (repo_dir / "deleted.py").write_text("print('deleted')", encoding="utf-8")
+
+    subprocess.run(["git", "add", "."], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(repo_dir), check=True)
+
+    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo_dir), text=True).strip()
+    active_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(repo_dir), text=True).strip()
+
+    # Insert indexing job and session
+    from retrieval.db import create_indexing_job
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO repo_sessions (
+                id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, created_at, updated_at, last_indexed_commit, current_branch, indexed_branch
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sess-detailed",
+                "tenant-1",
+                "user-123",
+                "owner/repo",
+                "https://github.com/owner/repo",
+                str(repo_dir),
+                "col-detailed",
+                "ready",
+                "2026-06-12T00:00:00Z",
+                "2026-06-12T00:00:00Z",
+                commit_sha,
+                active_branch,
+                active_branch,
+            ),
+        )
+
+    # Insert files into DB session_files
+    unchanged_rec = upsert_session_file(
+        session_id="sess-detailed",
+        repo_path="unchanged.py",
+        file_hash=hashlib.sha256(b"print('unchanged')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    from retrieval.db import replace_session_file_chunks
+    replace_session_file_chunks(unchanged_rec["id"], [
+        {"chunk_id": "chunk-unchanged", "vector_id": "vector-unchanged", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    modified_rec = upsert_session_file(
+        session_id="sess-detailed",
+        repo_path="modified.py",
+        file_hash=hashlib.sha256(b"print('original modified')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    replace_session_file_chunks(modified_rec["id"], [
+        {"chunk_id": "chunk-modified-old", "vector_id": "vector-modified-old", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    deleted_rec = upsert_session_file(
+        session_id="sess-detailed",
+        repo_path="deleted.py",
+        file_hash=hashlib.sha256(b"print('deleted')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    replace_session_file_chunks(deleted_rec["id"], [
+        {"chunk_id": "chunk-deleted", "vector_id": "vector-deleted", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    # Mock pipeline operations
+    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("retrieval.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
+
+    mock_store = MagicMock()
+    mock_delete = MagicMock()
+    monkeypatch.setattr(storage_stage, "store_chunks", mock_store)
+    monkeypatch.setattr(storage_stage, "delete_vectors_by_ids", mock_delete)
+
+    # Perform modifications
+    (repo_dir / "modified.py").write_text("print('new modified')", encoding="utf-8")
+    (repo_dir / "deleted.py").unlink()
+    (repo_dir / "added.py").write_text("print('added')", encoding="utf-8")
+
+    # Create background job to trace counters
+    job = create_indexing_job("sess-detailed", "incremental")
+    job_id = job["id"]
+
+    # Run execution
+    run_incremental_reindex("sess-detailed", job_id=job_id)
+
+    # Assertions
+    # 1. Added files create new metadata and vector mappings
+    files = list_session_files("sess-detailed", include_deleted=True)
+    files_by_path = {f["repo_path"]: f for f in files}
+    assert "added.py" in files_by_path
+    assert files_by_path["added.py"]["status"] == "indexed"
+    assert len(files_by_path["added.py"]["chunks"]) == 1
+
+    # 2. Modified files replace only their own mappings
+    assert "modified.py" in files_by_path
+    assert files_by_path["modified.py"]["status"] == "indexed"
+    assert files_by_path["modified.py"]["chunks"][0]["chunk_id"] != "chunk-modified-old"
+
+    # 3. Deleted files remove known vectors and mark file deleted
+    assert "deleted.py" in files_by_path
+    assert files_by_path["deleted.py"]["status"] == "deleted"
+    assert files_by_path["deleted.py"]["deleted_at"] is not None
+
+    # 4. Unchanged files are not parsed, chunked, embedded, deleted, or remapped
+    assert "unchanged.py" in files_by_path
+    assert files_by_path["unchanged.py"]["status"] == "indexed"
+    assert files_by_path["unchanged.py"]["chunks"][0]["chunk_id"] == "chunk-unchanged"
+    assert files_by_path["unchanged.py"]["chunks"][0]["vector_id"] == "vector-unchanged"
+
+    # 5. Incremental job counters reflect only changed work
+    with db_cursor() as (conn, cursor):
+        cursor.execute("SELECT status, files_indexed FROM indexing_jobs WHERE id = ?", (job_id,))
+        row = cursor.fetchone()
+    assert row is not None
+    job_status, job_files_indexed = row
+    assert job_status == "succeeded"
+    assert job_files_indexed == 2
+    deleted_vectors = []
+    for call in mock_delete.call_args_list:
+        deleted_vectors.extend(call[0][0])
+    assert "vector-modified-old" in deleted_vectors
+    assert "vector-deleted" in deleted_vectors
+    assert "vector-unchanged" not in deleted_vectors
+
+    # 6. Branch mismatch blocks incremental
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET indexed_branch = 'other-branch' WHERE id = 'sess-detailed'")
+    
+    plan_mismatch = session_indexer.build_incremental_reindex_plan("sess-detailed")
+    assert not plan_mismatch["can_incremental_reindex"]
+    assert "Branch mismatch" in plan_mismatch["reason"]
+
+    # 7. Full Index latest remains fallback
+    preview = session_indexer.get_session_index_preview("sess-detailed", "user-123")
+    assert preview["can_index_latest"] is True
+    assert preview["can_incremental_reindex"] is False
