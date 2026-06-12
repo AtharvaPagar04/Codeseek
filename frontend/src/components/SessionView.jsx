@@ -53,6 +53,10 @@ export default function SessionView({
   const [loadingJobHistory, setLoadingJobHistory] = useState(false);
   const bottomRef = useRef(null);
 
+  const repoStatus = session.repo_status;
+  const freshness = session.freshness;
+  const freshnessStatus = freshness?.freshness_status || (session.status === 'indexing' ? 'indexing' : (repoStatus?.status === 'up_to_date' ? 'latest' : (repoStatus?.status === 'out_of_date' ? 'stale_commit' : repoStatus?.status)));
+
   const fetchLatestJobData = async () => {
     try {
       const data = await fetchLatestIndexingJob(session.id);
@@ -404,9 +408,6 @@ export default function SessionView({
   }, [input]);
 
   const hasMessages = (activeThread?.messages || []).length > 0;
-  const repoStatus = session.repo_status;
-  const freshness = session.freshness;
-  const freshnessStatus = freshness?.freshness_status || (session.status === 'indexing' ? 'indexing' : (repoStatus?.status === 'up_to_date' ? 'latest' : (repoStatus?.status === 'out_of_date' ? 'stale_commit' : repoStatus?.status)));
 
   const repoNamePart = session.repo_full_name ? session.repo_full_name.split('/').pop() : '';
   const isSubdirectorySession = !!(session.repo_root && repoNamePart && !session.repo_root.endsWith(repoNamePart) && !session.repo_root.endsWith(repoNamePart + '/'));
