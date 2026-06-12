@@ -1409,7 +1409,7 @@ function IndexPreviewPanel({
                       <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
                         Modified Files ({preview.changed_files.length})
                       </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-2 rounded-lg border border-border p-2 space-y-1">
+                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
                         {preview.changed_files.map((file) => (
                           <div key={file} className="text-text-secondary select-text truncate" title={file}>
                             ~ {file}
@@ -1425,7 +1425,7 @@ function IndexPreviewPanel({
                       <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
                         Added / Untracked Files ({preview.added_files.length})
                       </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-2 rounded-lg border border-border p-2 space-y-1">
+                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
                         {preview.added_files.map((file) => (
                           <div key={file} className="text-text-secondary select-text truncate" title={file}>
                             + {file}
@@ -1441,7 +1441,7 @@ function IndexPreviewPanel({
                       <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
                         Deleted Files ({preview.deleted_files.length})
                       </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-2 rounded-lg border border-border p-2 space-y-1">
+                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
                         {preview.deleted_files.map((file) => (
                           <div key={file} className="text-text-secondary select-text truncate" title={file}>
                             - {file}
