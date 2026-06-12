@@ -1367,10 +1367,12 @@ def get_latest_indexing_job_v1(
     from retrieval.db import get_latest_indexing_job
     job = get_latest_indexing_job(session_id)
     if not job:
-        raise HTTPException(status_code=404, detail="No indexing job found for this session")
+        return {
+            "session_id": session_id,
+            "latest_job": None,
+        }
 
-    return {
-        "session_id": job["session_id"],
+    job_data = {
         "job_id": job["id"],
         "indexing_mode": job["indexing_mode"],
         "status": job["status"],
@@ -1382,6 +1384,11 @@ def get_latest_indexing_job_v1(
         "updated_at": job["updated_at"],
         "completed_at": job["completed_at"],
         "error": job["error"],
+    }
+    return {
+        "session_id": job["session_id"],
+        "latest_job": job_data,
+        **job_data
     }
 
 

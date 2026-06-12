@@ -686,10 +686,15 @@ def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> 
 
 def _index_job(session_id: str) -> None:
     from retrieval.indexing_events import emit_indexing_event
+    from retrieval.db import create_indexing_job, update_indexing_job, mark_indexing_job_cancelled
 
     session = get_session(session_id)
     if not session:
         return
+
+    job = create_indexing_job(session_id, "full", "indexing")
+    job_id = job["id"]
+
     _update_session(session_id, status="indexing", job_started_at=_now(), error="")
     emit_indexing_event(session_id, "queued", "Indexing job started.")
     counters = None
@@ -718,15 +723,43 @@ def _index_job(session_id: str) -> None:
                 embeddings_stored=0,
                 idempotent_reuse=True,
             )
+            from datetime import datetime, timezone
+            update_indexing_job(
+                job_id,
+                status="succeeded",
+                files_indexed=0,
+                chunks_generated=0,
+                embeddings_stored=0,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
             return
 
         emit_indexing_event(session_id, "loader", "Preparing repository for indexing.")
+
+        def _check_cancel():
+            from retrieval.db import is_indexing_job_cancel_requested
+            if is_indexing_job_cancel_requested(job_id):
+                raise CancellationError("Indexing cancelled by user request.")
+
+        _check_cancel()
 
         def _emit(stage, message, level="info", progress=None, total=None, metadata=None):
             emit_indexing_event(
                 session_id, stage, message,
                 level=level, progress=progress, total=total, metadata=metadata,
             )
+            from retrieval.db import update_indexing_job, is_indexing_job_cancel_requested
+            updates = {"current_stage": stage}
+            if stage in ("discovery", "parser") and progress is not None:
+                updates["files_indexed"] = progress
+            elif stage == "chunker" and progress is not None:
+                updates["chunks_generated"] = progress
+            elif stage in ("embedding", "storage") and progress is not None:
+                updates["embeddings_stored"] = progress
+            update_indexing_job(job_id, **updates)
+            # Cooperative cancel check in pipeline progress callbacks
+            if is_indexing_job_cancel_requested(job_id):
+                raise CancellationError("Indexing cancelled by user request.")
 
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
@@ -776,6 +809,30 @@ def _index_job(session_id: str) -> None:
             embeddings_stored=stored,
             idempotent_reuse=False,
         )
+        from datetime import datetime, timezone
+        update_indexing_job(
+            job_id,
+            status="succeeded",
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)),
+            embeddings_stored=stored,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except CancellationError as exc:
+        cancel_msg = str(exc)
+        try:
+            emit_indexing_event(session_id, "cancelled", cancel_msg, level="warning")
+        except Exception:
+            pass
+        _record_indexing_failure(
+            session_id,
+            exc,
+            job_finished_at=_now(),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else 0,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else 0,
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else 0,
+        )
+        mark_indexing_job_cancelled(job_id, cancel_msg)
     except Exception as exc:
         try:
             emit_indexing_event(
@@ -789,9 +846,16 @@ def _index_job(session_id: str) -> None:
             session_id,
             exc,
             job_finished_at=_now(),
-            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else None,
-            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else None,
-            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else None,
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else 0,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else 0,
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else 0,
+        )
+        from datetime import datetime, timezone
+        update_indexing_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
 

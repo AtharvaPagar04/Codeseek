@@ -344,6 +344,38 @@ test('fetchLatestIndexingJob invokes the correct endpoint and includes credentia
 });
 
 
+test('fetchLatestIndexingJob handles response with latest_job null', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = {
+    getItem: (key) => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  const mockResponse = {
+    session_id: 'session-abc',
+    latest_job: null,
+  };
+
+  globalThis.fetch = async (url, options) => {
+    return {
+      ok: true,
+      json: async () => mockResponse,
+    };
+  };
+
+  try {
+    const { fetchLatestIndexingJob } = await import('./api.js');
+    const result = await fetchLatestIndexingJob('session-abc');
+    assert.equal(result.session_id, 'session-abc');
+    assert.equal(result.latest_job, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});
+
+
 test('cancelLatestIndexingJob calls correct endpoint with POST and includes credentials', async () => {
   const originalFetch = globalThis.fetch;
   let calledUrl = null;

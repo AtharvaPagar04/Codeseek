@@ -60,7 +60,11 @@ export default function SessionView({
   const fetchLatestJobData = async () => {
     try {
       const data = await fetchLatestIndexingJob(session.id);
-      setLatestJob(data);
+      if (data && data.latest_job === null) {
+        setLatestJob(null);
+      } else {
+        setLatestJob(data);
+      }
     } catch (err) {
       console.warn('Failed to fetch latest indexing job:', err);
     }
