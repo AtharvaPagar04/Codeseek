@@ -20,6 +20,7 @@
 11. [Development Quick-Start](#11-development-quick-start)
 12. [Project Structure](#12-project-structure)
 13. [Further Reading](#13-further-reading)
+14. [Local Demo Guide & Core Product Flows](#14-local-demo-guide--core-product-flows)
 
 ---
 
@@ -570,3 +571,52 @@ CodeSeek/
 | Backend README (quick-start, API reference) | [`backend/README.md`](backend/README.md) |
 | Deployment checklist | [`DEPLOYMENT_TODO.md`](DEPLOYMENT_TODO.md) |
 | Known improvements (Gemini free-tier + RAG analysis) | [`Imporvement.md`](Imporvement.md) |
+| Performance baseline (metrics, benchmark runner, rules) | [`docs/product/performance_baseline.md`](docs/product/performance_baseline.md) |
+| Release readiness checklist (final validations, limitations) | [`docs/product/release_readiness_checklist.md`](docs/product/release_readiness_checklist.md) |
+| Final project handoff pack (summary, roadmap, feature flags) | [`docs/product/final_handoff.md`](docs/product/final_handoff.md) |
+
+---
+
+## 14. Local Demo Guide & Core Product Flows
+
+### 14.1 Quick Run Script
+For a rapid automated sanity check of dependencies and Qdrant before launching a demo:
+```bash
+./scripts/demo_local.sh
+```
+
+### 14.2 Performance Benchmarking Baseline
+For running lightweight performance baselines or active query/indexing latency checks:
+```bash
+./scripts/perf_baseline.sh [options]
+```
+For detailed metrics definition and recommended laptop-safe rules, see [`docs/product/performance_baseline.md`](docs/product/performance_baseline.md).
+
+### 14.3 Core User and Product Flows
+To demonstrate CodeSeek's full capabilities, walk through this sequence:
+1. **Create Repository Session:** Input a repository URL (e.g. `https://github.com/AtharvaPagar04/Codeseek`).
+2. **Track Background Indexing:** View the active progress counts and stage updates, and verify background job listing in "Recent indexing jobs".
+3. **Ask Repository Questions:** Ask natural language queries using the swappable model provider options (Groq, OpenAI, Gemini).
+4. **View Source Cards:** Inspect rich formatted source excerpts with correct syntax highlighting and line numbers.
+5. **Inspect Diagnostics:** Expand the diagnostics panel to see the sub-stage timings, intents, and token counts.
+6. **Check Freshness:** Introduce local files or switch git branches to trigger automatic status transitions (`dirty_worktree` or `Branch changed`).
+7. **Preview Changed Files:** Expand the preview panel to see exactly which files are added/modified/deleted.
+8. **Experimental Incremental Indexing:** Run a fast, partial index update via "Index changed files".
+9. **Cooperative Cancellation:** Request cancellation during long indexing operations and observe the job transition cleanly.
+10. **View Job History:** Inspect the list of recent indexing runs showing status, errors, and files indexed.
+11. **Delete Old Sessions:** Destroy old sessions to clean up SQLite/Postgres rows and drop Qdrant collections.
+
+### 14.4 Sample Demonstration Questions
+- **Overview:** *What is this project about?*
+- **Architecture:** *How is this codebase structured?*
+- **Symbol:** *show me _require_auth code*
+- **Trace:** *Where is reranking handled in the retrieval pipeline?*
+- **Pipeline:** *How does the retrieval pipeline work?*
+
+### 14.5 Environment Feature Flags
+- `CODESEEK_ENABLE_INCREMENTAL_REINDEX=true` - Enables experimental incremental file indexing controls.
+
+### 14.6 Development Validation Policy
+To keep CI and development loops fast:
+- **No full pytest by default:** Target specific files and modules.
+- **No safe eval by default:** Do not run full RAGAS judge calibration runs unless explicitly requested.
