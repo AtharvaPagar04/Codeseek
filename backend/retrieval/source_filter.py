@@ -32,12 +32,572 @@ _OVERVIEW_NOISE_SYMBOLS = frozenset(
         "_inject_architecture_files",
         "_inject_overview_candidates",
         "_preferred_overview_sources",
+        "_resolve_query_info",
+        "_llm_classify_intent",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
     }
 )
+
+_AUTH_TOPIC_TERMS = (
+    "auth",
+    "authentication",
+    "session validation",
+    "session validate",
+    "validate session",
+    "login",
+    "logout",
+    "token",
+    "cookie",
+    "credential",
+    "current user",
+    "auth user",
+)
+
+_SAFE_EVAL_TOPIC_TERMS = (
+    "safe eval",
+    "safe evaluation",
+    "safe eval runner",
+    "safe evaluation runner",
+    "run_safe_evals",
+    "run safe eval",
+    "eval runner",
+    "safe eval code",
+)
+
+_EVAL_REPORT_TOPIC_TERMS = (
+    "evaluation report endpoint",
+    "evaluation report api",
+    "latest evaluation report",
+    "evaluation diagnostics endpoint",
+    "evaluation latest endpoint",
+    "safe eval report endpoint",
+)
+
+_QDRANT_TOPIC_TERMS = (
+    "qdrant",
+    "upsert",
+    "vector store",
+    "embedding store",
+    "storage stage",
+    "store chunks",
+    "vector",
+    "embedding",
+    "embed",
+)
+
+_SEARCHER_INTERNALS_TERMS = (
+    "retrieval routing",
+    "reranking",
+    "reranker",
+    "rerank",
+    "final score",
+    "final_score",
+    "source boost",
+    "source boosts",
+    "candidate ranking",
+    "retrieval candidates",
+    "searcher internals",
+    "searcher.py",
+    "retrieval/searcher.py",
+    "source filtering",
+    "source filter",
+    "source_filter",
+    "query intent",
+    "code answer builder",
+    "routing internals",
+    "routing code",
+    "ranking",
+)
+
+_GENERAL_PROJECT_INTENTS = {"OVERVIEW", "ARCHITECTURE", "CONFIG", "DEPENDENCY"}
+
+
+def _normalized_query(raw_query: str) -> str:
+    q = (raw_query or "").lower().replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", q).strip()
+
+
+def _query_is_general_project_query(raw_query: str) -> bool:
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+    if query_is_overview_summary(raw_query) or query_is_architecture_summary(raw_query):
+        return True
+    if any(
+        phrase in q
+        for phrase in (
+            "what is this project",
+            "what is this repository",
+            "what is this codebase",
+            "how is this project structured",
+            "how is this repository structured",
+            "how is this codebase structured",
+            "project structure",
+            "repository structure",
+            "codebase structure",
+            "what are the main modules",
+            "what are the core modules",
+            "what are the main backend modules",
+            "what are the backend modules",
+            "list the backend modules",
+            "explain backend modules",
+            "backend architecture modules",
+            "main backend subsystems",
+        )
+    ):
+        return True
+    try:
+        from retrieval.query_intent import is_config_query
+
+        if is_config_query(raw_query):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _query_is_retrieval_pipeline_flow(raw_query: str) -> bool:
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+    return bool(
+        "retrieval pipeline" in q
+        or "query processor" in q
+        or "context assembly" in q
+        or "answer generation" in q
+        or "merge results" in q
+        or "reciprocal rank fusion" in q
+        or "rerank" in q
+        or "reranking" in q
+        or "hybrid retrieval" in q
+        or ("retrieval" in q and "pipeline" in q)
+    )
+
+
+def _query_matches_general_project_intent(intent: str | None, mode: str | None) -> bool:
+    intent_upper = str(intent or "").upper().strip()
+    mode_upper = str(mode or "").upper().strip()
+    return bool(
+        intent_upper in _GENERAL_PROJECT_INTENTS
+        or mode_upper in _GENERAL_PROJECT_INTENTS
+    )
+
+
+def _query_prefers_implementation_sources(raw_query: str) -> bool:
+    from retrieval.query_intent import is_source_location_query
+
+    if _query_is_general_project_query(raw_query):
+        return False
+    if _query_explicitly_allows_non_implementation_artifacts(raw_query):
+        return False
+    if not is_source_location_query(raw_query):
+        return False
+
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+
+    return any(
+        phrase in q
+        for phrase in (
+            "implementation of",
+            "where is",
+            "where are",
+            "where implemented",
+            "where located",
+            "where defined",
+            "implemented in",
+            "defined in",
+            "located in",
+            "implemented",
+            "defined",
+            "located",
+        )
+    )
+
+
+def _source_location_role_rank(src: dict) -> int:
+    from retrieval.searcher import classify_source_role
+
+    role = classify_source_role(str(src.get("relative_path", "")))
+    return {
+        "implementation": 0,
+        "unknown": 1,
+        "scratch/tooling": 2,
+        "test": 3,
+        "generated_eval": 4,
+        "docs": 5,
+        "answer_template": 6,
+    }.get(role, 4)
+
+
+def classify_negative_filter_topic(raw_query: str) -> str | None:
+    if _query_is_general_project_query(raw_query):
+        return None
+    q = _normalized_query(raw_query)
+    if not q:
+        return None
+    if any(term in q for term in _SEARCHER_INTERNALS_TERMS):
+        return "retrieval_internals"
+    if any(term in q for term in _SAFE_EVAL_TOPIC_TERMS):
+        return "safe_eval_runner"
+    if any(term in q for term in _EVAL_REPORT_TOPIC_TERMS):
+        return "evaluation_report_api"
+    if any(term in q for term in _QDRANT_TOPIC_TERMS):
+        return "qdrant_upsert"
+    if any(term in q for term in _AUTH_TOPIC_TERMS):
+        return "auth"
+    return None
+
+
+def _query_explicitly_allows_non_implementation_artifacts(raw_query: str) -> bool:
+    from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
+
+    return query_explicitly_requests_non_implementation_artifacts(raw_query)
+
+
+def _query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
+    from retrieval.searcher import query_explicitly_requests_searcher_internals
+
+    return query_explicitly_requests_searcher_internals(raw_query)
+
+
+def _route_positive_match(source: dict, route: dict | None) -> bool:
+    if not route:
+        return False
+    from retrieval.searcher import path_matches_topic_route, symbol_matches_topic_route
+
+    rel_path = source.get("relative_path", "")
+    symbol_name = source.get("symbol_name", "")
+    return (
+        path_matches_topic_route(rel_path, route)
+        or symbol_matches_topic_route(symbol_name, rel_path, route)
+    )
+
+
+def source_excluded_for_query(
+    source: dict,
+    raw_query: str,
+    *,
+    topic: str | None = None,
+    intent: str | None = None,
+    mode: str | None = None,
+    matched_route: dict | None = None,
+    allow_tests: bool = False,
+    allow_docs: bool = False,
+) -> bool:
+    relative_path = str(source.get("relative_path", "")).strip()
+    symbol_name = str(source.get("symbol_name", "")).strip()
+    if not relative_path:
+        return False
+
+    if _query_is_general_project_query(raw_query) or _query_matches_general_project_intent(intent, mode):
+        return False
+
+    if _route_positive_match(source, matched_route):
+        return False
+
+    q = _normalized_query(raw_query)
+    topic = topic or classify_negative_filter_topic(raw_query)
+    wants_searcher_internals = _query_explicitly_requests_searcher_internals(raw_query)
+    explicit_non_impl = _query_explicitly_allows_non_implementation_artifacts(raw_query)
+
+    path_lower = relative_path.lower()
+    is_tests = (
+        path_lower.startswith("backend/tests/")
+        or path_lower.startswith("tests/")
+        or "/tests/" in path_lower
+        or path_lower.endswith("_test.py")
+        or path_lower.endswith(".spec.js")
+        or path_lower.endswith(".spec.ts")
+        or path_lower.endswith(".spec.tsx")
+    )
+    is_docs = (
+        path_lower.startswith("backend/docs/")
+        or path_lower.startswith("docs/")
+        or "/docs/" in path_lower
+        or path_lower.endswith(".md")
+    )
+
+    if is_tests and not (allow_tests or explicit_non_impl):
+        return True
+    if is_docs and not (allow_docs or explicit_non_impl) and not _query_is_retrieval_pipeline_flow(raw_query):
+        return True
+
+    if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
+        "backend/retrieval/searcher.py",
+        "backend/retrieval/source_filter.py",
+        "backend/retrieval/query_intent.py",
+        "backend/retrieval/code_answers.py",
+    } and topic not in {"retrieval_internals", "safe_eval_runner", "evaluation_report_api"}:
+        return True
+
+    if topic == "auth":
+        if not any(term in q for term in ("qdrant", "upsert", "storage", "vector", "embedding", "embed")):
+            if path_lower in {
+                "backend/rag_ingestion/stages/storage.py",
+                "backend/rag_ingestion/stages/embedder.py",
+            }:
+                return True
+    elif topic == "safe_eval_runner":
+        if path_lower in {
+            "backend/retrieval/auth_store.py",
+            "backend/rag_ingestion/stages/storage.py",
+            "backend/retrieval/searcher.py",
+        }:
+            return True
+    elif topic == "evaluation_report_api":
+        if path_lower in {
+            "backend/retrieval/searcher.py",
+            "backend/rag_ingestion/stages/storage.py",
+        }:
+            return True
+        if symbol_name in {
+            "retry_session_v1",
+            "index_latest_session_v1",
+            "_inject_auth_routing_candidates",
+            "_rerank_with_query_tokens",
+        }:
+            return True
+    elif topic == "qdrant_upsert":
+        if path_lower in {
+            "backend/retrieval/auth_store.py",
+            "backend/evals/run_safe_evals.py",
+            "backend/retrieval/searcher.py",
+        }:
+            return True
+        if path_lower in {
+            "backend/retrieval/api_service.py",
+        } and symbol_name and not any(term in q for term in ("api", "endpoint", "handler")):
+            # Keep api_service out of qdrant-only queries unless the query itself is about api handlers.
+            return True
+
+    if query_is_phase1_flow(raw_query) and any(
+        term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "answer generation", "context assembly")
+    ):
+        if path_lower.startswith("backend/scripts/") and any(
+            term in path_lower for term in ("benchmark", "ragas", "eval")
+        ):
+            return True
+
+    if topic not in {"retrieval_internals"} and not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query):
+        if path_lower in {
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/source_filter.py",
+            "backend/retrieval/query_intent.py",
+            "backend/retrieval/code_answers.py",
+        }:
+            return True
+
+    return False
+
+
+def apply_query_negative_filters(
+    sources: list[dict],
+    raw_query: str,
+    *,
+    intent: str | None = None,
+    mode: str | None = None,
+    allow_tests: bool = False,
+    allow_docs: bool = False,
+    matched_route: dict | None = None,
+) -> list[dict]:
+    if _query_is_general_project_query(raw_query) or _query_matches_general_project_intent(intent, mode):
+        seen: set[tuple[str, str, int, int, str]] = set()
+        filtered: list[dict] = []
+        for source in sources:
+            key = (
+                source.get("relative_path", ""),
+                source.get("symbol_name", ""),
+                int(source.get("start_line", 0)),
+                int(source.get("end_line", 0)),
+                source.get("expansion_type", ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered.append(source)
+        return filtered
+    topic = classify_negative_filter_topic(raw_query)
+    filtered: list[dict] = []
+    seen: set[tuple[str, str, int, int, str]] = set()
+    for source in sources:
+        if source_excluded_for_query(
+            source,
+            raw_query,
+            topic=topic,
+            intent=intent,
+            mode=mode,
+            matched_route=matched_route,
+            allow_tests=allow_tests,
+            allow_docs=allow_docs,
+        ):
+            continue
+        key = (
+            source.get("relative_path", ""),
+            source.get("symbol_name", ""),
+            int(source.get("start_line", 0)),
+            int(source.get("end_line", 0)),
+            source.get("expansion_type", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append(source)
+    return filtered
+
+
+def _find_better_source(path: str, pool: list[dict]) -> dict | None:
+    candidates = [src for src in pool if src.get("relative_path") == path]
+    if not candidates:
+        return None
+    
+    clean_candidates = []
+    for c in candidates:
+        sym = str(c.get("symbol_name", "")).strip()
+        sym_lower = sym.lower()
+        if sym_lower in {
+            "post_process_answer_and_sources",
+            "sqlite_operational_error_handler",
+            "_init_postgres",
+            "_postgres_schema_sql",
+            "__init__",
+            "llmprovidererror",
+            "_llm_classify_intent",
+            "_resolve_query_info",
+            "_cursorwrapper",
+            "_has_architecture_markers",
+            "_local_file_hint_priority",
+            "_cors_origin_regex",
+            "_check_and_clean_stale_indexing_sessions",
+            "is_index_health_query",
+            "main",
+        }:
+            continue
+        clean_candidates.append(c)
+        
+    if not clean_candidates:
+        for c in candidates:
+            if c.get("symbol_name") == "<file>" or c.get("chunk_type") == "file_summary":
+                return c
+        return None
+    
+    if path == "backend/rag_ingestion/main.py":
+        for c in clean_candidates:
+            if c.get("symbol_name") == "run_pipeline":
+                return c
+    elif path == "backend/retrieval/main.py":
+        for c in clean_candidates:
+            if c.get("symbol_name") == "run_query":
+                return c
+                
+    for c in clean_candidates:
+        if c.get("symbol_name") == "<file>" or c.get("chunk_type") == "file_summary":
+            return c
+            
+    return clean_candidates[0]
+
+
+def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: list[dict]) -> list[dict]:
+    q_lower = raw_query.lower()
+    db_specific = any(k in q_lower for k in ("db", "database", "postgres", "sql", "storage", "qdrant"))
+    
+    noisy_symbols = {
+        "post_process_answer_and_sources",
+        "sqlite_operational_error_handler",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_resolve_query_info",
+        "_cursorwrapper",
+        "_has_architecture_markers",
+        "_local_file_hint_priority",
+        "_cors_origin_regex",
+        "_check_and_clean_stale_indexing_sessions",
+        "is_index_health_query",
+    }
+    
+    new_selected = []
+    seen_paths = set()
+    
+    def add_to_selected(src: dict) -> bool:
+        path = src.get("relative_path", "")
+        if path not in seen_paths:
+            seen_paths.add(path)
+            new_selected.append(src)
+            return True
+        return False
+
+    for src in selected:
+        path = src.get("relative_path", "")
+        sym = str(src.get("symbol_name", "")).strip()
+        sym_lower = sym.lower()
+        
+        if path.endswith("db.py") and not db_specific:
+            continue
+            
+        is_noisy = (
+            sym_lower in noisy_symbols
+            or (path == "backend/rag_ingestion/main.py" and sym == "main")
+        )
+        
+        if is_noisy:
+            better = _find_better_source(path, pool)
+            if better:
+                add_to_selected(better)
+            else:
+                synthetic = {
+                    "relative_path": path,
+                    "symbol_name": "<file>",
+                    "chunk_type": "file_summary",
+                    "start_line": 1,
+                    "end_line": 100,
+                    "summary": f"File source for {path}",
+                    "expansion_type": "primary",
+                }
+                add_to_selected(synthetic)
+        else:
+            add_to_selected(src)
+            
+    if len(new_selected) < 6:
+        for src in pool:
+            if len(new_selected) >= 6:
+                break
+            path = src.get("relative_path", "")
+            sym = str(src.get("symbol_name", "")).strip()
+            sym_lower = sym.lower()
+            
+            if path.endswith("db.py") and not db_specific:
+                continue
+                
+            is_noisy = (
+                sym_lower in noisy_symbols
+                or (path == "backend/rag_ingestion/main.py" and sym == "main")
+            )
+            if not is_noisy:
+                add_to_selected(src)
+                
+    return new_selected
 
 
 def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict]:
     """Prefer query-relevant primary citations and cap output noise."""
+    from retrieval.searcher import (
+        match_code_topic_route,
+        path_matches_topic_route,
+        query_explicitly_requests_non_implementation_artifacts,
+        symbol_matches_topic_route,
+    )
     query_tokens = query_tokens_from_text(raw_query)
     wants_tests = query_mentions_tests(raw_query)
     wants_compound = query_is_compound_trace(raw_query)
@@ -54,6 +614,15 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         expanded_filtered = _filter_overview_noise(expanded)
         primary = primary_filtered
         expanded = expanded_filtered
+    if _query_is_retrieval_pipeline_flow(raw_query):
+        primary = [
+            s for s in primary
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+        ] or primary
+        expanded = [
+            s for s in expanded
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+        ] or expanded
 
     def overlap(src: dict) -> int:
         return source_relevance_score(src, query_tokens)
@@ -76,14 +645,18 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
     primary_cap = _primary_source_cap(raw_query, wants_auth_trace, wants_phase1_flow, wants_compound, wants_overview)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
-    chosen_primary = (
-        strong_primary[:primary_cap]
-        if strong_primary
-        else (primary_relevant[:primary_cap] if primary_relevant else primary[:primary_cap])
-    )
+    if _query_prefers_implementation_sources(raw_query):
+        chosen_primary = primary[:primary_cap]
+        chosen_expanded = expanded[:expanded_cap]
+    else:
+        chosen_primary = (
+            strong_primary[:primary_cap]
+            if strong_primary
+            else (primary_relevant[:primary_cap] if primary_relevant else primary[:primary_cap])
+        )
+        chosen_expanded = expanded_relevant[:expanded_cap]
     chosen_primary = _inject_trace_anchors(raw_query, primary, chosen_primary, primary_cap)
     chosen_primary = _inject_phase1_flow_anchors(raw_query, primary, chosen_primary, primary_cap)
-    chosen_expanded = expanded_relevant[:expanded_cap]
     trimmed = chosen_primary + chosen_expanded
 
     seen = set()
@@ -104,9 +677,119 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         unique = _prepend_overview_anchors(raw_query, sources, unique)
     if wants_architecture:
         unique = _prepend_architecture_anchors(raw_query, sources, unique)
+    if wants_overview or wants_architecture:
+        unique = refine_overview_display_sources(raw_query, unique, sources)
     if suppress_overview_meta:
         filtered_unique = _filter_overview_noise(unique)
         unique = filtered_unique
+
+    if wants_overview or wants_architecture:
+        unique = sorted(
+            unique,
+            key=lambda src: (
+                -_overview_architecture_display_priority(src, wants_architecture=wants_architecture),
+                -source_relevance_score(src, query_tokens),
+                str(src.get("relative_path", "")),
+                int(src.get("start_line", 0)),
+                int(src.get("end_line", 0)),
+            ),
+        )
+
+    if _query_prefers_implementation_sources(raw_query):
+        unique = sorted(
+            unique,
+            key=lambda src: (
+                _source_location_role_rank(src),
+                -source_relevance_score(src, query_tokens),
+                str(src.get("relative_path", "")),
+                int(src.get("start_line", 0)),
+                int(src.get("end_line", 0)),
+            ),
+        )
+
+    matched_code_topic_route = match_code_topic_route(raw_query, "CODE_REQUEST")
+    unique = apply_query_negative_filters(
+        unique,
+        raw_query,
+        matched_route=matched_code_topic_route,
+    )
+    if matched_code_topic_route and not query_explicitly_requests_non_implementation_artifacts(raw_query):
+        routed = []
+        seen_routed = set()
+        preferred_display_count = int(matched_code_topic_route.get("preferred_display_count", 2))
+        for target_path in matched_code_topic_route.get("target_paths", []):
+            for src in sources:
+                rel_path = src.get("relative_path", "")
+                if not path_matches_topic_route(rel_path, {"target_paths": [target_path]}):
+                    continue
+                key = _source_key(src)
+                if key in seen_routed:
+                    continue
+                routed.append(src)
+                seen_routed.add(key)
+                break
+        if routed:
+            existing = {_source_key(src) for src in routed}
+            for src in unique:
+                if len(routed) >= preferred_display_count:
+                    break
+                key = _source_key(src)
+                if key in existing:
+                    continue
+                if path_matches_topic_route(src.get("relative_path", ""), matched_code_topic_route):
+                    routed.append(src)
+                    existing.add(key)
+            unique = routed + [src for src in unique if _source_key(src) not in existing]
+
+    # Apply freshness prioritization rules
+    q = raw_query.lower()
+    is_freshness_query = any(k in q for k in ["checked", "computed", "calculated", "dirty worktree", "stale", "freshness status"])
+    is_api_query = any(k in q for k in ["endpoint", "api", "route"])
+    if is_freshness_query:
+        target_file = "api_service.py" if is_api_query else "session_indexer.py"
+        related_file = "session_indexer.py" if is_api_query else "api_service.py"
+        
+        # 1. Find primary source
+        primary_src = None
+        for src in unique:
+            if target_file in src.get("relative_path", ""):
+                primary_src = src
+                break
+        if not primary_src:
+            for src in sources:
+                if target_file in src.get("relative_path", ""):
+                    primary_src = src
+                    break
+                    
+        # 2. Find related source
+        related_src = None
+        for src in unique:
+            if related_file in src.get("relative_path", ""):
+                related_src = src
+                break
+        if not related_src:
+            for src in sources:
+                if related_file in src.get("relative_path", ""):
+                    related_src = src
+                    break
+                    
+        # 3. Reconstruct unique list
+        new_unique = []
+        if primary_src:
+            new_unique.append(primary_src)
+        if related_src:
+            new_unique.append(related_src)
+            
+        # Add the remaining sources
+        seen_paths = {s.get("relative_path", "") for s in new_unique if s.get("relative_path", "")}
+        for src in unique:
+            path = src.get("relative_path", "")
+            if path not in seen_paths:
+                new_unique.append(src)
+                seen_paths.add(path)
+                
+        unique = new_unique
+
     return unique
 
 
@@ -131,6 +814,7 @@ def split_sources_two_layer(
     """
     wants_overview = query_is_overview_summary(raw_query)
     suppress_overview_meta = should_suppress_overview_meta_sources(raw_query)
+    assembled_sources = apply_query_negative_filters(assembled_sources, raw_query)
     display = select_sources_for_display(raw_query, assembled_sources)
     if suppress_overview_meta:
         filtered_display = _filter_overview_noise(display)
@@ -170,6 +854,135 @@ def _source_key(src: dict) -> tuple:
         int(src.get("end_line", 0)),
         src.get("expansion_type", ""),
     )
+
+
+def _overview_architecture_display_priority(src: dict, *, wants_architecture: bool) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    chunk_type = str(src.get("chunk_type", "")).strip().lower()
+    file_type = str(src.get("file_type", "")).strip().lower()
+
+    score = 0
+    if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
+        score += 10000
+    elif relative_path == "backend/readme.md":
+        score += 9800
+    elif relative_path == "readme.md" or relative_path.endswith("/readme.md"):
+        score += 9700
+    elif any(
+        relative_path.endswith(path)
+        for path in (
+            "backend/retrieval/api_service.py",
+            "backend/retrieval/main.py",
+            "backend/rag_ingestion/main.py",
+            "backend/evals/run_safe_evals.py",
+            "backend/retrieval/searcher.py",
+            "backend/retrieval/query_processor.py",
+            "backend/retrieval/assembler.py",
+            "backend/retrieval/code_answers.py",
+            "backend/retrieval/llm.py",
+            "backend/retrieval/source_filter.py",
+            "backend/retrieval/answer_validation.py",
+            "backend/retrieval/follow_up_memory.py",
+            "backend/retrieval/db.py",
+        )
+    ):
+        score += 9200
+    elif relative_path.startswith("backend/docs/"):
+        score += 8500
+    elif relative_path.startswith("backend/tests/"):
+        score += 8300
+    elif relative_path.startswith("frontend/"):
+        score += 8200
+    elif any(part in relative_path for part in ("config", ".env", "docker", "vite", "tailwind", "requirements.txt", "pyproject.toml", "package.json")):
+        score += 9000
+    elif chunk_type == "file_summary" or symbol_name in {"", "<file>", "readme", "repo_summary"}:
+        score += 8600
+
+    module_paths = (
+        "backend/retrieval/api_service.py",
+        "backend/retrieval/main.py",
+        "backend/rag_ingestion/main.py",
+        "backend/evals/run_safe_evals.py",
+        "backend/retrieval/searcher.py",
+        "backend/retrieval/query_processor.py",
+        "backend/retrieval/assembler.py",
+        "backend/retrieval/code_answers.py",
+        "backend/retrieval/llm.py",
+        "backend/retrieval/source_filter.py",
+        "backend/retrieval/answer_validation.py",
+        "backend/retrieval/follow_up_memory.py",
+        "backend/retrieval/db.py",
+        "backend/docs/retrieval_docs",
+    )
+    if any(part in relative_path for part in module_paths):
+        score += 80
+    if relative_path.startswith("backend/docs/"):
+        score += 60
+    if relative_path.startswith("backend/tests/"):
+        score += 50
+    if relative_path.startswith("frontend/"):
+        score += 55
+
+    major_symbols = {
+        "run_query",
+        "_run_query_impl",
+        "process_query",
+        "search",
+        "_merge_results",
+        "_rerank_with_query_tokens",
+        "assemble",
+        "assemble_for_reasoning",
+        "run_pipeline",
+        "main",
+        "app",
+        "_query_impl",
+        "run_safe_evals",
+        "get_latest_evaluation_report_v1",
+        "get_latest_evaluation_report",
+    }
+    helper_noise = {
+        "_resolve_query_info",
+        "sqlite_operational_error_handler",
+        "_cursorwrapper",
+        "llmprovidererror",
+        "_llm_classify_intent",
+        "_is_overview_query",
+        "query_is_overview_summary",
+        "build_overview_answer",
+        "build_architecture_answer",
+        "_has_architecture_markers",
+        "post_process_answer_and_sources",
+        "_cors_origin_regex",
+        "_init_postgres",
+        "_postgres_schema_sql",
+        "__init__",
+    }
+    if symbol_name in major_symbols:
+        score += 600
+    elif symbol_name and not symbol_name.startswith("_"):
+        score += 50
+    elif symbol_name.startswith("_"):
+        score -= 200
+    if symbol_name in helper_noise:
+        score -= 1200
+
+    if chunk_type in {"function", "method", "class"}:
+        score -= 120
+    if chunk_type in {"file_summary", "repo_summary"}:
+        score += 100
+    if file_type == "repo_summary":
+        score += 40
+
+    if wants_architecture:
+        if relative_path.startswith("backend/"):
+            score += 20
+        if relative_path.startswith("backend/docs/"):
+            score += 20
+        if relative_path.startswith("frontend/"):
+            score -= 20
+
+    return score
 
 
 def _prepend_overview_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
@@ -492,6 +1305,12 @@ def _primary_source_cap(
     wants_overview: bool,
 ) -> int:
     q = raw_query.lower()
+    auth_words = {"auth", "authentication", "session", "cookie", "token"}
+    from retrieval.query_intent import is_code_request_query
+    if is_code_request_query(raw_query) and any(w in q for w in auth_words):
+        return 8
+    if wants_phase1_flow and any(term in q for term in ("retrieval", "pipeline", "search", "rerank", "answer", "context")):
+        return 10
     if wants_phase1_flow and any(term in q for term in ("provider", "credential", "credentials", "api key", "llm", "model")):
         return 9
     if wants_auth_trace or wants_phase1_flow:
@@ -574,6 +1393,21 @@ def _phase1_flow_anchors(raw_query: str) -> list[str]:
     q = raw_query.lower()
     if not query_is_phase1_flow(raw_query):
         return []
+    if any(term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "reranking", "context assembly", "answer generation")):
+        return [
+            "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+            "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+            "process_query",
+            "search",
+            "_merge_results",
+            "_rerank_with_query_tokens",
+            "_run_query_impl",
+            "assemble",
+            "assemble_for_reasoning",
+            "build_flow_answer",
+            "generate_answer",
+            "validate_generated_answer",
+        ]
     if any(term in q for term in ("auth", "oauth", "login", "cookie", "credential")):
         return [
             "auth_github",
@@ -673,6 +1507,16 @@ def query_is_phase1_flow(raw_query: str) -> bool:
             "trace",
             "walk me through",
             "step",
+            "pipeline",
+            "retrieval",
+            "search",
+            "searcher",
+            "rerank",
+            "reranking",
+            "merge",
+            "context",
+            "answer",
+            "generation",
             "deployment",
             "configuration",
             "config",
@@ -691,6 +1535,16 @@ def query_is_phase1_flow(raw_query: str) -> bool:
             "backend",
             "request",
             "query",
+            "retrieval",
+            "pipeline",
+            "search",
+            "searcher",
+            "rerank",
+            "reranking",
+            "merge",
+            "context",
+            "answer",
+            "generation",
             "api",
             "auth",
             "oauth",
@@ -761,6 +1615,8 @@ def query_is_overview_summary(raw_query: str) -> bool:
         return True
     if ("module" in tokens or "modules" in tokens) and tokens & {"main", "core", "top", "level"}:
         return True
+    if "backend" in tokens and (("module" in tokens or "modules" in tokens) or ("subsystem" in tokens or "subsystems" in tokens)):
+        return True
     if ("subsystem" in tokens or "subsystems" in tokens) and tokens & {"top", "level"}:
         return True
     if tokens & {"architecture", "structure", "overview", "repository", "codebase", "project"}:
@@ -812,6 +1668,8 @@ def should_suppress_overview_meta_sources(raw_query: str) -> bool:
         for phrase in (
             "main modules",
             "core modules",
+            "main backend modules",
+            "backend modules",
             "top-level subsystems",
             "top level subsystems",
             "repository overview",
@@ -830,6 +1688,12 @@ def is_test_source(src: dict) -> bool:
 
 def source_relevance_score(src: dict, query_tokens: set[str]) -> int:
     """Weighted lexical relevance for display-time source pruning."""
+    if (
+        src.get("exact_retrieval_hit")
+        or src.get("support_kind") == "direct_injection"
+        or (src.get("chunk_id") and src.get("chunk_id").startswith("direct-inject::"))
+    ):
+        return 10
     symbol = str(src.get("symbol_name", "")).lower()
     relative_path = str(src.get("relative_path", "")).lower()
     hay = f"{relative_path} {symbol}"

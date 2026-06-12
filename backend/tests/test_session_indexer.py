@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 from retrieval import auth_store
 from retrieval import session_indexer
+from retrieval.db import db_cursor
 
 
 def test_create_session_persists_indexing_state(monkeypatch, tmp_path: Path):
@@ -214,3 +216,123 @@ def test_index_job_invalidates_lexical_index_after_ingestion(monkeypatch, tmp_pa
     session_indexer._index_job(session["id"])
 
     assert invalidated == [session["collection"]]
+
+
+def test_index_job_exception_marks_session_failed_and_preserves_error(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+    monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 1)
+    monkeypatch.setattr(
+        session_indexer,
+        "run_pipeline",
+        lambda _root, collection_name, **kwargs: SimpleNamespace(
+            chunks_generated=7,
+            embeddings_stored=3,
+            files_parsed_ok=5,
+            collection=collection_name,
+        ),
+    )
+    monkeypatch.setattr(
+        session_indexer,
+        "invalidate_lexical_index",
+        lambda _collection: (_ for _ in ()).throw(RuntimeError("index invalidation boom")),
+    )
+
+    session = session_indexer.create_session("octocat/hello-world", "local")
+    before = session_indexer.get_session(session["id"])
+    assert before is not None
+    before_updated_at = before["updated_at"]
+
+    session_indexer._index_job(session["id"])
+
+    refreshed = session_indexer.get_session(session["id"])
+    assert refreshed is not None
+    assert refreshed["status"] == "failed"
+    assert "index invalidation boom" in refreshed["error"]
+    assert refreshed["updated_at"] != before_updated_at
+    assert refreshed["chunks_generated"] == 7
+    assert refreshed["embeddings_stored"] == 3
+    assert refreshed["files_indexed"] == 5
+
+
+def test_stale_indexing_detection_requires_old_zero_progress_indexing(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+    monkeypatch.setattr(session_indexer, "INDEXING_STALE_AFTER_SECONDS", 900)
+
+    session = session_indexer.create_session("octocat/hello-world", "local")
+    stale_at = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat()
+    with db_cursor() as (_conn, cursor):
+        cursor.execute(
+            """
+            UPDATE repo_sessions
+            SET updated_at = ?, chunks_generated = 0, embeddings_stored = 0, files_indexed = 0
+            WHERE id = ?
+            """,
+            (stale_at, session["id"]),
+        )
+
+    stale_session = session_indexer.get_session(session["id"])
+    assert stale_session is not None
+    assert session_indexer.is_stale_indexing_session(stale_session)
+    assert stale_session["repo_status"]["status"] == "stale_indexing"
+    assert stale_session["repo_status"]["is_stale_indexing"] is True
+
+    recent = dict(stale_session)
+    recent["updated_at"] = datetime.now(timezone.utc).isoformat()
+    assert not session_indexer.is_stale_indexing_session(recent)
+
+    progressed = dict(stale_session)
+    progressed["updated_at"] = stale_at
+    progressed["chunks_generated"] = 1
+    assert not session_indexer.is_stale_indexing_session(progressed)
+
+    completed = dict(stale_session)
+    completed["status"] = "ready"
+    assert not session_indexer.is_stale_indexing_session(completed)
+
+    failed = dict(stale_session)
+    failed["status"] = "failed"
+    assert not session_indexer.is_stale_indexing_session(failed)
+
+
+def test_stale_indexing_session_cleanup(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+    session_indexer._jobs.clear()
+
+    # Create first session
+    first = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+    )
+    assert first["status"] == "indexing"
+
+    stale_at = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat()
+    with db_cursor() as (_conn, cursor):
+        cursor.execute(
+            """
+            UPDATE repo_sessions
+            SET updated_at = ?, chunks_generated = 0, embeddings_stored = 0, files_indexed = 0
+            WHERE id = ?
+            """,
+            (stale_at, first["id"]),
+        )
+
+    # Try creating another session for a different repo (which would trigger the indexing limit check)
+    second = session_indexer.create_session(
+        repo_full_name="octocat/other-repo",
+        tenant_id="local",
+    )
+    
+    # Since first had no active running thread, it should be marked as failed,
+    # and second should be created successfully!
+    assert second["status"] == "indexing"
+
+    refreshed_first = session_indexer.get_session(first["id"])
+    assert refreshed_first["status"] == "failed"
+    assert "stale job detected" in refreshed_first["error"]

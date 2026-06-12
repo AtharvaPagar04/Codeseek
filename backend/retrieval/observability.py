@@ -78,10 +78,27 @@ _SENSITIVE_FIELD_MARKERS = (
     "ciphertext",
 )
 _BEARER_RE = re.compile(r"bearer\s+[a-z0-9_\-\.]+", re.IGNORECASE)
+_URL_CREDS_RE = re.compile(r'([a-zA-Z0-9+.-]+://)([^@/]+)(@)', re.IGNORECASE)
 
 
 def new_request_id() -> str:
     return uuid.uuid4().hex
+
+
+def sanitize_credentials_in_string(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    # 1. Redact bearer token
+    text = _BEARER_RE.sub("Bearer [redacted]", text)
+    # 2. Redact URL credentials
+    def redact_url_match(match):
+        scheme = match.group(1)
+        creds = match.group(2)
+        if ":" in creds:
+            return f"{scheme}[redacted]:[redacted]@"
+        return f"{scheme}[redacted]@"
+    text = _URL_CREDS_RE.sub(redact_url_match, text)
+    return text
 
 
 def sanitize_for_log(value):
@@ -97,7 +114,7 @@ def sanitize_for_log(value):
     if isinstance(value, (list, tuple)):
         return [sanitize_for_log(item) for item in value]
     if isinstance(value, str):
-        redacted = _BEARER_RE.sub("Bearer [redacted]", value)
+        redacted = sanitize_credentials_in_string(value)
         if len(redacted) > 512:
             return redacted[:509] + "..."
         return redacted

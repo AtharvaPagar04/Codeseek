@@ -59,6 +59,7 @@ export function useChat({ appendMessage }) {
           role: 'assistant',
           content: data.answer || '(no answer returned)',
           sources: data.sources || [],
+          diagnostics: data.diagnostics || null,
           context_tokens: data.context_tokens,
           timestamp: new Date().toISOString(),
           loading: false,

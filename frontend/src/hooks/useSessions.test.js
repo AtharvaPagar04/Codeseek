@@ -4,10 +4,12 @@ import assert from 'node:assert/strict';
 import {
   applyAppendMessage,
   applyClearSessionMessages,
+  applyDeleteSession,
   applySetSessionThreads,
   applySetThreadMessages,
   normalizeSessionRecord,
 } from './useSessions.js';
+
 
 function baseSessions() {
   return [
@@ -164,3 +166,35 @@ test('normalizeSessionRecord preserves indexing options', () => {
   assert.deepEqual(next.indexing_options, { refine_labels_with_llm: true });
 });
 
+
+test('applyDeleteSession removes the target session', () => {
+  const sessions = [
+    { id: 'session-1', repo_id: 'repo-one', created_at: '2026-06-01T00:00:00Z', last_active: '2026-06-01T00:00:00Z' },
+    { id: 'session-2', repo_id: 'repo-two', created_at: '2026-06-02T00:00:00Z', last_active: '2026-06-02T00:00:00Z' },
+  ];
+  const next = applyDeleteSession(sessions, 'session-1');
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, 'session-2');
+});
+
+test('applyDeleteSession is a no-op for unknown session id', () => {
+  const sessions = [
+    { id: 'session-1', repo_id: 'repo-one', created_at: '2026-06-01T00:00:00Z', last_active: '2026-06-01T00:00:00Z' },
+  ];
+  const next = applyDeleteSession(sessions, 'nonexistent');
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, 'session-1');
+});
+
+test('applyDeleteSession does not affect unrelated sessions', () => {
+  const sessions = [
+    { id: 'a', repo_id: 'ra', created_at: '2026-06-01T00:00:00Z', last_active: '2026-06-01T00:00:00Z' },
+    { id: 'b', repo_id: 'rb', created_at: '2026-06-02T00:00:00Z', last_active: '2026-06-02T00:00:00Z' },
+    { id: 'c', repo_id: 'rc', created_at: '2026-06-03T00:00:00Z', last_active: '2026-06-03T00:00:00Z' },
+  ];
+  const next = applyDeleteSession(sessions, 'b');
+  assert.equal(next.length, 2);
+  assert.ok(next.every((s) => s.id !== 'b'));
+  assert.ok(next.some((s) => s.id === 'a'));
+  assert.ok(next.some((s) => s.id === 'c'));
+});

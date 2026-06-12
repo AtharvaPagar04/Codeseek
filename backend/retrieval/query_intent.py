@@ -67,6 +67,88 @@ def extract_domain_hints(query: str) -> list[str]:
     return hints
 
 
+def is_code_request_query(query: str) -> bool:
+    q = query.lower().strip()
+    
+    # Positive triggers:
+    phrases = [
+        "show code",
+        "show me code",
+        "show me the code",
+        "give me the code",
+        "i want the code",
+        "show snippet",
+        "full code",
+        "provide code",
+        "provide me code",
+        "give me code",
+        "source code",
+        "function code",
+        "method code",
+        "class code",
+        "snippet",
+        "code snippet",
+        "implementation code",
+        "show me the function",
+        "show the function body",
+        "where is the code for",
+        "paste the code for",
+    ]
+    if any(phrase in q for phrase in phrases):
+        return True
+        
+    # Match: (show|provide|give|paste|get) [me] [words] code
+    pattern = r"\b(show|provide|give|paste|get)\b.*\bcode\b"
+    if re.search(pattern, q):
+        return True
+        
+    # Also support phrases like "code of" / "code for" / "implementation of" / "show the implementation"
+    other_phrases = [
+        "code for",
+        "code of",
+        "implementation of",
+        "show the implementation",
+    ]
+    if any(phrase in q for phrase in other_phrases):
+        # But exclude if it's an explanation request
+        if not any(exp in q for exp in ["explain", "explanation", "how it works", "how does it work"]):
+            return True
+            
+    return False
+
+
+def is_explanation_query(query: str) -> bool:
+    q = query.lower().strip()
+    if re.search(r"\b\S+\.(py|js|ts|tsx|jsx|json|md|yml|yaml)\b", q):
+        return False
+    if re.search(r"\bhow\b.*\bworks\b", q):
+        return True
+    phrases = ["explain how", "how does", "explain", "describe"]
+    for phrase in phrases:
+        if re.search(r"\b" + re.escape(phrase) + r"\b", q):
+            return True
+    return False
+
+
+def is_source_location_query(query: str) -> bool:
+    import re
+    q = query.lower().strip()
+    source_location_markers = [
+        r"\bwhere\s+is\b",
+        r"\bwhere\s+are\b",
+        r"\bwhere\s+implemented\b",
+        r"\bwhere\s+handled\b",
+        r"\bimplementation\s+of\b",
+        r"\bwhere\s+located\b",
+        r"\bwhere\s+defined\b",
+        r"\blocation\b",
+    ]
+    for pattern in source_location_markers:
+        if re.search(pattern, q):
+            return True
+    return False
+
+
 def classify_query_intent(query: str) -> dict:
     """Classify query intent and determine labels to boost."""
     q = query.lower()
@@ -75,8 +157,19 @@ def classify_query_intent(query: str) -> dict:
     intent = "general_context"
     boost_labels = []
 
+    # Check for explanation and source location queries first to override other intents
+    if is_explanation_query(query):
+        intent = "technical_explanation"
+        boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
+    elif is_source_location_query(query):
+        intent = "code_location"
+        boost_labels = ["question_use:code-location", "question_use:technical-explanation"]
+    # 0. CODE_REQUEST detection first
+    elif is_code_request_query(query):
+        intent = "CODE_REQUEST"
+        boost_labels = ["question_use:code-snippet", "question_use:code-location"]
     # 1. code_snippet
-    if _any_term_in_query(["code", "snippet", "example", "show me", "print"], q):
+    elif _any_term_in_query(["code", "snippet", "example", "show me", "print"], q):
         intent = "code_snippet"
         boost_labels = ["question_use:code-snippet", "question_use:code-location"]
 
@@ -297,6 +390,7 @@ def map_label_intent_to_reranker_intent(
         return "FILE"
 
     INTENT_MAP = {
+        "CODE_REQUEST": "SYMBOL",
         "code_snippet": "SYMBOL",
         "implementation": "SYMBOL",
         "technical_explanation": "ARCHITECTURE",

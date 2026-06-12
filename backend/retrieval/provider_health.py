@@ -49,6 +49,47 @@ def _check_ollama_available() -> None:
         ) from exc
 
 
+def _model_matches(requested: str, available: str) -> bool:
+    requested = requested.lower()
+    available = available.lower()
+    if requested == available:
+        return True
+    req_norm = requested.replace(":latest", "")
+    av_norm = available.replace(":latest", "")
+    if req_norm == av_norm:
+        return True
+    if ":" in requested and ":" in available:
+        req_base, req_tag = requested.split(":", 1)
+        av_base, av_tag = available.split(":", 1)
+        if req_base == av_base:
+            if req_tag in av_tag or av_tag in req_tag:
+                return True
+    return False
+
+
+def _get_ollama_pulled_models() -> list[str]:
+    url = f"{_ollama_api_root()}/api/tags"
+    try:
+        response = httpx.get(url, timeout=LOCAL_LLM_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        data = response.json()
+        models = data.get("models", [])
+        return [m.get("name") for m in models if m.get("name")]
+    except Exception as exc:
+        raise ProviderNotReadyError(
+            "Local LLM provider is selected but Ollama is not reachable. "
+            "Start Ollama and make sure it is listening on the configured base URL "
+            f"({LOCAL_LLM_BASE_URL})."
+        ) from exc
+
+
+def _is_model_available(requested: str, pulled_models: list[str]) -> bool:
+    for av in pulled_models:
+        if _model_matches(requested, av):
+            return True
+    return False
+
+
 def require_llm_ready_for_user(user_id: str) -> dict:
     """Validate that the user's active LLM provider is configured and reachable.
 
@@ -76,15 +117,29 @@ def require_llm_ready_for_user(user_id: str) -> dict:
     if provider == "local":
         # Local/Ollama — API key is not required.
         _check_ollama_available()
-        # If a specific (non-auto) model is pinned, verify it is loaded.
-        if not _is_auto_model(model):
-            from retrieval.local_llm_runtime import get_model_status
-            status = get_model_status(model)
-            if status.get("status") not in {"ready", "loading"}:
-                raise ProviderNotReadyError(
-                    f"Local model '{model}' is not loaded in Ollama. "
-                    "Pull or load the model and try again."
-                )
+
+        # Decouple chat model check from ingestion check.
+        # We verify that the ingestion-safe models are pulled.
+        from rag_ingestion.config import CODESEEK_DESCRIPTION_MODEL, CODESEEK_LABEL_MODEL
+
+        pulled = _get_ollama_pulled_models()
+
+        if not _is_model_available(CODESEEK_DESCRIPTION_MODEL, pulled):
+            raise ProviderNotReadyError(
+                f"Local ingestion model '{CODESEEK_DESCRIPTION_MODEL}' is not available in Ollama.\n"
+                f"Run:\n"
+                f"ollama pull {CODESEEK_DESCRIPTION_MODEL}\n"
+                f"or choose an installed 3B model in CODESEEK_DESCRIPTION_MODEL and CODESEEK_LABEL_MODEL."
+            )
+
+        if not _is_model_available(CODESEEK_LABEL_MODEL, pulled):
+            raise ProviderNotReadyError(
+                f"Local ingestion model '{CODESEEK_LABEL_MODEL}' is not available in Ollama.\n"
+                f"Run:\n"
+                f"ollama pull {CODESEEK_LABEL_MODEL}\n"
+                f"or choose an installed 3B model in CODESEEK_DESCRIPTION_MODEL and CODESEEK_LABEL_MODEL."
+            )
+
         return credential
 
     # Remote providers require an API key.

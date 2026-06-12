@@ -32,6 +32,7 @@ class TestRequireLlmReadyForUser:
         with (
             patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
             patch("retrieval.provider_health._check_ollama_available"),  # assume reachable
+            patch("retrieval.provider_health._get_ollama_pulled_models", return_value=["qwen2.5-coder:3b"]),
         ):
             result = require_llm_ready_for_user("user-123")
             assert result["provider"] == "local"
@@ -59,29 +60,27 @@ class TestRequireLlmReadyForUser:
             with pytest.raises(ProviderNotReadyError, match="Ollama"):
                 require_llm_ready_for_user("user-123")
 
-    def test_local_pinned_model_not_loaded_raises_not_ready(self):
+    def test_local_ingestion_model_not_available_raises_not_ready(self):
         cred = {"provider": "local", "model": "qwen2.5-coder:3b-8k", "api_key": ""}
         with (
             patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
             patch("retrieval.provider_health._check_ollama_available"),
-            patch("retrieval.local_llm_runtime.get_model_status",
-                  return_value={"status": "idle", "detail": "model not loaded"}),
+            patch("retrieval.provider_health._get_ollama_pulled_models",
+                  return_value=["some-other-model"]),
         ):
-            with pytest.raises(ProviderNotReadyError, match="not loaded"):
+            with pytest.raises(ProviderNotReadyError, match="is not available in Ollama.\nRun:\nollama pull"):
                 require_llm_ready_for_user("user-123")
 
-    def test_local_auto_model_skips_model_status_check(self):
-        """Auto/blank model should not trigger a model status check."""
-        cred = {"provider": "local", "model": "auto", "api_key": ""}
-        model_status_calls = []
+    def test_local_ingestion_model_available_succeeds(self):
+        cred = {"provider": "local", "model": "qwen2.5-coder:3b-8k", "api_key": ""}
         with (
             patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
             patch("retrieval.provider_health._check_ollama_available"),
-            patch("retrieval.local_llm_runtime.get_model_status",
-                  side_effect=lambda m: model_status_calls.append(m) or {"status": "idle"}),
+            patch("retrieval.provider_health._get_ollama_pulled_models",
+                  return_value=["qwen2.5-coder:3b"]),
         ):
-            require_llm_ready_for_user("user-123")
-            assert len(model_status_calls) == 0, "get_model_status must NOT be called for auto model"
+            result = require_llm_ready_for_user("user-123")
+            assert result["provider"] == "local"
 
 
 # ---------------------------------------------------------------------------

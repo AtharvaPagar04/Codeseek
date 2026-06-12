@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "hard_gate_status": "PASS",
+  "warnings": [],
+  "diagnostics": [],
+  "hard_gate_failures": [],
+  "reports_loaded": {
+    "retrieval_report": true,
+    "conversation_report": true,
+    "judge_calibration_report": false,
+    "ragas_report": false,
+    "evaluator_compare_report": false
+  },
+  "recommendation": "All gates passed successfully. CodeSeek meets the evaluation quality standards for release."
+}

@@ -81,8 +81,11 @@ export default function SessionItem({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const badge = statusBadge(session);
 
+  const isIndexing = session.status === 'indexing';
+
   const handleDelete = (e) => {
     e.stopPropagation();
+    if (isIndexing) return;
     setConfirmOpen(true);
   };
 
@@ -121,12 +124,17 @@ export default function SessionItem({
           </span>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Delete button — visible on hover */}
+            {/* Delete button — visible on hover, disabled while indexing */}
             <button
               onClick={handleDelete}
               type="button"
-              title="Delete session"
-              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-offline transition-all mt-0.5"
+              title={isIndexing ? 'Cannot delete while indexing' : 'Delete session'}
+              disabled={isIndexing}
+              className={`opacity-0 group-hover:opacity-100 transition-all mt-0.5 ${
+                isIndexing
+                  ? 'text-text-muted cursor-not-allowed opacity-30'
+                  : 'text-text-muted hover:text-offline'
+              }`}
               aria-label="Delete session"
             >
               <TrashIcon />
@@ -141,7 +149,7 @@ export default function SessionItem({
 
       {confirmOpen && (
         <ConfirmDialog
-          message="Delete this session? This cannot be undone."
+          message="Delete this repo session? This removes chat history, indexing metadata, and the associated vector index if safe. This cannot be undone."
           confirmLabel="Delete"
           onConfirm={() => {
             setConfirmOpen(false);
@@ -153,6 +161,7 @@ export default function SessionItem({
     </>
   );
 }
+
 
 function TrashIcon() {
   return (

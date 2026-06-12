@@ -21,6 +21,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_positive_int(name: str) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return 0
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = _env_int("QDRANT_PORT", 6333)
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "repository_chunks")
@@ -57,7 +69,7 @@ CHUNK_DESCRIPTION_MAX_WORDS = _env_int(
 )
 CHUNK_DESCRIPTION_MAX_CHUNKS = _env_int(
     "CHUNK_DESCRIPTION_MAX_CHUNKS",
-    80,
+    -1,
 )
 CHUNK_DESCRIPTION_SLEEP_SECONDS = float(
     os.getenv("CHUNK_DESCRIPTION_SLEEP_SECONDS", "0")
@@ -82,7 +94,7 @@ CHUNK_LABEL_LLM_MAX_CHUNKS = _env_int("CHUNK_LABEL_LLM_MAX_CHUNKS", 20)
 # Max characters of content excerpt included in the refinement prompt (no full code).
 CHUNK_LABEL_LLM_MAX_CONTENT_CHARS = _env_int("CHUNK_LABEL_LLM_MAX_CONTENT_CHARS", 1200)
 # Timeout (seconds) for a single LLM label refinement request.
-CHUNK_LABEL_LLM_TIMEOUT_SECONDS = _env_int("CHUNK_LABEL_LLM_TIMEOUT_SECONDS", 30)
+CHUNK_LABEL_LLM_TIMEOUT_SECONDS = _env_int("CHUNK_LABEL_LLM_TIMEOUT_SECONDS", 60)
 
 # ---------------------------------------------------------------------------
 # GPU / VRAM cleanup after indexing stages
@@ -96,8 +108,6 @@ UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING = _env_bool("UNLOAD_EMBEDDING_MODEL_AFTER_
 
 # Embedding model device: "cpu" keeps the model off CUDA; "cuda" allows GPU embedding.
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
-# Batch size for encode() calls — smaller batches use less VRAM at a time.
-EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 4)
 
 # Ollama model name to evict after indexing.  Defaults to the primary LLM model
 # so the most common local setup works without extra configuration.
@@ -105,3 +115,32 @@ LOCAL_LLM_UNLOAD_MODEL = os.getenv(
     "LOCAL_LLM_UNLOAD_MODEL",
     os.getenv("RETRIEVAL_LOCAL_LLM_PRIMARY_MODEL", ""),
 )
+
+# --- CodeSeek Stability / Safe Ingestion Settings ---
+CODESEEK_DESCRIPTION_MODEL = os.getenv("CODESEEK_DESCRIPTION_MODEL", "qwen2.5-coder:3b")
+CODESEEK_LABEL_MODEL = os.getenv("CODESEEK_LABEL_MODEL", "qwen2.5-coder:3b")
+
+CODESEEK_DESCRIPTION_BATCH_SIZE = _env_int("CODESEEK_DESCRIPTION_BATCH_SIZE", 1)
+CODESEEK_LABEL_REFINE_BATCH_SIZE = _env_int("CODESEEK_LABEL_REFINE_BATCH_SIZE", 4)
+CODESEEK_EMBEDDING_BATCH_SIZE = _env_int("CODESEEK_EMBEDDING_BATCH_SIZE", 16)
+CODESEEK_CHUNK_PROCESS_BATCH_SIZE = _env_int("CODESEEK_CHUNK_PROCESS_BATCH_SIZE", 32)
+
+# Keep EMBEDDING_BATCH_SIZE for backwards compatibility
+EMBEDDING_BATCH_SIZE = CODESEEK_EMBEDDING_BATCH_SIZE
+
+CODESEEK_DESCRIPTION_MAX_CHARS = _env_int("CODESEEK_DESCRIPTION_MAX_CHARS", 600)
+CODESEEK_DESCRIPTION_MAX_TOKENS = _env_int("CODESEEK_DESCRIPTION_MAX_TOKENS", 160)
+CODESEEK_DESCRIPTION_NUM_CTX = _env_int("CODESEEK_DESCRIPTION_NUM_CTX", 2048)
+CODESEEK_LABEL_NUM_CTX = _env_int("CODESEEK_LABEL_NUM_CTX", 2048)
+CODESEEK_LABEL_MAX_TOKENS = _env_int("CODESEEK_LABEL_MAX_TOKENS", 128)
+
+CODESEEK_LLM_ENRICHMENT_NUM_PARALLEL = _env_int("CODESEEK_LLM_ENRICHMENT_NUM_PARALLEL", 1)
+CODESEEK_LLM_BATCH_CLEANUP_EVERY = _env_int("CODESEEK_LLM_BATCH_CLEANUP_EVERY", 1)
+CODESEEK_OLLAMA_KEEP_ALIVE = os.getenv("CODESEEK_OLLAMA_KEEP_ALIVE", "30s")
+CODESEEK_OLLAMA_STOP_MODEL_EVERY = _env_int("CODESEEK_OLLAMA_STOP_MODEL_EVERY", 0)
+
+CODESEEK_DESCRIPTION_COOLDOWN_EVERY = _env_int("CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 200)
+CODESEEK_DESCRIPTION_COOLDOWN_SECONDS = _env_int("CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 60)
+
+CODESEEK_EMBEDDING_COOLDOWN_EVERY = _env_positive_int("CODESEEK_EMBEDDING_COOLDOWN_EVERY")
+CODESEEK_EMBEDDING_COOLDOWN_SECONDS = _env_positive_int("CODESEEK_EMBEDDING_COOLDOWN_SECONDS")

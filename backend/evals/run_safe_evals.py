@@ -44,6 +44,30 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean up known output files in the selected output-dir
+    known_filenames = {
+        "retrieval_latest.json",
+        "conversation_latest.json",
+        "eval_policy_summary.json",
+        "eval_policy_summary.md",
+        "safe_eval_summary.json",
+        "safe_eval_summary.md",
+        "ragas_calibration_traces.jsonl",
+        "ragas_calibration_latest.json",
+        "ragas_calibration_summary.json",
+        "ragas_judge_calibration_latest.json",
+        "ragas_judge_calibration_latest.md",
+        "ragas_evaluator_compare_latest.json",
+        "ragas_evaluator_compare_latest.md"
+    }
+    for filename in known_filenames:
+        target_file = output_dir / filename
+        if target_file.is_file() and target_file.parent.resolve() == output_dir.resolve():
+            try:
+                target_file.unlink()
+            except OSError:
+                pass
+
     # 1. Define step structures
     step_definitions = []
 
@@ -171,16 +195,31 @@ def main() -> None:
                 
         if not deps_ok:
             print(f"Skipping step {name} due to upstream dependency failure.")
+            ret_code = -1
             executed_steps.append({
                 "name": name,
                 "status": "ERROR",
                 "command": step_def["command"],
-                "return_code": -1,
+                "return_code": ret_code,
                 "duration_seconds": 0.0,
                 "output_path": step_def["output_path"],
                 "stdout_tail": "Skipped due to upstream dependency failure.",
                 "stderr_tail": ""
             })
+            if step_def.get("output_path"):
+                out_p = Path(step_def["output_path"])
+                if not out_p.exists() and out_p.parent.resolve() == output_dir.resolve():
+                    try:
+                        placeholder = {
+                            "status": "ERROR",
+                            "error": "step failed before producing report",
+                            "step": name,
+                            "return_code": ret_code
+                        }
+                        with open(out_p, "w", encoding="utf-8") as f:
+                            json.dump(placeholder, f, indent=2)
+                    except Exception:
+                        pass
             continue
 
         # For policy summary, build the command dynamically to include only existing files
@@ -246,6 +285,21 @@ def main() -> None:
             "stderr_tail": get_tail(stderr_str)
         })
 
+        if ret_code != 0 and step_def.get("output_path"):
+            out_p = Path(step_def["output_path"])
+            if not out_p.exists() and out_p.parent.resolve() == output_dir.resolve():
+                try:
+                    placeholder = {
+                        "status": "ERROR",
+                        "error": "step failed before producing report",
+                        "step": name,
+                        "return_code": ret_code
+                    }
+                    with open(out_p, "w", encoding="utf-8") as f:
+                        json.dump(placeholder, f, indent=2)
+                except Exception:
+                    pass
+
     finished_at = datetime.utcnow().isoformat() + "Z"
     total_duration = round(time.time() - start_time, 2)
 
@@ -260,23 +314,46 @@ def main() -> None:
     policy_summary_json = output_dir / "eval_policy_summary.json"
     policy_status = "ERROR"
     hard_gate_status = "ERROR"
-    hard_gate_failures = ["Policy summary report missing or failed to run."]
+    hard_gate_failures = []
     warnings = []
     diagnostics = []
     recommendation = "Safe evaluation run did not complete policy validation."
 
-    if policy_summary_json.exists():
-        try:
-            with open(policy_summary_json, "r", encoding="utf-8") as f:
-                policy_data = json.load(f)
-            policy_status = policy_data.get("status", "ERROR")
-            hard_gate_status = policy_data.get("hard_gate_status", "ERROR")
-            hard_gate_failures = policy_data.get("hard_gate_failures", [])
-            warnings = policy_data.get("warnings", [])
-            diagnostics = policy_data.get("diagnostics", [])
-            recommendation = policy_data.get("recommendation", "Policy check completed.")
-        except Exception as e:
-            hard_gate_failures = [f"Failed to parse policy summary: {str(e)}"]
+    # Check if eval_policy_summary step was run and completed successfully
+    policy_step = next((s for s in executed_steps if s["name"] == "eval_policy_summary"), None)
+    policy_step_ok = policy_step is not None and policy_step["return_code"] == 0
+
+    if not policy_step_ok:
+        hard_gate_status = "ERROR"
+        if policy_step is not None and policy_step["return_code"] == -1:
+            recommendation = "Upstream eval failed. Inspect step logs."
+        else:
+            recommendation = "Policy summary report missing or failed to run."
+        
+        # Collect failed step names (excluding eval_policy_summary itself if others failed)
+        failed_steps = [s["name"] for s in executed_steps if s["return_code"] != 0 and s["name"] != "eval_policy_summary"]
+        if not failed_steps:
+            failed_steps = ["eval_policy_summary"]
+        hard_gate_failures = [f"Step failed: {step_name}" for step_name in failed_steps]
+    else:
+        if policy_summary_json.exists():
+            try:
+                with open(policy_summary_json, "r", encoding="utf-8") as f:
+                    policy_data = json.load(f)
+                policy_status = policy_data.get("status", "ERROR")
+                hard_gate_status = policy_data.get("hard_gate_status", "ERROR")
+                hard_gate_failures = policy_data.get("hard_gate_failures", [])
+                warnings = policy_data.get("warnings", [])
+                diagnostics = policy_data.get("diagnostics", [])
+                recommendation = policy_data.get("recommendation", "Policy check completed.")
+            except Exception as e:
+                hard_gate_status = "ERROR"
+                hard_gate_failures = [f"Failed to parse policy summary: {str(e)}"]
+                recommendation = "Failed to parse policy summary."
+        else:
+            hard_gate_status = "ERROR"
+            hard_gate_failures = ["Policy summary report missing from output directory."]
+            recommendation = "Policy summary report missing."
 
     # Compute overall status
     if any_required_failed or policy_status == "ERROR":

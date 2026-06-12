@@ -347,3 +347,123 @@ def test_missing_optional_reports_do_not_fail_runner(temp_output_dir):
     with open(summary_json, "r") as f:
         data = json.load(f)
     assert data["status"] == "PASS"
+
+
+def test_stale_reports_removed_on_failure(temp_output_dir):
+    # Write stale report files
+    stale_retrieval = temp_output_dir / "retrieval_latest.json"
+    stale_retrieval.write_text(json.dumps({"status": "PASS", "message": "stale pass"}))
+    
+    stale_policy = temp_output_dir / "eval_policy_summary.json"
+    stale_policy.write_text(json.dumps({"status": "PASS", "message": "stale pass"}))
+
+    argv = [
+        "run_safe_evals.py",
+        "--session-id", "test-session-stale-cleanup",
+        "--expected-repo-root", "/home/arch/DEV/CodeSeek",
+        "--expected-collection", "coll",
+        "--output-dir", str(temp_output_dir)
+    ]
+
+    def mock_run(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        mock_process.returncode = 1  # Fail retrieval_eval immediately
+        mock_process.stdout = ""
+        mock_process.stderr = "Retrieval failed."
+        return mock_process
+
+    with patch("sys.argv", argv), patch("subprocess.run", side_effect=mock_run):
+        run_safe_evals_main()
+
+    # retrieval_latest.json should contain the failure placeholder
+    assert stale_retrieval.exists()
+    with open(stale_retrieval, "r") as f:
+        data = json.load(f)
+    assert data["status"] == "ERROR"
+    assert data["error"] == "step failed before producing report"
+
+    # eval_policy_summary.json should contain the failure placeholder (since it skipped)
+    assert stale_policy.exists()
+    with open(stale_policy, "r") as f:
+        data = json.load(f)
+    assert data["status"] == "ERROR"
+    assert data["error"] == "step failed before producing report"
+
+    summary_json = temp_output_dir / "safe_eval_summary.json"
+    with open(summary_json, "r") as f:
+        summary = json.load(f)
+    assert summary["status"] == "ERROR"
+    assert summary["hard_gate_status"] == "ERROR"
+
+
+def test_skipped_policy_summary_error_status(temp_output_dir):
+    argv = [
+        "run_safe_evals.py",
+        "--session-id", "test-session-skipped-policy",
+        "--expected-repo-root", "/home/arch/DEV/CodeSeek",
+        "--expected-collection", "coll",
+        "--output-dir", str(temp_output_dir)
+    ]
+
+    def mock_run(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        if any("retrieval_eval.py" in arg for arg in cmd):
+            mock_process.returncode = 1
+            mock_process.stdout = ""
+            mock_process.stderr = "Retrieval failed."
+        else:
+            mock_process.returncode = 0
+            mock_process.stdout = "Success"
+            mock_process.stderr = ""
+        return mock_process
+
+    with patch("sys.argv", argv), patch("subprocess.run", side_effect=mock_run):
+        run_safe_evals_main()
+
+    summary_json = temp_output_dir / "safe_eval_summary.json"
+    with open(summary_json, "r") as f:
+        data = json.load(f)
+    
+    assert data["status"] == "ERROR"
+    assert data["hard_gate_status"] == "ERROR"
+    assert data["recommendation"] == "Upstream eval failed. Inspect step logs."
+    assert "Step failed: retrieval_eval" in data["hard_gate_failures"]
+
+
+def test_missing_session_failure_placeholder(temp_output_dir):
+    argv = [
+        "run_safe_evals.py",
+        "--session-id", "missing-session-id",
+        "--expected-repo-root", "/home/arch/DEV/CodeSeek",
+        "--expected-collection", "coll",
+        "--output-dir", str(temp_output_dir)
+    ]
+
+    def mock_run(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        mock_process.returncode = 1
+        mock_process.stdout = ""
+        mock_process.stderr = "Session not found in DB."
+        return mock_process
+
+    with patch("sys.argv", argv), patch("subprocess.run", side_effect=mock_run):
+        run_safe_evals_main()
+
+    ret_path = temp_output_dir / "retrieval_latest.json"
+    conv_path = temp_output_dir / "conversation_latest.json"
+    policy_path = temp_output_dir / "eval_policy_summary.json"
+
+    for path in (ret_path, conv_path, policy_path):
+        assert path.exists()
+        with open(path, "r") as f:
+            data = json.load(f)
+        assert data["status"] == "ERROR"
+        assert data["error"] == "step failed before producing report"
+
+    summary_json = temp_output_dir / "safe_eval_summary.json"
+    with open(summary_json, "r") as f:
+        summary = json.load(f)
+    assert summary["status"] == "ERROR"
+    assert summary["hard_gate_status"] == "ERROR"
+    assert "Step failed: retrieval_eval" in summary["hard_gate_failures"]
+    assert "Step failed: conversation_eval" in summary["hard_gate_failures"]

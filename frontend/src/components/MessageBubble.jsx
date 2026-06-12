@@ -2,6 +2,8 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SourceCard from './SourceCard';
+import { buildAnswerDiagnosticsRows } from './answerDiagnostics';
+import { groupSources } from './sourceCards';
 
 /**
  * Three bouncing dots for the loading state.
@@ -109,6 +111,36 @@ export default function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [copiedUser, setCopiedUser] = useState(false);
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
+  const diagnosticsRows = buildAnswerDiagnosticsRows(message.diagnostics);
+
+  const handleCopyDiagnostics = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const lines = ['### Diagnostics'];
+    const sections = ['Intent', 'Model', 'Sources', 'Validation', 'Freshness'];
+    sections.forEach((sec) => {
+      const secRows = diagnosticsRows.filter((r) => r.section === sec);
+      if (secRows.length > 0) {
+        lines.push(`\n#### ${sec}`);
+        secRows.forEach((row) => {
+          if (row.kind === 'list') {
+            lines.push(`- ${row.label}:`);
+            row.value.forEach((item) => {
+              lines.push(`  - ${item}`);
+            });
+          } else {
+            lines.push(`- ${row.label}: ${row.value}`);
+          }
+        });
+      }
+    });
+
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      setCopiedDiagnostics(true);
+      setTimeout(() => setCopiedDiagnostics(false), 1500);
+    });
+  };
 
   const handleCopyUser = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
@@ -235,8 +267,130 @@ export default function MessageBubble({ message }) {
             </div>
           </div>
 
-          {message.sources && message.sources.length > 0 && (
-            <div className="border-t border-border bg-surface-3/30 px-4 py-3">
+          {(diagnosticsRows.length > 0 || (message.sources && message.sources.length > 0)) && (
+            <div className="border-t border-border bg-surface-3/30 px-4 py-3 space-y-3">
+              {diagnosticsRows.length > 0 && (
+                <details className="group">
+                  <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
+                    <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
+                      <svg
+                        className="h-3 w-3 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={3}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                      Diagnostics
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleCopyDiagnostics}
+                        className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-3xs text-text-secondary transition-colors hover:border-text-muted hover:text-text-primary"
+                        title="Copy diagnostics info"
+                        aria-label="Copy diagnostics info"
+                      >
+                        <CopyIcon />
+                        {copiedDiagnostics ? 'Copied' : 'Copy'}
+                      </button>
+                      <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
+                        {diagnosticsRows.length}
+                      </div>
+                    </div>
+                  </summary>
+                  <div className="mt-3 space-y-4">
+                    {['Intent', 'Model', 'Sources', 'Validation', 'Freshness'].map((sectionName) => {
+                      const sectionRows = diagnosticsRows.filter((row) => row.section === sectionName);
+                      if (sectionRows.length === 0) return null;
+
+                      const basicRows = sectionRows.filter((row) => !row.isAdvanced);
+                      const advancedRows = sectionRows.filter((row) => row.isAdvanced);
+
+                      return (
+                        <div key={sectionName} className="rounded-xl border border-border bg-surface-2/40 p-3 space-y-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.22em] text-text-muted font-bold border-b border-border/40 pb-1">
+                            {sectionName}
+                          </div>
+                          
+                          {/* Basic fields */}
+                          {basicRows.length > 0 && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {basicRows.map((row) => (
+                                <div key={row.label} className="space-y-1">
+                                  <div className="text-[10px] text-text-muted font-semibold">
+                                    {row.label}
+                                  </div>
+                                  {row.kind === 'list' ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {row.value.map((item, index) => (
+                                        <span
+                                          key={`${row.label}-${index}`}
+                                          className="rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-[10px] text-text-primary animate-fadeIn"
+                                        >
+                                          {item}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-text-primary break-words font-mono">
+                                      {row.value}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Advanced fields behind expandable sub-section */}
+                          {advancedRows.length > 0 && (
+                            <details className="group mt-2 pt-2 border-t border-border/30">
+                              <summary className="flex cursor-pointer items-center gap-1.5 list-none outline-none select-none text-[10px] text-text-muted hover:text-text-secondary font-mono">
+                                <svg
+                                  className="h-2.5 w-2.5 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={3}
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                </svg>
+                                Advanced details
+                              </summary>
+                              <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-3 pl-2.5 border-l border-border/40">
+                                {advancedRows.map((row) => (
+                                  <div key={row.label} className="space-y-1">
+                                    <div className="text-[10px] text-text-muted font-semibold">
+                                      {row.label}
+                                    </div>
+                                    {row.kind === 'list' ? (
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {row.value.map((item, index) => (
+                                          <span
+                                            key={`${row.label}-${index}`}
+                                            className="rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-[10px] text-text-primary animate-fadeIn"
+                                          >
+                                            {item}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <div className="text-xs text-text-primary break-words font-mono">
+                                        {row.value}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
+
               <details className="group">
                 <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
                   <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
@@ -252,13 +406,28 @@ export default function MessageBubble({ message }) {
                     Sources
                   </div>
                   <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
-                    {message.sources.length}
+                    {(message.sources || []).length}
                   </div>
                 </summary>
-                <div className="mt-3 flex flex-wrap gap-2 animate-fadeIn">
-                  {message.sources.map((src, i) => (
-                    <SourceCard key={i} source={src} />
-                  ))}
+                <div className="mt-3 space-y-4 animate-fadeIn">
+                  {(() => {
+                    const groupedSources = groupSources(message.sources || []);
+                    return Object.entries(groupedSources).map(([role, items]) => {
+                      if (items.length === 0) return null;
+                      return (
+                        <div key={role} className="space-y-1.5">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-text-muted select-none">
+                            {role} ({items.length})
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {items.map((item, idx) => (
+                              <SourceCard key={idx} source={item.original} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </details>
             </div>

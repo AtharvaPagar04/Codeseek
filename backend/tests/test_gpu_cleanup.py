@@ -151,15 +151,15 @@ class TestConfigDefaults:
             if env_backup is not None:
                 os.environ["EMBEDDING_DEVICE"] = env_backup
 
-    def test_embedding_batch_size_default_is_4(self):
-        """EMBEDDING_BATCH_SIZE must default to 4."""
+    def test_embedding_batch_size_default_is_16(self):
+        """EMBEDDING_BATCH_SIZE must default to 16."""
         import os
         env_backup = os.environ.pop("EMBEDDING_BATCH_SIZE", None)
         try:
             import importlib
             import rag_ingestion.config as cfg
             importlib.reload(cfg)
-            assert cfg.EMBEDDING_BATCH_SIZE == 4, f"Expected 4, got {cfg.EMBEDDING_BATCH_SIZE}"
+            assert cfg.EMBEDDING_BATCH_SIZE == 16, f"Expected 16, got {cfg.EMBEDDING_BATCH_SIZE}"
         finally:
             if env_backup is not None:
                 os.environ["EMBEDDING_BATCH_SIZE"] = env_backup

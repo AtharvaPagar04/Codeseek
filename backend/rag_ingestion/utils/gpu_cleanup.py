@@ -137,3 +137,35 @@ def unload_ollama_model(model: str, base_url: str = "http://localhost:11434") ->
             )
     except Exception as exc:
         logger.warning("Failed to unload Ollama model '%s': %s", model, exc)
+
+
+def cleanup_after_batch() -> None:
+    """Free Python-side memory and empty CUDA cache if PyTorch is available."""
+    import gc
+    gc.collect()
+    try:
+        import torch  # type: ignore
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def ollama_stop_model(model: str, base_url: str = "http://localhost:11434") -> None:
+    """Evict a model from Ollama. Calls 'ollama stop <model>' via subprocess,
+    and fallback to unload_ollama_model API call.
+    """
+    if not model or not model.strip():
+        return
+    model = model.strip()
+    
+    try:
+        # Run 'ollama stop' via subprocess
+        subprocess.run(["ollama", "stop", model], capture_output=True, text=True, timeout=10)
+        logger.info("Executed 'ollama stop %s'", model)
+    except Exception as exc:
+        logger.debug("Failed to run 'ollama stop %s': %s", model, exc)
+        
+    # Also fallback to unload_ollama_model API call (keep_alive=0)
+    unload_ollama_model(model, base_url)
+

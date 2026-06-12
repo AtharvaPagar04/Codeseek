@@ -154,7 +154,25 @@ def _payload(chunk: Chunk) -> dict:
         "architecture_notes": chunk.architecture_notes,
         "labels": getattr(chunk, "labels", []),
         "code_intent": getattr(chunk, "code_intent", ""),
-        # label_confidences is intentionally excluded — ingestion-only, not persisted
         "content_excerpt": chunk.content[:CONTENT_EXCERPT_CHARS],
     }
+
+
+def delete_vectors_by_ids(
+    vector_ids: list[str], collection_name: str | None = None
+) -> None:
+    """Delete specific points by their point/vector IDs."""
+    if not vector_ids:
+        return
+
+    collection = collection_name or COLLECTION_NAME
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import PointIdsList
+
+    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client.delete(
+        collection_name=collection,
+        points_selector=PointIdsList(points=vector_ids),
+    )
+
 

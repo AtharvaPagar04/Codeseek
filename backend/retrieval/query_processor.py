@@ -39,7 +39,9 @@ INTENT_FAMILIES = (
     "SEMANTIC",
 )
 
-SNAKE_CASE_RE = re.compile(r"\b[a-z][a-z0-9_]{2,}\b")
+# Include leading-underscore symbols so exact code requests like `_require_auth`
+# are extracted and can be routed as exact symbol lookups.
+SNAKE_CASE_RE = re.compile(r"\b_?[a-z][a-z0-9_]{2,}\b")
 CAMEL_CASE_RE = re.compile(r"\b[A-Z][a-zA-Z0-9]{2,}\b")
 FILE_RE = re.compile(r"\b\S+\.(py|js|ts|tsx|jsx)\b")
 CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\(\)")
@@ -165,6 +167,16 @@ LOOKUP_PHRASES = (
 )
 
 FLOW_SYMBOLS = {
+    "retrieval_pipeline": [
+        "process_query",
+        "classify_query_intent",
+        "search",
+        "assemble",
+        "assemble_for_reasoning",
+        "build_flow_answer",
+        "generate_answer",
+        "validate_generated_answer",
+    ],
     "orchestration": ["_query_impl", "run_query"],
     "auth_session": [
         "auth_github",
@@ -193,6 +205,16 @@ FLOW_SYMBOLS = {
 }
 
 FLOW_FILES = {
+    "retrieval_pipeline": [
+        "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
+        "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+        "backend/retrieval/query_processor.py",
+        "backend/retrieval/searcher.py",
+        "backend/retrieval/main.py",
+        "backend/retrieval/code_answers.py",
+        "backend/retrieval/llm.py",
+        "backend/retrieval/answer_validation.py",
+    ],
     "deployment_config": [
         "docker-compose.yml",
         "Dockerfile",
@@ -400,6 +422,21 @@ def _inject_config_files(query: str, entities: dict) -> None:
 
 def _flow_kind(query: str) -> str:
     lower = query.lower()
+    if any(
+        term in lower
+        for term in (
+            "retrieval pipeline",
+            "query processor",
+            "context assembly",
+            "answer generation",
+            "merge results",
+            "reciprocal rank fusion",
+            "rerank",
+            "reranking",
+            "hybrid retrieval",
+        )
+    ) or ("retrieval" in lower and "pipeline" in lower):
+        return "retrieval_pipeline"
     if not any(
         marker in lower
         for marker in (
@@ -577,7 +614,7 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     if any(phrase in lower for phrase in ("explain", "how does", "what does", "walk me through")):
         scores["EXPLANATION"] = 0.72
     if explicit_code_request:
-        scores["CODE_REQUEST"] = 0.83
+        scores["CODE_REQUEST"] = 0.95
     if has_followup_markers:
         scores["FOLLOWUP"] = 0.82 if not (has_symbols or has_files or has_exact_terms) else 0.58
     if short_query and not any(entities.get(key) for key in ("symbols", "files", "exact_terms", "services")):
@@ -634,6 +671,14 @@ def _has_architecture_markers(lower: str) -> bool:
             "project structure",
             "repository structure",
             "codebase structure",
+            "backend modules",
+            "main backend modules",
+            "what are the backend modules",
+            "what are the main backend modules",
+            "list the backend modules",
+            "explain backend modules",
+            "backend architecture modules",
+            "main backend subsystems",
             "how is this project structured",
             "how is the project structured",
             "how is this codebase structured",
@@ -658,7 +703,8 @@ def _has_followup_markers(lower: str) -> bool:
 
 
 def _has_code_request_markers(lower: str) -> bool:
-    return any(phrase in lower for phrase in CODE_REQUEST_PHRASES)
+    from retrieval.query_intent import is_code_request_query
+    return is_code_request_query(lower)
 
 
 def _has_lookup_markers(lower: str) -> bool:

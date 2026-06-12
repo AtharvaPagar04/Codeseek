@@ -145,6 +145,7 @@ import sqlite3
 
 @app.exception_handler(sqlite3.OperationalError)
 def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalError):
+    from retrieval.observability import sanitize_credentials_in_string
     if "no such table" in str(exc).lower():
         try:
             from retrieval.db import init_db
@@ -152,7 +153,7 @@ def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalE
         except Exception as init_exc:
             return JSONResponse(
                 status_code=503,
-                content={"detail": f"Database initialization failed: {init_exc}"},
+                content={"detail": sanitize_credentials_in_string(f"Database initialization failed: {init_exc}")},
             )
         return JSONResponse(
             status_code=503,
@@ -160,7 +161,36 @@ def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalE
         )
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Database operational error: {exc}"},
+        content={"detail": sanitize_credentials_in_string(f"Database operational error: {exc}")},
+    )
+
+
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(HTTPException)
+def http_exception_handler(request: Request, exc: HTTPException):
+    from retrieval.observability import sanitize_credentials_in_string
+    sanitized_detail = sanitize_credentials_in_string(str(exc.detail))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": sanitized_detail},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+def validation_exception_handler(request: Request, exc: RequestValidationError):
+    from retrieval.observability import sanitize_credentials_in_string
+    import json
+    try:
+        raw_errors_str = json.dumps(exc.errors())
+        sanitized_errors_str = sanitize_credentials_in_string(raw_errors_str)
+        errors = json.loads(sanitized_errors_str)
+    except Exception:
+        errors = str(exc)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors},
     )
 
 v1 = APIRouter(prefix="/api/v1", tags=["v1"])
@@ -606,6 +636,93 @@ def _log_http_error(event: str, request_id: str, status_code: int, detail: objec
     )
 
 
+def _compact_diagnostics_source(source: dict) -> dict:
+    if not isinstance(source, dict):
+        return {}
+
+    compact: dict[str, object] = {}
+    relative_path = str(source.get("relative_path") or source.get("file") or "").strip()
+    symbol_name = str(source.get("symbol_name") or source.get("symbol") or "").strip()
+    expansion_type = str(source.get("expansion_type") or "").strip()
+
+    if relative_path:
+        compact["relative_path"] = relative_path
+    if symbol_name:
+        compact["symbol_name"] = symbol_name
+    if expansion_type:
+        compact["expansion_type"] = expansion_type
+
+    try:
+        start_line = int(source.get("start_line") or 0)
+        if start_line > 0:
+            compact["start_line"] = start_line
+    except Exception:
+        pass
+
+    try:
+        end_line = int(source.get("end_line") or 0)
+        if end_line > 0 and end_line != compact.get("start_line"):
+            compact["end_line"] = end_line
+    except Exception:
+        pass
+
+    return compact
+
+
+def _build_query_diagnostics(
+    *,
+    meta: dict,
+    sources: list[dict],
+    token_count: int | None,
+    session: dict | None,
+    provider_config: dict | None,
+) -> dict:
+    llm_selection = meta.get("llm_selection") if isinstance(meta.get("llm_selection"), dict) else {}
+    evidence_confidence = meta.get("evidence_confidence") if isinstance(meta.get("evidence_confidence"), dict) else {}
+    source_filter = meta.get("source_filter") if isinstance(meta.get("source_filter"), dict) else {}
+
+    def _compact_sources(items: list[dict]) -> list[dict]:
+        compacted: list[dict] = []
+        for item in items[:6]:
+            summary = _compact_diagnostics_source(item)
+            if summary:
+                compacted.append(summary)
+        return compacted
+
+    diagnostics: dict[str, object] = {
+        "intent": str(meta.get("query_intent") or "").strip(),
+        "primary_intent": str(meta.get("primary_intent") or "").strip(),
+        "response_mode": str(meta.get("response_mode") or "").strip(),
+        "provider": str((llm_selection or {}).get("provider") or (provider_config or {}).get("provider") or "").strip(),
+        "model": str((llm_selection or {}).get("model") or (provider_config or {}).get("model") or "").strip(),
+        "routing_mode": str((llm_selection or {}).get("routing_mode") or "").strip(),
+        "context_tokens": token_count,
+        "evidence_confidence": evidence_confidence,
+        "source_filter": source_filter,
+        "session_status": str((session or {}).get("status") or "").strip(),
+        "session_error": str((session or {}).get("error") or "").strip(),
+        "selected_source_count": len(meta.get("display_sources") or []),
+        "reasoning_source_count": len(meta.get("reasoning_sources") or []),
+        "rendered_source_count": len(sources or []),
+        "selected_sources": _compact_sources(list(meta.get("display_sources") or [])),
+        "reasoning_sources": _compact_sources(list(meta.get("reasoning_sources") or [])),
+        "rendered_sources": _compact_sources(list(sources or [])),
+    }
+
+    validation = meta.get("validation")
+    if isinstance(validation, dict):
+        diagnostics["validation"] = {
+            "valid": validation.get("valid"),
+            "reasons": list(validation.get("reasons") or []),
+            "repaired": bool(validation.get("repaired_answer") or validation.get("repaired_sources")),
+        }
+
+    if session and "repo_status" in session:
+        diagnostics["freshness"] = session["repo_status"]
+
+    return diagnostics
+
+
 def _query_impl(
     body: QueryRequest,
     request: Request,
@@ -753,6 +870,13 @@ def _query_impl(
             "sources": sources,
             "context_tokens": token_count,
             "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
+            "diagnostics": _build_query_diagnostics(
+                meta=meta,
+                sources=sources,
+                token_count=token_count,
+                session=session,
+                provider_config=provider_config,
+            ),
             "metrics": {
                 "total_latency_ms": total_ms,
                 "stage_latency_ms": meta.get("stage_latency_ms", {}),
@@ -1156,10 +1280,13 @@ def delete_session_v1(
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
-    deleted = delete_session(session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"deleted": True, "session_id": session_id}
+    try:
+        result = delete_session(session_id)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @v1.post("/sessions/{session_id}/retry")
@@ -1211,6 +1338,105 @@ def get_session_repo_status_v1(
         raise HTTPException(status_code=403, detail=str(exc))
 
 
+@v1.get("/sessions/{session_id}/freshness")
+def get_session_freshness_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_freshness
+        freshness_info = get_session_freshness(session_id, auth_user["id"])
+        return freshness_info
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@v1.get("/sessions/{session_id}/indexing-job/latest")
+def get_latest_indexing_job_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from retrieval.db import get_latest_indexing_job
+    job = get_latest_indexing_job(session_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="No indexing job found for this session")
+
+    return {
+        "session_id": job["session_id"],
+        "job_id": job["id"],
+        "indexing_mode": job["indexing_mode"],
+        "status": job["status"],
+        "current_stage": job["current_stage"],
+        "files_indexed": job["files_indexed"],
+        "chunks_generated": job["chunks_generated"],
+        "embeddings_stored": job["embeddings_stored"],
+        "started_at": job["started_at"],
+        "updated_at": job["updated_at"],
+        "completed_at": job["completed_at"],
+        "error": job["error"],
+    }
+
+
+@v1.post("/sessions/{session_id}/indexing-job/cancel")
+def cancel_latest_indexing_job_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import request_cancel_indexing_job
+        result = request_cancel_indexing_job(session_id, auth_user["id"])
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@v1.get("/sessions/{session_id}/indexing-jobs")
+def list_indexing_jobs_v1(
+    session_id: str,
+    limit: int = 20,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from retrieval.db import list_indexing_jobs
+    jobs = list_indexing_jobs(session_id, limit=limit)
+    return {
+        "session_id": session_id,
+        "jobs": jobs,
+    }
+
+
+@v1.get("/sessions/{session_id}/index-preview")
+def get_session_index_preview_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    try:
+        from retrieval.session_indexer import get_session_index_preview
+        preview_info = get_session_index_preview(session_id, auth_user["id"])
+        return preview_info
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+
 @v1.get("/sessions/{session_id}/evaluation/latest")
 def get_latest_evaluation_report_v1(
     session_id: str,
@@ -1226,6 +1452,16 @@ def get_latest_evaluation_report_v1(
 
 
 
+@v1.get("/evals/latest")
+def get_latest_global_evaluation_report_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth_user(session_token)
+    from retrieval.eval_reports import get_latest_evaluation_report
+    return get_latest_evaluation_report()
+
+
+
 @v1.post("/sessions/{session_id}/index-latest")
 def index_latest_session_v1(
     session_id: str,
@@ -1236,8 +1472,14 @@ def index_latest_session_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.get("status") == "indexing":
-        raise HTTPException(status_code=409, detail="Session is already indexing")
+    from retrieval.session_indexer import is_stale_indexing_session
+    if session.get("status") == "indexing" and not is_stale_indexing_session(session):
+        return {
+            "session_id": session_id,
+            "status": "indexing",
+            "message": "Indexing is already in progress.",
+            "freshness_status": "indexing"
+        }
 
     if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
         try:
@@ -1263,6 +1505,58 @@ def index_latest_session_v1(
         raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+
+
+@v1.post("/sessions/{session_id}/index-incremental")
+def index_incremental_session_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    import os
+    if os.environ.get("CODESEEK_ENABLE_INCREMENTAL_REINDEX", "false").lower() != "true":
+        raise HTTPException(status_code=403, detail="Incremental reindexing is disabled.")
+
+    from retrieval.session_indexer import is_stale_indexing_session
+    if session.get("status") == "indexing" and not is_stale_indexing_session(session):
+        return {
+            "session_id": session_id,
+            "status": "indexing",
+            "message": "Indexing is already in progress.",
+            "freshness_status": "indexing",
+            "indexing_mode": "incremental",
+            "estimated_files_to_update": 0,
+        }
+
+    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+        try:
+            provider_config = require_llm_ready_for_user(auth_user["id"])
+            from retrieval.session_indexer import _session_provider_configs
+            _session_provider_configs[session["id"]] = provider_config
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProviderNotReadyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        from retrieval.session_indexer import index_incremental_version
+        res = index_incremental_version(session_id, auth_user["id"])
+        log_event(
+            "api.session.index_incremental",
+            new_request_id(),
+            session_id=session_id,
+            user_id=auth_user["id"],
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
 
 
 @v1.get("/sessions/{session_id}/indexing-events")

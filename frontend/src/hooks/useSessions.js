@@ -106,6 +106,11 @@ export const applySetSessionThreads = (sessions, sessionId, threads) => {
   return sortByLastActive(next);
 };
 
+export const applyDeleteSession = (sessions, sessionId) =>
+  sortByLastActive(sessions.filter((s) => s.id !== sessionId));
+
+
+
 export function useSessions() {
   const [sessions, setSessions] = useState([]);
 
