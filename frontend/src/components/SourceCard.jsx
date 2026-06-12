@@ -1,16 +1,17 @@
 import { useState } from 'react';
+import { classifySource } from './sourceCards';
 
 /**
- * Compact badge showing a cited source file.
+ * Premium source card showing a cited source file, symbol, lines, and category.
  * Clicking the file path copies it to clipboard.
  */
 export default function SourceCard({ source }) {
   const [copied, setCopied] = useState(false);
-  const file = source.file || source.relative_path || '';
-  const symbol = source.symbol || source.symbol_name || '';
-  const lines = source.lines || formatLines(source.start_line, source.end_line);
-  const expansionType = source.expansion_type || '';
-  const copyValue = [file, symbol ? `:: ${symbol}` : '', lines ? ` (lines ${lines})` : ''].join('');
+  
+  const classified = classifySource(source);
+  if (!classified) return null;
+
+  const { file, badge, label, lines, copyValue } = classified;
 
   const handleCopy = () => {
     if (!file) return;
@@ -20,41 +21,44 @@ export default function SourceCard({ source }) {
     });
   };
 
+  const getBadgeStyle = (b) => {
+    switch (b) {
+      case 'Docs':
+        return 'border-online/25 text-online bg-online/5';
+      case 'Test':
+        return 'border-warning/25 text-warning bg-warning/5';
+      case 'Config':
+        return 'border-text-secondary/25 text-text-secondary bg-text-secondary/5';
+      case 'Generated report':
+        return 'border-offline/25 text-offline bg-offline/5';
+      case 'Code':
+      default:
+        return 'border-accent-dim/25 text-accent-dim bg-accent-dim/5';
+    }
+  };
+
   return (
-    <div className="inline-flex items-center gap-2 bg-surface-3 border border-border rounded-full px-3 py-1 text-2xs font-mono">
+    <div className="inline-flex items-center gap-2 bg-surface-3 border border-border/80 rounded-lg px-2.5 py-1 text-2xs font-mono select-none">
+      {/* Badge Type */}
+      <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide border ${getBadgeStyle(badge)}`}>
+        {badge}
+      </span>
+
+      {/* Copyable Path/Symbol */}
       <button
         onClick={handleCopy}
-        title="Copy path"
-        className="text-text-primary hover:text-text-secondary transition-colors truncate max-w-[240px]"
+        title="Copy path and details"
+        className="text-text-primary hover:text-text-secondary transition-colors font-medium truncate max-w-[280px] text-[11px]"
       >
-        {copied ? '✓ copied' : file || 'unknown source'}
+        {copied ? '✓ copied' : label || 'unknown source'}
       </button>
 
+      {/* Line Ranges */}
       {lines && (
-        <span className="text-text-muted shrink-0">
-          L{lines.replace('-', '–')}
-        </span>
-      )}
-
-      {symbol && (
-        <span className="bg-surface-2 text-text-secondary px-1.5 py-0.5 rounded-full text-2xs shrink-0">
-          {symbol}
-        </span>
-      )}
-
-      {expansionType && expansionType !== 'primary' && (
-        <span className="text-text-muted shrink-0 uppercase tracking-wide">
-          {expansionType.replace(/_/g, ' ')}
+        <span className="text-text-muted shrink-0 text-[10px] border-l border-border-subtle/50 pl-2">
+          lines {lines.replace('-', '–')}
         </span>
       )}
     </div>
   );
-}
-
-function formatLines(startLine, endLine) {
-  const start = Number(startLine);
-  const end = Number(endLine);
-  if (!Number.isFinite(start) || start <= 0) return '';
-  if (!Number.isFinite(end) || end <= 0 || end === start) return String(start);
-  return `${start}-${end}`;
 }

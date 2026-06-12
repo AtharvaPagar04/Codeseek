@@ -62,6 +62,9 @@ def run_pipeline(
     provider_config: dict | None = None,
     event_callback=None,
     recreate_collection: bool | None = None,
+    session_id: str | None = None,
+    commit_sha: str | None = None,
+    branch_name: str | None = None,
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
     from rag_ingestion.config import (
@@ -301,6 +304,63 @@ def run_pipeline(
              level="success", progress=counters.embeddings_stored,
              total=counters.embeddings_stored)
 
+        # --- Passive Metadata Recording ---
+        if session_id:
+            try:
+                import hashlib
+                from retrieval.db import upsert_session_file, replace_session_file_chunks
+                from datetime import datetime, timezone
+                import os
+
+                chunks_by_file = {}
+                for chunk in embedded_chunks:
+                    if not chunk.relative_path or chunk.chunk_type == "repo_summary":
+                        continue
+                    chunks_by_file.setdefault(chunk.relative_path, []).append(chunk)
+
+                last_indexed_at = datetime.now(timezone.utc).isoformat()
+
+                for rel_path, file_chunks in chunks_by_file.items():
+                    first_chunk = file_chunks[0]
+                    abs_path = first_chunk.file_path or os.path.join(repository["repository_root"], rel_path)
+
+                    file_hash = ""
+                    try:
+                        if os.path.isfile(abs_path):
+                            with open(abs_path, "rb") as f:
+                                file_hash = hashlib.sha256(f.read()).hexdigest()
+                        else:
+                            file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+                    except Exception:
+                        file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+
+                    file_record = upsert_session_file(
+                        session_id=session_id,
+                        repo_path=rel_path,
+                        file_hash=file_hash,
+                        indexed_commit_sha=commit_sha or "",
+                        indexed_branch=branch_name or "",
+                        status="indexed",
+                        last_indexed_at=last_indexed_at,
+                        deleted_at=None,
+                    )
+
+                    chunk_mappings = []
+                    for c in file_chunks:
+                        chunk_mappings.append({
+                            "chunk_id": c.chunk_id,
+                            "vector_id": c.chunk_id,
+                            "symbol": c.symbol_name or None,
+                            "start_line": c.start_line if c.start_line > 0 else None,
+                            "end_line": c.end_line if c.end_line > 0 else None,
+                        })
+
+                    replace_session_file_chunks(file_record["id"], chunk_mappings)
+
+            except Exception as e:
+                logger.error("Failed to record passive incremental metadata: %s", e)
+                raise RuntimeError(f"Metadata recording failed: {e}") from e
+
         # --- Final cleanup: unload models and free VRAM ---
         if UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING:
             unload_embedding_model()
@@ -375,5 +435,256 @@ def _print_report(repository: dict, counters: PipelineCounters, collection_name:
             print(f"- {item['file']} | {item['reason']} | {item['action']}")
 
 
+def run_incremental_pipeline(
+    source: str,
+    collection_name: str | None = None,
+    enable_chunk_descriptions: bool | None = None,
+    enable_llm_label_refinement: bool | None = None,
+    provider_config: dict | None = None,
+    event_callback=None,
+    session_id: str | None = None,
+    commit_sha: str | None = None,
+    branch_name: str | None = None,
+    added_files: list[str] | None = None,
+    modified_files: list[str] | None = None,
+    deleted_files: list[str] | None = None,
+) -> PipelineCounters:
+    """
+    Executes a partial/incremental reindexing pipeline for the specified session
+    and subset of files.
+    """
+    from rag_ingestion.config import (
+        ENABLE_LLM_LABEL_REFINEMENT,
+    )
+    from rag_ingestion.utils.counters import PipelineCounters
+    from rag_ingestion.stages.loader import load_repository
+    from retrieval.isolation import expected_collection_name, validate_collection_binding
+    from rag_ingestion.stages.discovery import discover_files
+    from rag_ingestion.stages.filtering import filter_files
+    from rag_ingestion.stages.language import detect_languages
+    from rag_ingestion.stages.parser import parse_file
+    from rag_ingestion.stages.chunker import generate_chunks
+    from rag_ingestion.stages.overflow import handle_overflow
+    from rag_ingestion.stages.metadata import build_metadata
+    from rag_ingestion.stages.summary import generate_summary
+    from rag_ingestion.stages.embedder import embed_chunks
+    import os
+    import hashlib
+    from pathlib import Path
+    from datetime import datetime, timezone
+    from rag_ingestion.models.file import FileRecord
+    import logging
+
+    logger = logging.getLogger(__name__)
+    counters = PipelineCounters()
+
+    def emit(stage, message, level="info", progress=None, total=None, metadata=None):
+        if event_callback:
+            event_callback(
+                stage=stage, message=message, level=level,
+                progress=progress, total=total, metadata=metadata,
+            )
+
+    repository = load_repository(source)
+    selected_collection = collection_name or expected_collection_name(
+        repository["repository_root"]
+    )
+    validate_collection_binding(selected_collection, repository["repository_root"])
+
+    targets = set(added_files or []) | set(modified_files or [])
+    if not targets and not (deleted_files or []):
+        logger.info("No files added, modified, or deleted. Incremental update is a no-op.")
+        return counters
+
+    # --- Construct FileRecords ---
+    root = Path(repository["repository_root"]).resolve()
+    processable = []
+    for rel_path in targets:
+        abs_path = root / rel_path
+        if not abs_path.exists():
+            continue
+        stat = abs_path.stat()
+        file_rec = FileRecord(
+            path=str(abs_path.resolve()),
+            relative_path=rel_path,
+            extension=abs_path.suffix,
+            size_bytes=stat.st_size,
+        )
+        processable.append(file_rec)
+        counters.files_discovered += 1
+
+    emit("discovery", f"Discovered {counters.files_discovered} files to update.", progress=counters.files_discovered)
+
+    # --- Filtering ---
+    filtered_files = filter_files(
+        processable,
+        repository["repository_root"],
+        counters,
+    )
+    emit("filtering", f"Filtered target list — ignored {counters.files_ignored} files.", progress=len(filtered_files))
+
+    # --- Language detection ---
+    language_files = detect_languages(filtered_files, counters)
+    target_processable = [f for f in language_files if not f.skipped]
+    emit("language", f"Processing {len(target_processable)} files after language support checks.")
+
+    # --- Parse + chunk ---
+    all_chunks = []
+    for file in target_processable:
+        try:
+            parsed = parse_file(file, counters)
+            chunks = generate_chunks(parsed, file)
+            chunks = handle_overflow(chunks)
+
+            for chunk in chunks:
+                build_metadata(chunk)
+                chunk.summary = generate_summary(chunk)
+
+            # Copy file_type to all chunks of the same file
+            file_type = next((c.file_type for c in chunks if c.file_type), "")
+            if file_type:
+                for chunk in chunks:
+                    chunk.file_type = file_type
+
+            counters.chunks_generated += len(chunks)
+            all_chunks.extend(chunks)
+        except Exception as e:
+            logger.error("Failed to parse/chunk file %s: %s", file.relative_path, e)
+            raise RuntimeError(f"Incremental indexing failed for file {file.relative_path}: {e}") from e
+
+    emit("parser", f"Parsed {counters.files_parsed_ok} files successfully.", progress=counters.files_parsed_ok)
+
+    embedded_chunks = []
+    if all_chunks:
+        # --- Descriptions ---
+        if enable_chunk_descriptions:
+            from rag_ingestion.stages.description import describe_chunks
+            all_chunks = describe_chunks(
+                all_chunks,
+                enabled=enable_chunk_descriptions,
+                provider_config=provider_config,
+                event_callback=event_callback,
+            )
+
+        # --- Labeling ---
+        from rag_ingestion.config import ENABLE_CHUNK_LABELS
+        if ENABLE_CHUNK_LABELS:
+            from rag_ingestion.stages.labeler import label_chunks
+            repo_name = repository.get("repository_name", "")
+            repo_root = repository.get("repository_root", "")
+            all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
+
+            should_refine_labels = (
+                ENABLE_LLM_LABEL_REFINEMENT
+                if enable_llm_label_refinement is None
+                else enable_llm_label_refinement
+            )
+            if should_refine_labels:
+                from rag_ingestion.stages.labeler import refine_chunk_labels_with_llm
+                all_chunks = refine_chunk_labels_with_llm(
+                    all_chunks,
+                    provider_config=provider_config,
+                    event_callback=event_callback,
+                )
+
+        # --- Embedding ---
+        emit("embedding", f"Embedding {len(all_chunks)} chunks…")
+        embedded_chunks = embed_chunks(all_chunks, counters)
+        emit("embedding", f"Generated embeddings for {counters.embeddings_generated} chunks.")
+
+    # --- Qdrant Deletion Pre-fetch ---
+    old_vector_ids_to_delete = []
+    if session_id:
+        from retrieval.db import list_session_files
+        db_files = list_session_files(session_id, include_deleted=True)
+        db_files_by_path = {f["repo_path"]: f for f in db_files}
+
+        for mod_file in (modified_files or []):
+            if mod_file in db_files_by_path:
+                for chunk in db_files_by_path[mod_file]["chunks"]:
+                    if chunk.get("vector_id"):
+                        old_vector_ids_to_delete.append(chunk["vector_id"])
+
+        for del_file in (deleted_files or []):
+            if del_file in db_files_by_path:
+                for chunk in db_files_by_path[del_file]["chunks"]:
+                    if chunk.get("vector_id"):
+                        old_vector_ids_to_delete.append(chunk["vector_id"])
+
+    # --- Qdrant Upsert ---
+    if all_chunks:
+        from rag_ingestion.stages.storage import store_chunks
+        emit("storage", f"Storing {len(embedded_chunks)} chunks in Qdrant…")
+        store_chunks(
+            embedded_chunks,
+            counters,
+            collection_name=selected_collection,
+            recreate_collection=False,
+        )
+
+    # --- Qdrant Deletion ---
+    if old_vector_ids_to_delete:
+        from rag_ingestion.stages.storage import delete_vectors_by_ids
+        delete_vectors_by_ids(old_vector_ids_to_delete, collection_name=selected_collection)
+
+    # --- DB Metadata Update ---
+    if session_id:
+        try:
+            from retrieval.db import upsert_session_file, replace_session_file_chunks, mark_session_files_deleted
+            last_indexed_at = datetime.now(timezone.utc).isoformat()
+
+            chunks_by_file = {}
+            for chunk in (embedded_chunks if all_chunks else []):
+                if not chunk.relative_path or chunk.chunk_type == "repo_summary":
+                    continue
+                chunks_by_file.setdefault(chunk.relative_path, []).append(chunk)
+
+            for rel_path in targets:
+                abs_path = root / rel_path
+                file_hash = ""
+                try:
+                    if abs_path.is_file():
+                        with open(abs_path, "rb") as f:
+                            file_hash = hashlib.sha256(f.read()).hexdigest()
+                    else:
+                        file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+                except Exception:
+                    file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+
+                file_record = upsert_session_file(
+                    session_id=session_id,
+                    repo_path=rel_path,
+                    file_hash=file_hash,
+                    indexed_commit_sha=commit_sha or "",
+                    indexed_branch=branch_name or "",
+                    status="indexed",
+                    last_indexed_at=last_indexed_at,
+                    deleted_at=None,
+                )
+
+                file_chunks = chunks_by_file.get(rel_path, [])
+                chunk_mappings = []
+                for c in file_chunks:
+                    chunk_mappings.append({
+                        "chunk_id": c.chunk_id,
+                        "vector_id": c.chunk_id,
+                        "symbol": c.symbol_name or None,
+                        "start_line": c.start_line if c.start_line > 0 else None,
+                        "end_line": c.end_line if c.end_line > 0 else None,
+                    })
+
+                replace_session_file_chunks(file_record["id"], chunk_mappings)
+
+            if deleted_files:
+                mark_session_files_deleted(session_id, deleted_files)
+
+        except Exception as e:
+            logger.error("Failed to record incremental reindex metadata: %s", e)
+            raise RuntimeError(f"Metadata recording failed: {e}") from e
+
+    return counters
+
+
 if __name__ == "__main__":
     main()
+

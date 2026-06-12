@@ -177,20 +177,42 @@ function Shell() {
   };
 
   const handleDeleteSession = async (sessionId) => {
+    // Block delete if session is actively indexing
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session?.status === 'indexing') {
+      setUiNotice({
+        tone: 'error',
+        message: 'Cannot delete a session that is actively indexing. Cancel or wait for indexing to finish first.',
+      });
+      return;
+    }
     try {
-      await deleteSessionApi(sessionId);
+      const result = await deleteSessionApi(sessionId);
+      deleteSession(sessionId);
+      if (sessionId === activeSessionId) {
+        const remaining = sessions.filter((s) => s.id !== sessionId);
+        setActiveSessionId(remaining[0]?.id ?? null);
+      }
+      const warnings = result?.warnings || [];
+      if (warnings.length > 0) {
+        setUiNotice({
+          tone: 'warning',
+          message: `Session deleted. Warning: ${warnings.join(' ')}`,
+        });
+      } else if (result?.qdrant_collection_deleted === false) {
+        setUiNotice({
+          tone: 'warning',
+          message: 'Session deleted, but the vector index could not be removed. Check server logs.',
+        });
+      } else {
+        setUiNotice({ tone: 'info', message: 'Session deleted.' });
+      }
     } catch (err) {
       console.warn('[sessions] delete api failed:', err.message);
       setUiNotice({ tone: 'error', message: err.message || 'Failed to delete session.' });
-      return;
     }
-    deleteSession(sessionId);
-    if (sessionId === activeSessionId) {
-      const remaining = sessions.filter((s) => s.id !== sessionId);
-      setActiveSessionId(remaining[0]?.id ?? null);
-    }
-    setUiNotice({ tone: 'info', message: 'Session deleted.' });
   };
+
 
   const handleRetryIndexing = async (sessionId) => {
     try {

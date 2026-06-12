@@ -88,3 +88,27 @@ def test_api_endpoint_session_not_found():
         response = client.get("/api/v1/sessions/session-123/evaluation/latest")
         assert response.status_code == 404
         assert "Session not found" in response.json()["detail"]
+
+
+def test_api_endpoint_global_latest():
+    client = TestClient(app)
+    mock_result = {
+        "available": True,
+        "status": "PASS",
+        "hard_gate_status": "PASS",
+        "hard_gate_failures": [],
+        "warnings": [],
+        "diagnostics": [],
+        "recommendation": "All gates passed.",
+        "steps": []
+    }
+    
+    with patch("retrieval.api_service._require_auth_user", return_value={"id": "user-1"}), \
+         patch("retrieval.eval_reports.get_latest_evaluation_report", return_value=mock_result):
+        
+        response = client.get("/api/v1/evals/latest")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["status"] == "PASS"
+        assert data["hard_gate_status"] == "PASS"

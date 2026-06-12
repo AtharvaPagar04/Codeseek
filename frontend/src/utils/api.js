@@ -31,6 +31,18 @@ const readErrorDetail = async (res) => {
 
 export const formatApiError = ({ action, status, detail = '' }) => {
   const normalizedDetail = `${detail}`.trim();
+  if (action === 'Incremental indexing') {
+    if (status === 403 || normalizedDetail.toLowerCase().includes('disabled')) {
+      return 'Incremental indexing is not enabled on this server.';
+    }
+    if (status === 400 && normalizedDetail.toLowerCase().includes('plan unavailable')) {
+      return 'Incremental preview is unavailable. Use Index latest instead.';
+    }
+    if (normalizedDetail.toLowerCase().includes('already in progress') || normalizedDetail.toLowerCase().includes('already running')) {
+      return 'Indexing is already running.';
+    }
+    return 'Incremental indexing failed to start. Use Index latest as a fallback.';
+  }
   if (status === 401) {
     if (normalizedDetail.toLowerCase().includes('authentication required')) {
       return `${action} failed (${status}): auth session expired. Sign in to GitHub again.`;
@@ -611,4 +623,94 @@ export const fetchLatestEvaluationReport = async (sessionId) => {
   if (!res.ok) await throwApiError('Fetch latest evaluation report', res);
   return res.json();
 };
+
+export const fetchLatestGlobalEvaluationReport = async () => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/evals/latest`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch latest global evaluation report'
+  );
+  if (!res.ok) await throwApiError('Fetch latest global evaluation report', res);
+  return res.json();
+};
+
+
+export const fetchIndexPreview = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-preview`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch index preview'
+  );
+  if (!res.ok) await throwApiError('Fetch index preview', res);
+  return res.json();
+};
+
+
+export const indexSessionIncremental = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-incremental`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Incremental indexing'
+  );
+  if (!res.ok) await throwApiError('Incremental indexing', res);
+  return res.json();
+};
+
+export const fetchLatestIndexingJob = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-job/latest`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch latest indexing job'
+  );
+  if (!res.ok) await throwApiError('Fetch latest indexing job', res);
+  return res.json();
+};
+
+export const cancelLatestIndexingJob = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-job/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Cancel indexing job'
+  );
+  if (!res.ok) await throwApiError('Cancel indexing job', res);
+  return res.json();
+};
+
+export const fetchIndexingJobHistory = async (sessionId, limit = 20) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await withNetworkError(
+    () =>
+      fetch(
+        `${API_BASE}/api/v1/sessions/${sessionId}/indexing-jobs?${params}`,
+        {
+          credentials: 'include',
+          headers: authHeaders(),
+        }
+      ),
+    'Fetch indexing job history'
+  );
+  if (!res.ok) await throwApiError('Fetch indexing job history', res);
+  return res.json();
+};
+
+
+
+
 

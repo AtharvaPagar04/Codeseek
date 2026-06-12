@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS repo_sessions (
     refine_labels_with_llm INTEGER NOT NULL DEFAULT 0,
     current_commit_sha TEXT NOT NULL DEFAULT '',
     current_branch TEXT NOT NULL DEFAULT '',
+    indexed_branch TEXT NOT NULL DEFAULT '',
     repo_dirty INTEGER NOT NULL DEFAULT 0,
     repo_status_checked_at TEXT NOT NULL DEFAULT '',
     files_indexed INTEGER NOT NULL DEFAULT 0
@@ -162,6 +163,54 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
 
 CREATE INDEX IF NOT EXISTS idx_user_provider_credentials_user_id
     ON user_provider_credentials(user_id);
+
+CREATE TABLE IF NOT EXISTS session_files (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    indexed_commit_sha TEXT NOT NULL,
+    indexed_branch TEXT NOT NULL,
+    status TEXT NOT NULL,
+    last_indexed_at TEXT NOT NULL,
+    deleted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(session_id) REFERENCES repo_sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS session_file_chunks (
+    id TEXT PRIMARY KEY,
+    session_file_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    vector_id TEXT NOT NULL,
+    symbol TEXT,
+    start_line INTEGER,
+    end_line INTEGER,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(session_file_id) REFERENCES session_files(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS indexing_jobs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    indexing_mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_stage TEXT NOT NULL DEFAULT '',
+    files_indexed INTEGER NOT NULL DEFAULT 0,
+    chunks_generated INTEGER NOT NULL DEFAULT 0,
+    embeddings_stored INTEGER NOT NULL DEFAULT 0,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    error TEXT,
+    FOREIGN KEY(session_id) REFERENCES repo_sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_files_session_path ON session_files(session_id, repo_path);
+CREATE INDEX IF NOT EXISTS idx_session_file_chunks_file ON session_file_chunks(session_file_id);
+CREATE INDEX IF NOT EXISTS idx_indexing_jobs_session_started ON indexing_jobs(session_id, started_at);
 """
 
 
@@ -246,6 +295,10 @@ def _init_sqlite(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN current_branch TEXT NOT NULL DEFAULT ''"
             )
+        if "indexed_branch" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN indexed_branch TEXT NOT NULL DEFAULT ''"
+            )
         if "repo_dirty" not in repo_columns:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN repo_dirty INTEGER NOT NULL DEFAULT 0"
@@ -265,6 +318,14 @@ def _init_sqlite(db_path: Path) -> None:
         if "thread_id" not in message_columns:
             conn.execute(
                 "ALTER TABLE chat_messages ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''"
+            )
+        job_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(indexing_jobs)").fetchall()
+        }
+        if "cancel_requested" not in job_columns:
+            conn.execute(
+                "ALTER TABLE indexing_jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
             )
 
 
@@ -295,6 +356,10 @@ def _init_postgres(database_url: str) -> None:
             if not _postgres_has_column(cursor, "repo_sessions", "current_branch"):
                 cursor.execute(
                     "ALTER TABLE repo_sessions ADD COLUMN current_branch TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "indexed_branch"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN indexed_branch TEXT NOT NULL DEFAULT ''"
                 )
             if not _postgres_has_column(cursor, "repo_sessions", "repo_dirty"):
                 cursor.execute(
@@ -426,3 +491,404 @@ def db_cursor():
             raw_cursor.close()
     finally:
         conn.close()
+
+
+def upsert_session_file(
+    session_id: str,
+    repo_path: str,
+    file_hash: str,
+    indexed_commit_sha: str,
+    indexed_branch: str,
+    status: str,
+    last_indexed_at: str,
+    deleted_at: str | None = None,
+) -> dict:
+    """Insert or update a session file metadata record."""
+    import uuid
+    from datetime import datetime, timezone
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        row = cursor.execute(
+            "SELECT id, created_at FROM session_files WHERE session_id = ? AND repo_path = ?",
+            (session_id, repo_path),
+        ).fetchone()
+
+        if row:
+            file_id = row["id"]
+            created_at = row["created_at"]
+            cursor.execute(
+                """
+                UPDATE session_files
+                SET file_hash = ?,
+                    indexed_commit_sha = ?,
+                    indexed_branch = ?,
+                    status = ?,
+                    last_indexed_at = ?,
+                    deleted_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    file_hash,
+                    indexed_commit_sha,
+                    indexed_branch,
+                    status,
+                    last_indexed_at,
+                    deleted_at,
+                    now_str,
+                    file_id,
+                ),
+            )
+        else:
+            file_id = uuid.uuid4().hex
+            created_at = now_str
+            cursor.execute(
+                """
+                INSERT INTO session_files (
+                    id, session_id, repo_path, file_hash, indexed_commit_sha,
+                    indexed_branch, status, last_indexed_at, deleted_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_id,
+                    session_id,
+                    repo_path,
+                    file_hash,
+                    indexed_commit_sha,
+                    indexed_branch,
+                    status,
+                    last_indexed_at,
+                    deleted_at,
+                    created_at,
+                    now_str,
+                ),
+            )
+
+    return {
+        "id": file_id,
+        "session_id": session_id,
+        "repo_path": repo_path,
+        "file_hash": file_hash,
+        "indexed_commit_sha": indexed_commit_sha,
+        "indexed_branch": indexed_branch,
+        "status": status,
+        "last_indexed_at": last_indexed_at,
+        "deleted_at": deleted_at,
+        "created_at": created_at,
+        "updated_at": now_str,
+    }
+
+
+def replace_session_file_chunks(
+    session_file_id: str,
+    chunks: list[dict],
+) -> None:
+    """Replace all chunk mappings associated with a specific session file."""
+    import uuid
+    from datetime import datetime, timezone
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            "DELETE FROM session_file_chunks WHERE session_file_id = ?",
+            (session_file_id,),
+        )
+        for chunk in chunks:
+            chunk_row_id = uuid.uuid4().hex
+            cursor.execute(
+                """
+                INSERT INTO session_file_chunks (
+                    id, session_file_id, chunk_id, vector_id, symbol, start_line, end_line, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk_row_id,
+                    session_file_id,
+                    chunk["chunk_id"],
+                    chunk["vector_id"],
+                    chunk.get("symbol"),
+                    chunk.get("start_line"),
+                    chunk.get("end_line"),
+                    now_str,
+                ),
+            )
+
+
+def list_session_files(
+    session_id: str,
+    include_deleted: bool = False,
+) -> list[dict]:
+    """Retrieve all indexed files and their chunk mappings for a session."""
+    with db_cursor() as (conn, cursor):
+        if include_deleted:
+            rows = cursor.execute(
+                "SELECT * FROM session_files WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        else:
+            rows = cursor.execute(
+                "SELECT * FROM session_files WHERE session_id = ? AND deleted_at IS NULL",
+                (session_id,),
+            ).fetchall()
+
+        files = []
+        for r in rows:
+            file_id = r["id"]
+            chunk_rows = cursor.execute(
+                """
+                SELECT chunk_id, vector_id, symbol, start_line, end_line, created_at
+                FROM session_file_chunks
+                WHERE session_file_id = ?
+                """,
+                (file_id,),
+            ).fetchall()
+
+            chunks = [
+                {
+                    "chunk_id": cr["chunk_id"],
+                    "vector_id": cr["vector_id"],
+                    "symbol": cr["symbol"],
+                    "start_line": cr["start_line"],
+                    "end_line": cr["end_line"],
+                    "created_at": cr["created_at"],
+                }
+                for cr in chunk_rows
+            ]
+
+            files.append(
+                {
+                    "id": r["id"],
+                    "session_id": r["session_id"],
+                    "repo_path": r["repo_path"],
+                    "file_hash": r["file_hash"],
+                    "indexed_commit_sha": r["indexed_commit_sha"],
+                    "indexed_branch": r["indexed_branch"],
+                    "status": r["status"],
+                    "last_indexed_at": r["last_indexed_at"],
+                    "deleted_at": r["deleted_at"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                    "chunks": chunks,
+                }
+            )
+    return files
+
+
+def mark_session_files_deleted(
+    session_id: str,
+    repo_paths: list[str],
+) -> None:
+    """Soft delete specific files by setting their deleted_at timestamp."""
+    if not repo_paths:
+        return
+    from datetime import datetime, timezone
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        for path in repo_paths:
+            cursor.execute(
+                """
+                UPDATE session_files
+                SET deleted_at = ?,
+                    status = 'deleted',
+                    updated_at = ?
+                WHERE session_id = ? AND repo_path = ?
+                """,
+                (now_str, now_str, session_id, path),
+            )
+
+
+def create_indexing_job(
+    session_id: str,
+    indexing_mode: str,
+    status: str = "queued",
+) -> dict:
+    import uuid
+    from datetime import datetime, timezone
+    job_id = f"job-{uuid.uuid4()}"
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO indexing_jobs (
+                id, session_id, indexing_mode, status, current_stage,
+                files_indexed, chunks_generated, embeddings_stored,
+                started_at, updated_at, completed_at, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                session_id,
+                indexing_mode,
+                status,
+                "",
+                0,
+                0,
+                0,
+                now_str,
+                now_str,
+                None,
+                None,
+            ),
+        )
+    return {
+        "id": job_id,
+        "session_id": session_id,
+        "indexing_mode": indexing_mode,
+        "status": status,
+        "current_stage": "",
+        "files_indexed": 0,
+        "chunks_generated": 0,
+        "embeddings_stored": 0,
+        "started_at": now_str,
+        "updated_at": now_str,
+        "completed_at": None,
+        "error": None,
+    }
+
+
+def update_indexing_job(
+    job_id: str,
+    status: str | None = None,
+    current_stage: str | None = None,
+    files_indexed: int | None = None,
+    chunks_generated: int | None = None,
+    embeddings_stored: int | None = None,
+    error: str | None = None,
+    completed_at: str | None = None,
+) -> None:
+    from datetime import datetime, timezone
+    now_str = datetime.now(timezone.utc).isoformat()
+    updates = []
+    params = []
+    
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if current_stage is not None:
+        updates.append("current_stage = ?")
+        params.append(current_stage)
+    if files_indexed is not None:
+        updates.append("files_indexed = ?")
+        params.append(files_indexed)
+    if chunks_generated is not None:
+        updates.append("chunks_generated = ?")
+        params.append(chunks_generated)
+    if embeddings_stored is not None:
+        updates.append("embeddings_stored = ?")
+        params.append(embeddings_stored)
+    if error is not None:
+        from retrieval.observability import sanitize_credentials_in_string
+        updates.append("error = ?")
+        params.append(sanitize_credentials_in_string(error))
+    if completed_at is not None:
+        updates.append("completed_at = ?")
+        params.append(completed_at)
+        
+    if not updates:
+        return
+        
+    updates.append("updated_at = ?")
+    params.append(now_str)
+    params.append(job_id)
+    
+    set_clause = ", ".join(updates)
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            f"UPDATE indexing_jobs SET {set_clause} WHERE id = ?",
+            tuple(params)
+        )
+
+
+def get_latest_indexing_job(session_id: str) -> dict | None:
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            SELECT * FROM indexing_jobs
+            WHERE session_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+
+def request_indexing_job_cancel(job_id: str) -> bool:
+    """Mark cancel_requested=1 for the given job. Returns True if the row existed."""
+    from datetime import datetime, timezone
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            "UPDATE indexing_jobs SET cancel_requested = 1, updated_at = ? WHERE id = ?",
+            (now_str, job_id),
+        )
+        return cursor.rowcount > 0
+
+
+def is_indexing_job_cancel_requested(job_id: str) -> bool:
+    """Return True if cancel_requested=1 for the given job."""
+    with db_cursor() as (conn, cursor):
+        row = cursor.execute(
+            "SELECT cancel_requested FROM indexing_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return False
+        return bool(row["cancel_requested"])
+
+
+def mark_indexing_job_cancelled(job_id: str, message: str = "Cancellation requested by user.") -> None:
+    """Mark a job as cancelled with a terminal status."""
+    from datetime import datetime, timezone
+    from retrieval.observability import sanitize_credentials_in_string
+    now_str = datetime.now(timezone.utc).isoformat()
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            UPDATE indexing_jobs
+            SET status = 'cancelled',
+                error = ?,
+                completed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (sanitize_credentials_in_string(message), now_str, now_str, job_id),
+        )
+
+
+def list_indexing_jobs(session_id: str, limit: int = 20) -> list[dict]:
+    """Return the most recent indexing jobs for a session, newest first."""
+    if limit < 1:
+        limit = 1
+    if limit > 200:
+        limit = 200
+    with db_cursor() as (conn, cursor):
+        rows = cursor.execute(
+            """
+            SELECT * FROM indexing_jobs
+            WHERE session_id = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+        return [
+            {
+                "job_id": r["id"],
+                "session_id": r["session_id"],
+                "indexing_mode": r["indexing_mode"],
+                "status": r["status"],
+                "current_stage": r["current_stage"],
+                "files_indexed": r["files_indexed"],
+                "chunks_generated": r["chunks_generated"],
+                "embeddings_stored": r["embeddings_stored"],
+                "cancel_requested": bool(r["cancel_requested"]),
+                "started_at": r["started_at"],
+                "updated_at": r["updated_at"],
+                "completed_at": r["completed_at"],
+                "error": r["error"],
+            }
+            for r in rows
+        ]

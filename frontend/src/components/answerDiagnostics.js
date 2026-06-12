@@ -1,7 +1,22 @@
 const MAX_SOURCE_ITEMS = 6;
 
+export function sanitizeCredentialsInString(text) {
+  if (typeof text !== 'string') {
+    return text ? String(text) : '';
+  }
+  let result = text.replace(/bearer\s+[a-z0-9_\-\.]+/gi, 'Bearer [redacted]');
+  result = result.replace(/([a-z0-9+.-]+:\/\/)([^@/]+)(@)/gi, (match, scheme, creds, at) => {
+    if (creds.includes(':')) {
+      return `${scheme}[redacted]:[redacted]${at}`;
+    }
+    return `${scheme}[redacted]${at}`;
+  });
+  return result;
+}
+
 function safeString(value) {
-  return typeof value === 'string' ? value.trim() : `${value ?? ''}`.trim();
+  const str = typeof value === 'string' ? value.trim() : `${value ?? ''}`.trim();
+  return sanitizeCredentialsInString(str);
 }
 
 function formatLineRange(source) {
@@ -73,7 +88,7 @@ function compactSourceList(items) {
     const summary = summarizeDiagnosticSource(item);
     if (!summary || seen.has(summary)) continue;
     seen.add(summary);
-    compacted.push(summary);
+    compacted.push(sanitizeCredentialsInString(summary));
     if (compacted.length >= MAX_SOURCE_ITEMS) break;
   }
   return compacted;
@@ -83,34 +98,50 @@ export function buildAnswerDiagnosticsRows(diagnostics) {
   if (!diagnostics || typeof diagnostics !== 'object') return [];
 
   const rows = [];
-  const addTextRow = (label, value) => {
+  const addTextRow = (label, value, section = 'General', isAdvanced = false) => {
     const text = safeString(value);
     if (!text) return;
-    rows.push({ label, kind: 'text', value: text });
+    rows.push({ label, kind: 'text', value: text, section, isAdvanced });
   };
-  const addListRow = (label, items) => {
+  const addListRow = (label, items, section = 'General', isAdvanced = false) => {
     const values = compactSourceList(items);
     if (values.length === 0) return;
-    rows.push({ label, kind: 'list', value: values });
+    rows.push({ label, kind: 'list', value: values, section, isAdvanced });
   };
 
-  addTextRow('Intent', diagnostics.intent);
-  addTextRow('Primary intent', diagnostics.primary_intent);
-  addTextRow('Response mode', diagnostics.response_mode);
+  addTextRow('Intent', diagnostics.intent, 'Intent', false);
+  addTextRow('Primary intent', diagnostics.primary_intent, 'Intent', true);
+  addTextRow('Response mode', diagnostics.response_mode, 'Intent', true);
   addTextRow(
     'Model',
-    [diagnostics.provider, diagnostics.model].filter(Boolean).join(' / ')
+    [diagnostics.provider, diagnostics.model].filter(Boolean).join(' / '),
+    'Model',
+    false
   );
-  addTextRow('Routing mode', diagnostics.routing_mode);
-  addTextRow('Context tokens', diagnostics.context_tokens);
-  addTextRow('Evidence confidence', summarizeEvidenceConfidence(diagnostics.evidence_confidence));
-  addTextRow('Source filter', summarizeSourceFilter(diagnostics.source_filter));
-  addTextRow('Session status', diagnostics.session_status);
-  addTextRow('Session error', diagnostics.session_error);
-  addTextRow('Validation', summarizeValidation(diagnostics.validation));
-  addListRow('Selected sources', diagnostics.selected_sources);
-  addListRow('Reasoning sources', diagnostics.reasoning_sources);
-  addListRow('Rendered sources', diagnostics.rendered_sources);
+  addTextRow('Routing mode', diagnostics.routing_mode, 'Intent', true);
+  addTextRow('Context tokens', diagnostics.context_tokens, 'Model', true);
+  addTextRow('Evidence confidence', summarizeEvidenceConfidence(diagnostics.evidence_confidence), 'Sources', false);
+  addTextRow('Source filter', summarizeSourceFilter(diagnostics.source_filter), 'Sources', true);
+  addTextRow('Session status', diagnostics.session_status, 'Freshness', false);
+  addTextRow('Session error', diagnostics.session_error, 'Freshness', false);
+  addTextRow('Validation', summarizeValidation(diagnostics.validation), 'Validation', false);
+  addListRow('Selected sources', diagnostics.selected_sources, 'Sources', true);
+  addListRow('Reasoning sources', diagnostics.reasoning_sources, 'Sources', true);
+  addListRow('Rendered sources', diagnostics.rendered_sources, 'Sources', true);
+
+  if (diagnostics.freshness) {
+    const f = diagnostics.freshness;
+    addTextRow('Freshness status', f.status || f.freshness_status, 'Freshness', false);
+    addTextRow('Indexed branch', f.indexed_branch, 'Freshness', true);
+    addTextRow('Current branch', f.current_branch, 'Freshness', true);
+    addTextRow('Branch changed', f.branch_changed !== undefined ? (f.branch_changed ? 'Yes' : 'No') : '', 'Freshness', true);
+    addTextRow('Indexed commit', f.indexed_commit_sha, 'Freshness', true);
+    addTextRow('Current commit', f.current_commit_sha, 'Freshness', true);
+    addTextRow('Dirty worktree', f.dirty_worktree !== undefined ? (f.dirty_worktree ? 'Yes' : 'No') : '', 'Freshness', true);
+    if (f.checked_at || f.last_freshness_check_at) {
+      addTextRow('Last checked', f.checked_at || f.last_freshness_check_at, 'Freshness', true);
+    }
+  }
 
   return rows;
 }
