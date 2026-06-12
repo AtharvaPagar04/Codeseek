@@ -1405,49 +1405,43 @@ function IndexPreviewPanel({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-[10px]">
                   {/* Changed list */}
                   {preview.changed_files && preview.changed_files.length > 0 && (
-                    <div>
+                    <div className="space-y-1">
                       <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
                         Modified Files ({preview.changed_files.length})
                       </div>
-                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
-                        {preview.changed_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            ~ {file}
-                          </div>
-                        ))}
-                      </div>
+                      {preview.changed_files.map((file) => (
+                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                          ~ {file}
+                        </div>
+                      ))}
                     </div>
                   )}
 
                   {/* Added list */}
                   {preview.added_files && preview.added_files.length > 0 && (
-                    <div>
+                    <div className="space-y-1">
                       <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
                         Added / Untracked Files ({preview.added_files.length})
                       </div>
-                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
-                        {preview.added_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            + {file}
-                          </div>
-                        ))}
-                      </div>
+                      {preview.added_files.map((file) => (
+                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                          + {file}
+                        </div>
+                      ))}
                     </div>
                   )}
 
                   {/* Deleted list */}
                   {preview.deleted_files && preview.deleted_files.length > 0 && (
-                    <div>
+                    <div className="space-y-1">
                       <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
                         Deleted Files ({preview.deleted_files.length})
                       </div>
-                      <div className="bg-surface-2 rounded-lg border border-border p-2 space-y-1">
-                        {preview.deleted_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            - {file}
-                          </div>
-                        ))}
-                      </div>
+                      {preview.deleted_files.map((file) => (
+                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                          - {file}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
