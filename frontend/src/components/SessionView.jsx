@@ -625,7 +625,6 @@ export default function SessionView({
                 canIndexLatest={freshness?.can_index_latest}
                 isReindexing={isReindexing}
                 sessionFreshness={session.freshness}
-                onIndexLatest={() => handleIndexLatest()}
               />
             </div>
           )}
@@ -1272,8 +1271,7 @@ function IndexPreviewPanel({
   freshnessStatus,
   canIndexLatest,
   isReindexing,
-  sessionFreshness,
-  onIndexLatest
+  sessionFreshness
 }) {
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -1349,10 +1347,8 @@ function IndexPreviewPanel({
     preview?.can_incremental_reindex !== false &&
     !isIncrementalDisabled;
 
-  const isIndexLatestEnabled = !isSessionIndexing && canIndexLatest !== false && !isReindexing && !isTriggering;
-
   return (
-    <div className="w-full rounded-xl border border-border bg-surface-3 p-4 flex flex-col gap-3 font-mono text-xs select-none">
+    <div className="w-full flex flex-col gap-3 font-mono text-xs select-none">
       {loading && (
         <div className="flex items-center justify-center py-6 text-text-muted">
           <span className="animate-pulse">Loading preview data...</span>
@@ -1366,152 +1362,107 @@ function IndexPreviewPanel({
       )}
 
       {!loading && !error && preview && (
-        <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 border-b border-border pb-3 text-[11px] text-text-muted">
-            <div className="col-span-2 sm:col-span-1">
-              <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Branch info</div>
-              <span className="text-text-primary font-semibold truncate block" title={`Indexed: ${preview.indexed_branch || 'N/A'} | Current: ${preview.current_branch || 'N/A'}`}>
-                {preview.branch_changed ? (
-                  <span className="text-warning font-bold">{preview.indexed_branch || 'N/A'} ➔ {preview.current_branch || 'N/A'}</span>
-                ) : (
-                  preview.current_branch || 'N/A'
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Left Area: Files List (takes 2 cols on md) */}
+          <div className="md:col-span-2">
+            {(preview.changed_files?.length > 0 || preview.added_files?.length > 0 || preview.deleted_files?.length > 0) ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-[10px]">
+                {/* Changed list */}
+                {preview.changed_files && preview.changed_files.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
+                      Modified Files ({preview.changed_files.length})
+                    </div>
+                    {preview.changed_files.map((file) => (
+                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                        ~ {file}
+                      </div>
+                    ))}
+                  </div>
                 )}
-              </span>
-            </div>
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Estimated Updates</div>
-              <span className="text-text-primary font-bold">
-                {preview.estimated_files_to_update ?? 0}
-              </span>
-            </div>
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Changed files</div>
-              <span className={`font-bold ${preview.changed_files?.length > 0 ? 'text-warning' : 'text-text-primary'}`}>
-                {preview.changed_files?.length ?? 0}
-              </span>
-            </div>
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">New / Untracked</div>
-              <span className={`font-bold ${preview.added_files?.length > 0 ? 'text-online' : 'text-text-primary'}`}>
-                {preview.added_files?.length ?? 0}
-              </span>
-            </div>
+
+                {/* Added list */}
+                {preview.added_files && preview.added_files.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
+                      Added / Untracked Files ({preview.added_files.length})
+                    </div>
+                    {preview.added_files.map((file) => (
+                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                        + {file}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Deleted list */}
+                {preview.deleted_files && preview.deleted_files.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
+                      Deleted Files ({preview.deleted_files.length})
+                    </div>
+                    {preview.deleted_files.map((file) => (
+                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
+                        - {file}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full min-h-[60px] text-text-muted text-[11px] italic">
+                No pending index changes detected. Your index is up to date.
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-3">
-            {/* Left Area: Files List (takes 2 cols on md) */}
-            <div className="md:col-span-2">
-              {(preview.changed_files?.length > 0 || preview.added_files?.length > 0 || preview.deleted_files?.length > 0) ? (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-[10px]">
-                  {/* Changed list */}
-                  {preview.changed_files && preview.changed_files.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
-                        Modified Files ({preview.changed_files.length})
-                      </div>
-                      {preview.changed_files.map((file) => (
-                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                          ~ {file}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+          {/* Right Area: Buttons & Actions (takes 1 col on md) */}
+          <div className="flex flex-col justify-between gap-3 md:border-l border-border md:pl-6">
+            <div className="flex flex-col gap-2">
+              <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Actions</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleIndexIncremental}
+                  disabled={!isButtonEnabled || isTriggering}
+                  className={`px-2.5 py-1.5 rounded-lg font-mono text-[9px] uppercase tracking-wider font-semibold transition-all ${
+                    isButtonEnabled && !isTriggering
+                      ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer'
+                      : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed'
+                  }`}
+                >
+                  {isTriggering ? 'Triggering...' : 'Index changed files'}
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="bg-warning/10 border border-warning/30 text-warning px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase">
+                  Experimental
+                </span>
+                <span className="text-[9px] text-text-muted italic">
+                  Incremental Flow (V1)
+                </span>
+              </div>
+            </div>
 
-                  {/* Added list */}
-                  {preview.added_files && preview.added_files.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
-                        Added / Untracked Files ({preview.added_files.length})
-                      </div>
-                      {preview.added_files.map((file) => (
-                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                          + {file}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Deleted list */}
-                  {preview.deleted_files && preview.deleted_files.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
-                        Deleted Files ({preview.deleted_files.length})
-                      </div>
-                      {preview.deleted_files.map((file) => (
-                        <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                          - {file}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-full min-h-[60px] text-text-muted text-[11px] italic">
-                  No pending index changes detected. Your index is up to date.
+            <div className="space-y-1.5">
+              {incrementalError && (
+                <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2 mt-1">
+                  {incrementalError}
                 </div>
               )}
-            </div>
 
-            {/* Right Area: Buttons & Actions (takes 1 col on md) */}
-            <div className="flex flex-col justify-between gap-3 md:border-l border-border md:pl-6">
-              <div className="flex flex-col gap-2">
-                <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Actions</div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={onIndexLatest}
-                    disabled={!isIndexLatestEnabled}
-                    className={`px-2.5 py-1.5 rounded-lg font-mono text-[9px] uppercase tracking-wider font-semibold transition-all ${
-                      isIndexLatestEnabled
-                        ? 'bg-online/20 border border-online/40 hover:bg-online/30 text-online shadow-md shadow-online/5 cursor-pointer'
-                        : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed'
-                    }`}
-                  >
-                    Index latest
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleIndexIncremental}
-                    disabled={!isButtonEnabled || isTriggering}
-                    className={`px-2.5 py-1.5 rounded-lg font-mono text-[9px] uppercase tracking-wider font-semibold transition-all ${
-                      isButtonEnabled && !isTriggering
-                        ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer'
-                        : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed'
-                    }`}
-                  >
-                    {isTriggering ? 'Triggering...' : 'Index changed files'}
-                  </button>
+              {incrementalSuccess && (
+                <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2 mt-1">
+                  {incrementalSuccess}
                 </div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="bg-warning/10 border border-warning/30 text-warning px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase">
-                    Experimental
-                  </span>
-                  <span className="text-[9px] text-text-muted italic">
-                    Incremental Flow (V1)
-                  </span>
-                </div>
-              </div>
+              )}
 
-              <div className="space-y-1.5">
-                {incrementalError && (
-                  <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2 mt-1">
-                    {incrementalError}
-                  </div>
-                )}
-
-                {incrementalSuccess && (
-                  <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2 mt-1">
-                    {incrementalSuccess}
-                  </div>
-                )}
-
-                <div className="text-[9px] text-text-muted leading-relaxed">
-                  * Use <strong className="text-text-secondary">Index changed files</strong> for partial update, or <strong className="text-text-secondary">Index latest</strong> for a full rebuild.
-                </div>
+              <div className="text-[9px] text-text-muted leading-relaxed">
+                * Use <strong className="text-text-secondary">Index changed files</strong> for partial updates, or <strong className="text-text-secondary">Index latest</strong> above for a full clean rebuild.
               </div>
             </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
