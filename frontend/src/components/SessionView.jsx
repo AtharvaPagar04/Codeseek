@@ -855,6 +855,7 @@ export default function SessionView({
               canIndexLatest={freshness?.can_index_latest}
               isReindexing={isReindexing}
               sessionFreshness={session.freshness}
+              onIndexLatest={() => handleIndexLatest()}
             />
           )}
         </div>
@@ -1473,7 +1474,8 @@ function IndexPreviewPanel({
   freshnessStatus,
   canIndexLatest,
   isReindexing,
-  sessionFreshness
+  sessionFreshness,
+  onIndexLatest
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1565,6 +1567,8 @@ function IndexPreviewPanel({
     canIndex &&
     preview?.can_incremental_reindex !== false &&
     !isIncrementalDisabled;
+
+  const isIndexLatestEnabled = !isSessionIndexing && canIndexLatest !== false && !isReindexing && !isTriggering;
 
   return (
     <div ref={panelRef} className="w-full max-w-xl mb-4 font-mono text-xs select-none relative">
@@ -1712,6 +1716,18 @@ function IndexPreviewPanel({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      onClick={onIndexLatest}
+                      disabled={!isIndexLatestEnabled}
+                      className={`px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider font-semibold transition-all ${
+                        isIndexLatestEnabled
+                          ? 'bg-online/20 border border-online/40 hover:bg-online/30 text-online shadow-md shadow-online/5 cursor-pointer'
+                          : 'bg-surface-3 border border-border text-text-muted cursor-not-allowed'
+                      }`}
+                    >
+                      Index latest
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleIndexIncremental}
                       disabled={!isButtonEnabled || isTriggering}
                       className={`px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider font-semibold transition-all ${
@@ -1744,7 +1760,7 @@ function IndexPreviewPanel({
                 )}
 
                 <div className="text-[9px] text-text-muted leading-relaxed">
-                  * Triggers partial indexing of added/modified/deleted files only. Use <strong className="text-text-secondary">Index latest</strong> above for a full clean rebuild.
+                  * Triggers partial indexing of added/modified/deleted files only. Use <strong className="text-text-secondary">Index latest</strong> for a full clean rebuild.
                 </div>
               </div>
             </>
