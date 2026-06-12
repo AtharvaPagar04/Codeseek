@@ -1262,6 +1262,63 @@ function InfoIcon() {
   );
 }
 
+function FileGroupSection({
+  title,
+  files,
+  colorClass,
+  isExpanded,
+  onToggleExpand,
+  showAll,
+  onToggleShowAll,
+  prefix,
+}) {
+  if (!files || files.length === 0) return null;
+  const visibleFiles = showAll ? files : files.slice(0, 5);
+  const hasMore = files.length > 5;
+
+  return (
+    <div className="border border-border rounded-lg bg-surface-1 overflow-hidden mb-2">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className="w-full flex items-center justify-between p-2.5 bg-surface-2 hover:bg-surface-3 transition-colors text-left"
+      >
+        <span className={`font-semibold tracking-wide uppercase text-[9px] ${colorClass}`}>
+          {title} ({files.length})
+        </span>
+        <svg
+          className={`w-3.5 h-3.5 text-text-muted transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+
+      {isExpanded && (
+        <div className="p-2.5 space-y-1 text-[10px] divide-y divide-border/20 border-t border-border/50 max-h-[250px] overflow-y-auto bg-surface-1">
+          {visibleFiles.map((file) => (
+            <div key={file} className="py-1 flex items-center justify-between text-text-secondary select-text font-mono truncate" title={file}>
+              <span className="truncate">{prefix} {file}</span>
+            </div>
+          ))}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={onToggleShowAll}
+              className="w-full text-center text-text-secondary hover:text-text-primary py-1.5 mt-1 border-t border-dashed border-border/30 text-[9px] uppercase tracking-wider font-semibold transition-colors"
+            >
+              {showAll ? 'Show less' : `Show ${files.length - 5} more`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IndexPreviewPanel({
   sessionId,
   sessionStatus,
@@ -1281,6 +1338,16 @@ function IndexPreviewPanel({
   const [incrementalError, setIncrementalError] = useState(null);
   const [incrementalSuccess, setIncrementalSuccess] = useState(null);
   const [isTriggering, setIsTriggering] = useState(false);
+
+  const [showAllModified, setShowAllModified] = useState(false);
+  const [showAllAdded, setShowAllAdded] = useState(false);
+  const [showAllDeleted, setShowAllDeleted] = useState(false);
+  const [showAllUnchanged, setShowAllUnchanged] = useState(false);
+
+  const [isModifiedExpanded, setIsModifiedExpanded] = useState(true);
+  const [isAddedExpanded, setIsAddedExpanded] = useState(true);
+  const [isDeletedExpanded, setIsDeletedExpanded] = useState(true);
+  const [isUnchangedExpanded, setIsUnchangedExpanded] = useState(false);
 
   useEffect(() => {
     async function loadPreview() {
@@ -1339,13 +1406,40 @@ function IndexPreviewPanel({
   const isSessionIndexing = sessionStatus === 'indexing' || freshnessStatus === 'indexing' || isReindexing;
   const canIndex = canIndexLatest !== false;
 
+  const modifiedFiles = preview?.changed_files || [];
+  const addedFiles = preview?.added_files || [];
+  const deletedFiles = preview?.deleted_files || [];
+  const unchangedFiles = preview?.unchanged_files || [];
+
+  const isBranchChanged = !!preview?.branch_changed;
+  const isNoChanges = (preview?.estimated_files_to_update || 0) === 0;
+  const isMetadataUnavailable = preview?.freshness_status === 'unknown' && !preview?.indexed_commit_sha;
+  const isFeatureDisabled = isIncrementalDisabled || preview?.can_incremental_reindex === false;
+
   const isButtonEnabled =
     preview &&
-    preview.estimated_files_to_update > 0 &&
+    !isNoChanges &&
     !isSessionIndexing &&
     canIndex &&
-    preview?.can_incremental_reindex !== false &&
-    !isIncrementalDisabled;
+    !isFeatureDisabled &&
+    !isBranchChanged;
+
+  let blockMessage = null;
+  let blockType = '';
+
+  if (isBranchChanged) {
+    blockMessage = "Incremental indexing is blocked because the active branch differs from the indexed branch. Use Index latest to switch branches.";
+    blockType = 'error';
+  } else if (isFeatureDisabled) {
+    blockMessage = "Incremental indexing is not enabled on this server.";
+    blockType = 'error';
+  } else if (isMetadataUnavailable) {
+    blockMessage = "Incremental metadata is unavailable. Use Index latest first.";
+    blockType = 'warning';
+  } else if (isNoChanges) {
+    blockMessage = "No changed files detected.";
+    blockType = 'info';
+  }
 
   return (
     <div className="w-full flex flex-col gap-3 font-mono text-xs select-none">
@@ -1362,103 +1456,149 @@ function IndexPreviewPanel({
       )}
 
       {!loading && !error && preview && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Left Area: Files List (takes 2 cols on md) */}
-          <div className="md:col-span-2">
-            {(preview.changed_files?.length > 0 || preview.added_files?.length > 0 || preview.deleted_files?.length > 0) ? (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-[10px]">
-                {/* Changed list */}
-                {preview.changed_files && preview.changed_files.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
-                      Modified Files ({preview.changed_files.length})
-                    </div>
-                    {preview.changed_files.map((file) => (
-                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                        ~ {file}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Added list */}
-                {preview.added_files && preview.added_files.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
-                      Added / Untracked Files ({preview.added_files.length})
-                    </div>
-                    {preview.added_files.map((file) => (
-                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                        + {file}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Deleted list */}
-                {preview.deleted_files && preview.deleted_files.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
-                      Deleted Files ({preview.deleted_files.length})
-                    </div>
-                    {preview.deleted_files.map((file) => (
-                      <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                        - {file}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-full min-h-[60px] text-text-muted text-[11px] italic">
-                No pending index changes detected. Your index is up to date.
-              </div>
-            )}
+        <div className="flex flex-col gap-4">
+          {/* Summary Cards Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Modified</span>
+              <span className="text-sm font-semibold text-warning">{modifiedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Added</span>
+              <span className="text-sm font-semibold text-online">{addedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Deleted</span>
+              <span className="text-sm font-semibold text-offline">{deletedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Unchanged</span>
+              <span className="text-sm font-semibold text-text-secondary">{unchangedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center col-span-2 sm:col-span-1">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Total Updates</span>
+              <span className="text-sm font-semibold text-text-primary">{preview.estimated_files_to_update || 0}</span>
+            </div>
           </div>
 
-          {/* Right Area: Buttons & Actions (takes 1 col on md) */}
-          <div className="flex flex-col justify-between gap-3 md:border-l border-border md:pl-6">
-            <div className="flex flex-col gap-2">
-              <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Actions</div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleIndexIncremental}
-                  disabled={!isButtonEnabled || isTriggering}
-                  className={`px-2.5 py-1.5 rounded-lg font-mono text-[9px] uppercase tracking-wider font-semibold transition-all ${
-                    isButtonEnabled && !isTriggering
-                      ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer'
-                      : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed'
-                  }`}
-                >
-                  {isTriggering ? 'Triggering...' : 'Index changed files'}
-                </button>
-              </div>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="bg-warning/10 border border-warning/30 text-warning px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase">
-                  Experimental
-                </span>
-                <span className="text-[9px] text-text-muted italic">
-                  Incremental Flow (V1)
-                </span>
-              </div>
+          {/* Block/Friendly message box if present */}
+          {blockMessage && (
+            <div className={`p-3 rounded-lg flex items-start gap-2 border text-[10px] ${
+              blockType === 'error'
+                ? 'bg-offline/10 border-offline/20 text-offline'
+                : blockType === 'warning'
+                ? 'bg-warning/10 border-warning/20 text-warning'
+                : 'bg-surface-2 border-border text-text-muted'
+            }`}>
+              <InfoIcon />
+              <span>{blockMessage}</span>
+            </div>
+          )}
+
+          {/* Main layout: left side files list, right side actions */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Left Area: Files List (takes 2 cols on md) */}
+            <div className="md:col-span-2 flex flex-col gap-2">
+              <FileGroupSection
+                title="Modified Files"
+                files={modifiedFiles}
+                colorClass="text-warning"
+                isExpanded={isModifiedExpanded}
+                onToggleExpand={() => setIsModifiedExpanded(!isModifiedExpanded)}
+                showAll={showAllModified}
+                onToggleShowAll={() => setShowAllModified(!showAllModified)}
+                prefix="~"
+              />
+              <FileGroupSection
+                title="Added Files"
+                files={addedFiles}
+                colorClass="text-online"
+                isExpanded={isAddedExpanded}
+                onToggleExpand={() => setIsAddedExpanded(!isAddedExpanded)}
+                showAll={showAllAdded}
+                onToggleShowAll={() => setShowAllAdded(!showAllAdded)}
+                prefix="+"
+              />
+              <FileGroupSection
+                title="Deleted Files"
+                files={deletedFiles}
+                colorClass="text-offline"
+                isExpanded={isDeletedExpanded}
+                onToggleExpand={() => setIsDeletedExpanded(!isDeletedExpanded)}
+                showAll={showAllDeleted}
+                onToggleShowAll={() => setShowAllDeleted(!showAllDeleted)}
+                prefix="-"
+              />
+              <FileGroupSection
+                title="Unchanged Files"
+                files={unchangedFiles}
+                colorClass="text-text-muted"
+                isExpanded={isUnchangedExpanded}
+                onToggleExpand={() => setIsUnchangedExpanded(!isUnchangedExpanded)}
+                showAll={showAllUnchanged}
+                onToggleShowAll={() => setShowAllUnchanged(!showAllUnchanged)}
+                prefix="•"
+              />
             </div>
 
-            <div className="space-y-1.5">
-              {incrementalError && (
-                <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2 mt-1">
-                  {incrementalError}
-                </div>
-              )}
+            {/* Right Area: Buttons & Actions (takes 1 col on md) */}
+            <div className="flex flex-col justify-between gap-4 md:border-l border-border md:pl-6">
+              <div className="flex flex-col gap-3">
+                <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Actions</div>
+                
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleIndexIncremental}
+                    disabled={!isButtonEnabled || isTriggering}
+                    className={`px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                      isButtonEnabled && !isTriggering
+                        ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer font-bold'
+                        : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    {isTriggering ? 'Triggering...' : 'Index changed files'}
+                  </button>
 
-              {incrementalSuccess && (
-                <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2 mt-1">
-                  {incrementalSuccess}
+                  <div className="flex items-center gap-1.5">
+                    <span className="bg-warning/10 border border-warning/30 text-warning px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase">
+                      Experimental
+                    </span>
+                    <span className="text-[9px] text-text-muted italic">
+                      Incremental Flow (V1)
+                    </span>
+                  </div>
                 </div>
-              )}
 
-              <div className="text-[9px] text-text-muted leading-relaxed">
-                * Use <strong className="text-text-secondary">Index changed files</strong> for partial updates, or <strong className="text-text-secondary">Index latest</strong> above for a full clean rebuild.
+                {/* Safety Note */}
+                <div className="flex items-start gap-1.5 bg-surface-2 p-2.5 rounded-lg border border-border text-[9px] text-text-muted leading-relaxed">
+                  <InfoIcon />
+                  <span>Unchanged files are preserved. Only added, modified, and deleted files are processed.</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {/* Action Meanings */}
+                <div className="bg-surface-2/50 border border-border/50 rounded-lg p-2.5 space-y-1.5 text-[9px] text-text-muted">
+                  <div>
+                    <strong className="text-text-primary">Index changed files:</strong> updates only added, modified, and deleted files.
+                  </div>
+                  <div>
+                    <strong className="text-text-primary">Index latest:</strong> full clean reindex (fallback).
+                  </div>
+                </div>
+
+                {incrementalError && (
+                  <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2 text-[10px]">
+                    {incrementalError}
+                  </div>
+                )}
+
+                {incrementalSuccess && (
+                  <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2 text-[10px]">
+                    {incrementalSuccess}
+                  </div>
+                )}
               </div>
             </div>
           </div>
