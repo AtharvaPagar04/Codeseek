@@ -1524,6 +1524,20 @@ function IndexPreviewPanel({
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState(null);
 
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (isOpen && panelRef.current && !panelRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
   const [isIncrementalDisabled, setIsIncrementalDisabled] = useState(false);
   const [incrementalError, setIncrementalError] = useState(null);
   const [incrementalSuccess, setIncrementalSuccess] = useState(null);
@@ -1597,7 +1611,7 @@ function IndexPreviewPanel({
     !isIncrementalDisabled;
 
   return (
-    <div className="w-full max-w-xl mb-4 font-mono text-xs select-none relative">
+    <div ref={panelRef} className="w-full max-w-xl mb-4 font-mono text-xs select-none relative">
       <button
         type="button"
         onClick={handleToggle}
