@@ -632,13 +632,10 @@ export default function SessionView({
       )}
 
       {/* Safety Warnings & Notices */}
-      {(isSubdirectorySession ||
-        freshnessStatus === 'dirty_worktree' ||
-        freshnessStatus === 'stale_commit' ||
-        freshnessStatus === 'stale_indexing' ||
-        freshnessStatus === 'indexing' ||
+      {(freshnessStatus === 'indexing' ||
         session.status === 'indexing' ||
-        reindexingError) && (
+        reindexingError ||
+        (freshnessStatus && freshnessStatus !== 'fresh' && freshnessStatus !== 'indexing')) && (
         <div className="shrink-0 px-6 pt-3 flex flex-col items-center animate-fadeIn">
           {reindexingError && (
             <StatusNotice
@@ -846,48 +843,7 @@ export default function SessionView({
             )}
           </div>
 
-          {isSubdirectorySession && (
-            <StatusNotice
-              tone="warning"
-              message={`Subdirectory Session: This session is bound to a subdirectory (${session.repo_root}). Git operations or freshness status checks outside this folder may not be indexed.`}
-            />
-          )}
-          {freshnessStatus === 'branch_changed' && (
-            <StatusNotice
-              tone="warning"
-              message={`Branch Changed: The active branch (${freshness?.current_branch || 'N/A'}) differs from the indexed branch (${freshness?.indexed_branch || 'N/A'}). Incremental indexing is blocked. Run a full index to switch branches.`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'dirty_worktree' && (
-            <StatusNotice
-              tone="warning"
-              message={`Uncommitted Changes: There are uncommitted changes in your repository (${freshness?.modified_files_count ?? repoStatus?.modified_files_count ?? 0} modified, ${freshness?.untracked_files_count ?? repoStatus?.untracked_files_count ?? 0} untracked, ${freshness?.deleted_files_count ?? repoStatus?.deleted_files_count ?? 0} deleted). The indexed code segments may not match your active worktree.`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'stale_commit' && (
-            <StatusNotice
-              tone="warning"
-              message={`Repository Stale: The indexed commit (${(freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha)?.slice(0, 7) || 'N/A'}) differs from the current commit (${(freshness?.current_commit_sha || repoStatus?.current_commit_sha)?.slice(0, 7) || 'N/A'}).`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'stale_indexing' && (
-            <StatusNotice
-              tone="warning"
-              message="Indexing Stale: Indexing appears stuck or stale. You can retry indexing."
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Retry Indexing')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
+
           {freshnessStatus && freshnessStatus !== 'indexing' && (
             <IndexPreviewPanel
               sessionId={session.id}
