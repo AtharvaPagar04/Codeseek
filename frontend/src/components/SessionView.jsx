@@ -906,40 +906,38 @@ export default function SessionView({
 
       {/* Message list or empty state */}
       {!hasMessages ? (
-        <div className="flex-1 overflow-y-auto flex flex-col items-center px-5 py-6 min-h-0">
-          <div className="my-auto flex flex-col items-center w-full max-w-xl pb-8">
-            <IndexingLiveLog session={session} onRetryIndexing={onRetryIndexing} />
-            <EmptyState
-              repoName={session.repo_id}
-            />
-            {/* Input bar inline below empty state */}
-            <div className="w-full mt-8">
-              <div
-                className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
-                style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
+        <div className="flex-1 flex flex-col items-center justify-center pb-16 px-5 min-h-0">
+          <IndexingLiveLog session={session} onRetryIndexing={onRetryIndexing} />
+          <EmptyState
+            repoName={session.repo_id}
+          />
+          {/* Input bar inline below empty state */}
+          <div className="w-full max-w-xl mt-8">
+            <div
+              className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
+              style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
+            >
+              <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading || !canChat}
+                placeholder={`Ask about ${session.repo_id}…`}
+                rows={1}
+                className="flex-1 resize-none bg-transparent border-none text-sm text-text-primary placeholder-text-muted font-sans focus:outline-none disabled:opacity-50 leading-normal"
+                style={{ minHeight: '24px', maxHeight: '84px' }}
+              />
+              <button
+                onClick={handleSend}
+                disabled={isLoading || !input.trim() || !canChat}
+                title="Send (Enter)"
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
+                style={{ color: '#0a0a0a' }}
               >
-                <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  disabled={isLoading || !canChat}
-                  placeholder={`Ask about ${session.repo_id}…`}
-                  rows={1}
-                  className="flex-1 resize-none bg-transparent border-none text-sm text-text-primary placeholder-text-muted font-sans focus:outline-none disabled:opacity-50 leading-normal"
-                  style={{ minHeight: '24px', maxHeight: '84px' }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={isLoading || !input.trim() || !canChat}
-                  title="Send (Enter)"
-                  className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-                  style={{ color: '#0a0a0a' }}
-                >
-                  {isLoading ? <SpinnerIcon /> : <SendIcon />}
-                </button>
-              </div>
+                {isLoading ? <SpinnerIcon /> : <SendIcon />}
+              </button>
             </div>
           </div>
         </div>
@@ -1599,7 +1597,7 @@ function IndexPreviewPanel({
     !isIncrementalDisabled;
 
   return (
-    <div className="w-full max-w-xl mb-4 font-mono text-xs select-none">
+    <div className="w-full max-w-xl mb-4 font-mono text-xs select-none relative">
       <button
         type="button"
         onClick={handleToggle}
@@ -1618,7 +1616,7 @@ function IndexPreviewPanel({
       </button>
 
       {isOpen && (
-        <div className="mt-2.5 rounded-xl border border-border bg-surface-2 p-4 shadow-lg animate-fadeIn flex flex-col gap-3">
+        <div className="absolute left-0 right-0 mt-2.5 rounded-xl border border-border bg-surface-2 p-4 shadow-lg animate-fadeIn flex flex-col gap-3 z-20">
           {loading && (
             <div className="flex items-center justify-center py-6 text-text-muted">
               <span className="animate-pulse">Loading preview data...</span>
