@@ -31,6 +31,7 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         memory.add(
             "What does account_info do?",
             "The account_info method retrieves account information.",
+            entities={"files": [], "symbols": ["account_info"], "routes": [], "env_keys": [], "services": []},
         )
         captured: dict = {}
 
@@ -53,10 +54,8 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 0)
-        self.assertEqual(
-            captured["query_info"]["entities"]["symbols"],
-            ["account_info"],
-        )
+        self.assertEqual(captured["query_info"]["raw_query"], "also provide code")
+        self.assertIsNone(captured["query_info"].get("followup_hint"))
         self.assertEqual(
             captured["query_info"]["follow_up_to"],
             "What does account_info do?",
@@ -96,10 +95,7 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 0)
-        self.assertEqual(
-            captured["query_info"]["entities"]["symbols"],
-            ["account_info"],
-        )
+        self.assertEqual(captured["query_info"]["raw_query"], "i want code snippit")
         self.assertEqual(
             captured["query_info"]["follow_up_resolved_to"],
             "What does account_info do?\nalso provide code",
@@ -173,7 +169,7 @@ class RetrievalSessionFollowUpResolutionTests(unittest.TestCase):
                 )
                 self.assertEqual(sources, [])
                 self.assertEqual(token_count, 0)
-                self.assertEqual(captured["query_info"]["entities"]["symbols"], ["account_info"])
+                self.assertEqual(captured["query_info"]["raw_query"], "i want code snippit")
                 self.assertEqual(
                     captured["query_info"]["follow_up_resolved_to"],
                     "What does account_info do?\nalso provide code",

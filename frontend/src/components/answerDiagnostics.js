@@ -80,12 +80,25 @@ function summarizeSourceFilter(sourceFilter) {
   return parts.join(' · ');
 }
 
+function summarizeBoolean(value) {
+  if (typeof value !== 'boolean') return '';
+  return value ? 'Yes' : 'No';
+}
+
+function summarizeNumber(value, digits = 3) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return `${num.toFixed(digits)}`.replace(/\.?0+$/, '');
+}
+
 function compactSourceList(items) {
   if (!Array.isArray(items) || items.length === 0) return [];
   const seen = new Set();
   const compacted = [];
   for (const item of items) {
-    const summary = summarizeDiagnosticSource(item);
+    const summary = typeof item === 'string'
+      ? safeString(item)
+      : summarizeDiagnosticSource(item);
     if (!summary || seen.has(summary)) continue;
     seen.add(summary);
     compacted.push(sanitizeCredentialsInString(summary));
@@ -128,6 +141,26 @@ export function buildAnswerDiagnosticsRows(diagnostics) {
   addListRow('Selected sources', diagnostics.selected_sources, 'Sources', true);
   addListRow('Reasoning sources', diagnostics.reasoning_sources, 'Sources', true);
   addListRow('Rendered sources', diagnostics.rendered_sources, 'Sources', true);
+  addTextRow('Follow-up', summarizeBoolean(diagnostics.memory?.is_followup), 'Intent', false);
+  addTextRow('Topic shift detected', summarizeBoolean(diagnostics.memory?.topic_shift_detected), 'Intent', true);
+  addTextRow('Follow-up confidence', summarizeNumber(diagnostics.memory?.followup_confidence), 'Intent', true);
+  addTextRow('Query similarity', summarizeNumber(diagnostics.memory?.query_similarity), 'Intent', true);
+  addTextRow('Keyword overlap', summarizeNumber(diagnostics.memory?.keyword_overlap), 'Intent', true);
+  addTextRow('Similarity method', diagnostics.memory?.similarity_method, 'Intent', true);
+  addTextRow('Valid referent', summarizeBoolean(diagnostics.memory?.has_valid_referent), 'Intent', true);
+  addTextRow('History injected', summarizeBoolean(diagnostics.memory?.history_injected), 'Sources', false);
+  addTextRow('History turns used', diagnostics.memory?.history_turns_used, 'Sources', true);
+  addTextRow('Query rewritten', summarizeBoolean(diagnostics.rewrite?.query_rewritten), 'Intent', false);
+  addTextRow('Rewrite mode', diagnostics.rewrite?.rewrite_mode, 'Intent', true);
+  addTextRow('Rewrite anchor', diagnostics.rewrite?.rewrite_anchor, 'Intent', true);
+  addTextRow('Previous candidates injected', diagnostics.retrieval?.previous_candidates_injected, 'Sources', false);
+  addTextRow('Retrieval confidence', diagnostics.retrieval?.retrieval_confidence, 'Sources', false);
+  addTextRow('Exact retrieval hit', summarizeBoolean(diagnostics.retrieval?.exact_hit), 'Sources', true);
+  addTextRow('Multi-layer hit', summarizeBoolean(diagnostics.retrieval?.multi_layer_hit), 'Sources', true);
+  addTextRow('Top score', summarizeNumber(diagnostics.retrieval?.top_score), 'Sources', true);
+  addTextRow('Candidate count', diagnostics.retrieval?.candidate_count, 'Sources', true);
+  addTextRow('Low-confidence gate', summarizeBoolean(diagnostics.retrieval?.low_confidence_gate), 'Sources', true);
+  addListRow('Strong new entities', diagnostics.retrieval?.strong_new_entities, 'Sources', true);
 
   if (diagnostics.freshness) {
     const f = diagnostics.freshness;

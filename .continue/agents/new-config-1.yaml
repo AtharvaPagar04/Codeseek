@@ -1,0 +1,67 @@
+name: Local
+version: 0.0.1
+schema: v1
+
+models:
+  # Local agent model
+  - name: Qwen2.5 Coder 7B Agent
+    provider: ollama
+    model: qwen2.5-coder:7b-instruct
+
+    roles:
+      - chat
+      - edit
+      - apply
+
+    capabilities:
+      - tool_use
+
+    toolCallStrategy: auto
+
+  # Local autocomplete
+  - name: Qwen Coder 3B Autocomplete
+    provider: ollama
+    model: qwen2.5-coder:3b
+
+    roles:
+      - autocomplete
+
+  # Fast cloud model
+  - name: DeepSeek V4 Flash
+    provider: openai
+    model: deepseek/deepseek-v4-flash
+    apiBase: https://api.aicredits.in/v1
+    apiKey: sk-live-a27c590dc6afb49022014913765f8bf74762ae4be7c2ed81ca22fd68b3a1ebaa
+
+    roles:
+      - chat
+      - edit
+      - apply
+
+    capabilities:
+      - tool_use
+
+    toolCallStrategy: auto
+
+  # Strong cloud model
+  - name: DeepSeek V4 Pro
+    provider: openai
+    model: deepseek/deepseek-v4-pro
+    apiBase: https://api.aicredits.in/v1
+    apiKey: e1ee60ba987d63ac99a1c5c876e4b4f7aa51d80de03368d8f3e6c076db0e0b50
+
+    roles:
+      - chat
+      - edit
+      - apply
+
+    capabilities:
+      - tool_use
+
+    toolCallStrategy: auto
+
+context:
+  - provider: code
+  - provider: diff
+  - provider: terminal
+  - provider: problems

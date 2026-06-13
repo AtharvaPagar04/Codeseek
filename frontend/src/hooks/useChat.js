@@ -126,7 +126,7 @@ export function useChat({ appendMessage }) {
           },
           onSources: (data) => {
             answerSources = data.sources || [];
-            answerDiagnostics = data.evidence_confidence || null;
+            answerDiagnostics = data.diagnostics || null;
             contextTokens = data.context_tokens;
             
             appendMessage(session.id, activeThreadId, {

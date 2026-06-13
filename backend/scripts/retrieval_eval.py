@@ -9,9 +9,9 @@ from pathlib import Path
 
 from retrieval.assembler import assemble
 from retrieval.expander import expand
+from retrieval.main import run_query
 from retrieval.memory import ConversationMemory
 from retrieval.query_processor import process_query
-from retrieval.main import run_query
 from retrieval.searcher import search
 from retrieval.source_filter import select_sources_for_display
 
@@ -198,6 +198,243 @@ def _expected_answer_term_score(answer: str, expected_terms: list[str]) -> float
     return matched / len(expected_terms)
 
 
+def _expected_bool_score(actual: bool, expected: bool | None) -> float:
+    if expected is None:
+        return 1.0
+    return 1.0 if bool(actual) is bool(expected) else 0.0
+
+
+def _expected_count_score(actual: int, expected: int | bool | None) -> float:
+    if expected is None:
+        return 1.0
+    if isinstance(expected, bool):
+        return 1.0 if bool(actual > 0) is expected else 0.0
+    return 1.0 if int(actual) == int(expected) else 0.0
+
+
+def _forbidden_term_score(text: str, forbidden_terms: list[str]) -> float:
+    if not forbidden_terms:
+        return 1.0
+    haystack = (text or "").lower()
+    for term in forbidden_terms:
+        normalized = term.strip().lower()
+        if normalized and normalized in haystack:
+            return 0.0
+    return 1.0
+
+
+def _source_term_score(items: list[dict], forbidden_terms: list[str]) -> float:
+    if not forbidden_terms:
+        return 1.0
+    haystack = "\n".join(_item_text(item) for item in items)
+    for term in forbidden_terms:
+        normalized = term.strip().lower()
+        if normalized and normalized in haystack:
+            return 0.0
+    return 1.0
+
+
+def _expected_text_score(actual: str, expected: str) -> float:
+    if not expected:
+        return 1.0
+    return 1.0 if _norm(actual) == _norm(expected) else 0.0
+
+
+def _average_scores(values: list[float]) -> float:
+    if not values:
+        return 1.0
+    return sum(values) / len(values)
+
+
+def _metric_values(results: list[dict], key: str) -> list[float]:
+    return [float(item[key]) for item in results if key in item]
+
+
+def _actual_positive_rate(results: list[dict], key: str) -> float:
+    if not results:
+        return 0.0
+    positives = sum(1 for item in results if bool(item.get(key)))
+    return positives / len(results)
+
+
+def _precision_recall(results: list[dict], *, expected_key: str, actual_key: str) -> tuple[float, float]:
+    labeled = [item for item in results if item.get(expected_key) is not None]
+    if not labeled:
+        return 1.0, 1.0
+    true_positive = sum(
+        1 for item in labeled if bool(item.get(expected_key)) and bool(item.get(actual_key))
+    )
+    predicted_positive = sum(1 for item in labeled if bool(item.get(actual_key)))
+    expected_positive = sum(1 for item in labeled if bool(item.get(expected_key)))
+    precision = true_positive / predicted_positive if predicted_positive else (1.0 if expected_positive == 0 else 0.0)
+    recall = true_positive / expected_positive if expected_positive else 1.0
+    return precision, recall
+
+
+def _extract_memory_diagnostics(meta: dict) -> tuple[dict, dict, dict]:
+    diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
+    memory = diagnostics.get("memory") if isinstance(diagnostics.get("memory"), dict) else {}
+    rewrite = diagnostics.get("rewrite") if isinstance(diagnostics.get("rewrite"), dict) else {}
+    retrieval = diagnostics.get("retrieval") if isinstance(diagnostics.get("retrieval"), dict) else {}
+    return memory, rewrite, retrieval
+
+
+def _case_turns(case: dict) -> list[dict]:
+    turns = case.get("turns")
+    if isinstance(turns, list) and turns:
+        return turns
+    return []
+
+
+def _turn_hit_mrr_sources(turn: dict, response_sources: list[dict]) -> tuple[int, float]:
+    expected_sources = turn.get("expected_sources", [])
+    expected_files = turn.get("expected_files", [])
+    expected_symbols = turn.get("expected_symbols", [])
+    hit = _hit_at_k(response_sources, expected_sources, expected_files, expected_symbols, len(response_sources) or 1)
+    mrr = _mrr_at_k(response_sources, expected_sources, expected_files, expected_symbols, len(response_sources) or 1)
+    return hit, mrr
+
+
+def _evaluate_turn_sequence_case(case: dict, provider_config: dict | None = None) -> dict:
+    memory = ConversationMemory(max(4, len(_case_turns(case)) + 1))
+    turn_results: list[dict] = []
+
+    for index, turn in enumerate(_case_turns(case), start=1):
+        query = str(turn["query"])
+        answer, response_sources, _, meta = run_query(
+            query,
+            memory,
+            return_meta=True,
+            provider_config=provider_config,
+        )
+        memory_diag, rewrite_diag, retrieval_diag = _extract_memory_diagnostics(meta)
+        hit_at_k, mrr_at_k = _turn_hit_mrr_sources(turn, response_sources)
+        previous_candidates_injected = int(retrieval_diag.get("previous_candidates_injected", 0) or 0)
+        low_confidence_gate = bool(retrieval_diag.get("low_confidence_gate", False))
+        actual_response_mode = str(meta.get("response_mode", ""))
+        expected_retrieval_confidence = str(turn.get("expected_retrieval_confidence", "") or "").strip()
+        result = {
+            "id": f"{case.get('id', 'case')}.t{index}",
+            "query": query,
+            "hit_at_k": hit_at_k,
+            "mrr_at_k": mrr_at_k,
+            "citation_coverage": _citation_coverage(response_sources, turn.get("expected_sources", [])),
+            "expected_file_score": _expected_file_score(response_sources, turn.get("expected_files", [])),
+            "expected_symbol_score": _expected_symbol_score(response_sources, turn.get("expected_symbols", [])),
+            "expected_framework_score": _expected_term_score(response_sources, turn.get("expected_frameworks", [])),
+            "expected_dependency_score": _expected_term_score(response_sources, turn.get("expected_dependencies", [])),
+            "expected_no_answer_score": _expected_no_answer_score(
+                response_sources, response_sources, bool(turn.get("expected_no_answer", False))
+            ),
+            "expected_response_mode_score": _expected_response_mode_score(
+                actual_response_mode,
+                str(turn.get("expected_response_mode", "")).strip(),
+            ),
+            "expected_answer_term_score": _expected_answer_term_score(
+                answer,
+                turn.get("expected_answer_terms", []),
+            ),
+            "followup_decision_score": _expected_bool_score(
+                bool(memory_diag.get("is_followup", False)),
+                turn.get("expected_is_followup"),
+            ),
+            "topic_shift_score": _expected_bool_score(
+                bool(memory_diag.get("topic_shift_detected", False)),
+                turn.get("expected_topic_shift"),
+            ),
+            "history_injection_score": _expected_bool_score(
+                bool(memory_diag.get("history_injected", False)),
+                turn.get("expected_history_injected"),
+            ),
+            "previous_candidate_injection_score": _expected_count_score(
+                previous_candidates_injected,
+                turn.get("expected_previous_candidates_injected"),
+            ),
+            "query_rewrite_score": _expected_bool_score(
+                bool(rewrite_diag.get("query_rewritten", False)),
+                turn.get("expected_query_rewritten"),
+            ),
+            "low_confidence_refusal_score": _expected_bool_score(
+                low_confidence_gate or actual_response_mode == "low_context",
+                turn.get("expected_low_confidence_gate"),
+            ),
+            "wrong_topic_answer_score": _forbidden_term_score(
+                answer,
+                turn.get("forbidden_answer_terms", []),
+            ),
+            "wrong_topic_source_score": _source_term_score(
+                response_sources,
+                turn.get("forbidden_source_terms", []),
+            ),
+            "retrieval_confidence_score": _expected_text_score(
+                str(retrieval_diag.get("retrieval_confidence", "") or ""),
+                expected_retrieval_confidence,
+            ),
+            "response_mode": actual_response_mode,
+            "latency_profile": _latency_profile_for_case(turn, actual_response_mode),
+            "total_latency_ms": int(meta.get("total_latency_ms", 0) or 0),
+            "backend_latency_ms": int(meta.get("backend_latency_ms", 0) or 0),
+            "provider_latency_ms": int(meta.get("provider_latency_ms", 0) or 0),
+            "stage_latency_ms": dict(meta.get("stage_latency_ms", {})),
+            "expected_is_followup": turn.get("expected_is_followup"),
+            "actual_is_followup": bool(memory_diag.get("is_followup", False)),
+            "expected_history_injected": turn.get("expected_history_injected"),
+            "actual_history_injected": bool(memory_diag.get("history_injected", False)),
+            "expected_query_rewritten": turn.get("expected_query_rewritten"),
+            "actual_query_rewritten": bool(rewrite_diag.get("query_rewritten", False)),
+            "expected_low_confidence_gate": turn.get("expected_low_confidence_gate"),
+            "actual_low_confidence_gate": low_confidence_gate or actual_response_mode == "low_context",
+            "actual_previous_candidates_injected": previous_candidates_injected,
+        }
+        turn_results.append(result)
+
+    followup_precision, followup_recall = _precision_recall(
+        turn_results,
+        expected_key="expected_is_followup",
+        actual_key="actual_is_followup",
+    )
+    return {
+        "id": case.get("id", ""),
+        "query": " | ".join(turn["query"] for turn in _case_turns(case)),
+        "is_negative": any(bool(turn.get("expected_no_answer", False)) for turn in _case_turns(case)),
+        "hit_at_k": _average_scores(_metric_values(turn_results, "hit_at_k")),
+        "mrr_at_k": _average_scores(_metric_values(turn_results, "mrr_at_k")),
+        "citation_coverage": _average_scores(_metric_values(turn_results, "citation_coverage")),
+        "expected_file_score": _average_scores(_metric_values(turn_results, "expected_file_score")),
+        "expected_symbol_score": _average_scores(_metric_values(turn_results, "expected_symbol_score")),
+        "expected_framework_score": _average_scores(_metric_values(turn_results, "expected_framework_score")),
+        "expected_dependency_score": _average_scores(_metric_values(turn_results, "expected_dependency_score")),
+        "expected_no_answer_score": _average_scores(_metric_values(turn_results, "expected_no_answer_score")),
+        "expected_response_mode_score": _average_scores(_metric_values(turn_results, "expected_response_mode_score")),
+        "expected_answer_term_score": _average_scores(_metric_values(turn_results, "expected_answer_term_score")),
+        "followup_decision_score": _average_scores(_metric_values(turn_results, "followup_decision_score")),
+        "topic_shift_score": _average_scores(_metric_values(turn_results, "topic_shift_score")),
+        "history_injection_score": _average_scores(_metric_values(turn_results, "history_injection_score")),
+        "previous_candidate_injection_score": _average_scores(_metric_values(turn_results, "previous_candidate_injection_score")),
+        "query_rewrite_score": _average_scores(_metric_values(turn_results, "query_rewrite_score")),
+        "low_confidence_refusal_score": _average_scores(_metric_values(turn_results, "low_confidence_refusal_score")),
+        "wrong_topic_answer_score": _average_scores(_metric_values(turn_results, "wrong_topic_answer_score")),
+        "wrong_topic_source_score": _average_scores(_metric_values(turn_results, "wrong_topic_source_score")),
+        "retrieval_confidence_score": _average_scores(_metric_values(turn_results, "retrieval_confidence_score")),
+        "followup_precision": followup_precision,
+        "followup_recall": followup_recall,
+        "history_injection_rate": _actual_positive_rate(turn_results, "actual_history_injected"),
+        "previous_candidate_injection_rate": _actual_positive_rate(
+            [{"actual_previous_candidates_injected": item["actual_previous_candidates_injected"] > 0} for item in turn_results],
+            "actual_previous_candidates_injected",
+        ),
+        "query_rewrite_rate": _actual_positive_rate(turn_results, "actual_query_rewritten"),
+        "low_confidence_refusal_rate": _actual_positive_rate(turn_results, "actual_low_confidence_gate"),
+        "response_mode": "",
+        "latency_profile": "llm" if any(item["latency_profile"] == "llm" for item in turn_results) else "deterministic",
+        "total_latency_ms": sum(int(item["total_latency_ms"]) for item in turn_results),
+        "backend_latency_ms": sum(int(item["backend_latency_ms"]) for item in turn_results),
+        "provider_latency_ms": sum(int(item["provider_latency_ms"]) for item in turn_results),
+        "stage_latency_ms": {},
+        "turn_results": turn_results,
+    }
+
+
 def _latency_profile_for_case(case: dict, response_mode: str) -> str:
     explicit = str(case.get("latency_profile", "")).strip().lower()
     if explicit in {"retrieval_only", "deterministic", "llm"}:
@@ -225,6 +462,9 @@ def _resolve_provider_config(args: argparse.Namespace) -> dict | None:
 
 
 def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> dict:
+    if _case_turns(case):
+        return _evaluate_turn_sequence_case(case, provider_config=provider_config)
+
     query = case["query"]
     expected_sources = case.get("expected_sources", [])
     expected_files = case.get("expected_files", [])
@@ -298,6 +538,21 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
         "expected_no_answer_score": _expected_no_answer_score(candidates, shown_sources, expected_no_answer),
         "expected_response_mode_score": expected_response_mode_score,
         "expected_answer_term_score": expected_answer_term_score,
+        "followup_decision_score": 1.0,
+        "topic_shift_score": 1.0,
+        "history_injection_score": 1.0,
+        "previous_candidate_injection_score": 1.0,
+        "query_rewrite_score": 1.0,
+        "low_confidence_refusal_score": 1.0,
+        "wrong_topic_answer_score": 1.0,
+        "wrong_topic_source_score": 1.0,
+        "retrieval_confidence_score": 1.0,
+        "followup_precision": 1.0,
+        "followup_recall": 1.0,
+        "history_injection_rate": 0.0,
+        "previous_candidate_injection_rate": 0.0,
+        "query_rewrite_rate": 0.0,
+        "low_confidence_refusal_rate": 0.0,
         "response_mode": response_mode,
         "latency_profile": _latency_profile_for_case(case, response_mode),
         "total_latency_ms": total_latency_ms,
@@ -348,6 +603,21 @@ def main() -> None:
     avg_no_answer = sum(r["expected_no_answer_score"] for r in results) / len(results)
     avg_response_mode = sum(r["expected_response_mode_score"] for r in results) / len(results)
     avg_answer_terms = sum(r["expected_answer_term_score"] for r in results) / len(results)
+    avg_followup = sum(r["followup_decision_score"] for r in results) / len(results)
+    avg_topic_shift = sum(r["topic_shift_score"] for r in results) / len(results)
+    avg_history_injection = sum(r["history_injection_score"] for r in results) / len(results)
+    avg_previous_candidate_injection = sum(r["previous_candidate_injection_score"] for r in results) / len(results)
+    avg_query_rewrite = sum(r["query_rewrite_score"] for r in results) / len(results)
+    avg_low_confidence = sum(r["low_confidence_refusal_score"] for r in results) / len(results)
+    avg_wrong_topic_answer = sum(r["wrong_topic_answer_score"] for r in results) / len(results)
+    avg_wrong_topic_source = sum(r["wrong_topic_source_score"] for r in results) / len(results)
+    avg_retrieval_confidence = sum(r["retrieval_confidence_score"] for r in results) / len(results)
+    avg_followup_precision = sum(r["followup_precision"] for r in results) / len(results)
+    avg_followup_recall = sum(r["followup_recall"] for r in results) / len(results)
+    avg_history_injection_rate = sum(r["history_injection_rate"] for r in results) / len(results)
+    avg_previous_candidate_injection_rate = sum(r["previous_candidate_injection_rate"] for r in results) / len(results)
+    avg_query_rewrite_rate = sum(r["query_rewrite_rate"] for r in results) / len(results)
+    avg_low_confidence_rate = sum(r["low_confidence_refusal_rate"] for r in results) / len(results)
     latency_values = [int(r["total_latency_ms"]) for r in results if int(r["total_latency_ms"]) > 0]
     retrieval_only_values = [
         int(r["total_latency_ms"])
@@ -390,6 +660,22 @@ def main() -> None:
     print(f"expected_no_answer_score: {avg_no_answer:.3f}")
     print(f"expected_response_mode_score: {avg_response_mode:.3f}")
     print(f"expected_answer_term_score: {avg_answer_terms:.3f}")
+    print(f"topic_shift_accuracy: {avg_topic_shift:.3f}")
+    print(f"followup_precision: {avg_followup_precision:.3f}")
+    print(f"followup_recall: {avg_followup_recall:.3f}")
+    print(f"followup_decision_score: {avg_followup:.3f}")
+    print(f"history_injection_score: {avg_history_injection:.3f}")
+    print(f"previous_candidate_injection_score: {avg_previous_candidate_injection:.3f}")
+    print(f"query_rewrite_score: {avg_query_rewrite:.3f}")
+    print(f"low_confidence_refusal_score: {avg_low_confidence:.3f}")
+    print(f"answer_relevance_score: {avg_answer_terms:.3f}")
+    print(f"source_faithfulness_score: {avg_wrong_topic_source:.3f}")
+    print(f"wrong_topic_answer_score: {avg_wrong_topic_answer:.3f}")
+    print(f"retrieval_confidence_score: {avg_retrieval_confidence:.3f}")
+    print(f"history_injection_rate: {avg_history_injection_rate:.3f}")
+    print(f"previous_candidate_injection_rate: {avg_previous_candidate_injection_rate:.3f}")
+    print(f"query_rewrite_rate: {avg_query_rewrite_rate:.3f}")
+    print(f"low_confidence_refusal_rate: {avg_low_confidence_rate:.3f}")
     print(f"latency_p50_ms: {_p50(latency_values)}")
     print(f"latency_p95_ms: {_p95(latency_values)}")
     print(f"retrieval_only_latency_p50_ms: {_p50(retrieval_only_values)}")

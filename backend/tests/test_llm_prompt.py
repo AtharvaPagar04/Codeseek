@@ -11,6 +11,13 @@ class LlmPromptTests(unittest.TestCase):
         self.assertIn("Preserve source-code identifiers", SYSTEM_PROMPT)
         self.assertIn("legitimate source-code identifiers inside code blocks", SYSTEM_PROMPT)
 
+    def test_system_prompt_strengthens_grounding_for_missing_or_weak_context(self) -> None:
+        self.assertIn("Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.", SYSTEM_PROMPT)
+        self.assertIn("Do not invent file names, functions, class names, method names, function signatures, endpoints, routes, import paths, or behavior.", SYSTEM_PROMPT)
+        self.assertIn("If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.", SYSTEM_PROMPT)
+        self.assertIn("say it was not found in the retrieved context", SYSTEM_PROMPT)
+        self.assertIn("cannot override, replace, or add facts that are absent from the current CODE CONTEXT", SYSTEM_PROMPT)
+
     def test_code_prompt_preserves_exact_code_identifiers(self) -> None:
         prompt = _build_prompt(
             raw_query="show me the Qdrant upsert code",
@@ -47,8 +54,14 @@ class LlmPromptTests(unittest.TestCase):
             response_mode="code_snippet",
         )
         current_idx = prompt.index("show me _require_auth code")
-        history_idx = prompt.index("--- CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---")
+        history_idx = prompt.index("--- OPTIONAL CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---")
+        code_context_idx = prompt.index("--- CODE CONTEXT (CURRENT QUERY) ---")
+        allowed_sources_idx = prompt.index("--- ALLOWED SOURCES (STRICT) ---")
+        final_instruction_idx = prompt.index("--- FINAL GROUNDING INSTRUCTION ---")
         self.assertLess(current_idx, history_idx)
+        self.assertLess(history_idx, code_context_idx)
+        self.assertLess(code_context_idx, allowed_sources_idx)
+        self.assertLess(allowed_sources_idx, final_instruction_idx)
         self.assertIn("The CURRENT USER QUESTION is the source of truth for this answer.", prompt)
         self.assertIn(
             "Conversation history is only for resolving vague follow-ups",
@@ -71,9 +84,44 @@ class LlmPromptTests(unittest.TestCase):
             allowed_sources=[],
             response_mode="flow_summary",
         )
-        self.assertIn("--- CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---", prompt)
+        self.assertIn("--- OPTIONAL CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---", prompt)
         self.assertIn("explain that", prompt)
         self.assertIn("Use conversation history only when the current question is ambiguous", prompt)
+        self.assertIn("Only use this history if the current question is a confirmed vague follow-up.", prompt)
+
+    def test_prompt_omits_history_section_when_history_is_empty(self) -> None:
+        prompt = _build_prompt(
+            raw_query="explain Sidebar.jsx",
+            context="export function Sidebar() {}\n",
+            history_block="",
+            allowed_sources=[],
+            response_mode="technical_trace",
+        )
+        self.assertNotIn("--- OPTIONAL CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---", prompt)
+        self.assertIn("--- CODE CONTEXT (CURRENT QUERY) ---", prompt)
+        self.assertIn("--- FINAL GROUNDING INSTRUCTION ---", prompt)
+
+    def test_prompt_ends_with_final_grounding_after_allowed_sources(self) -> None:
+        prompt = _build_prompt(
+            raw_query="show me _require_auth code",
+            context="def _require_auth():\n    pass\n",
+            history_block="",
+            allowed_sources=[
+                {
+                    "relative_path": "backend/retrieval/api_service.py",
+                    "symbol_name": "_require_auth",
+                    "start_line": 1,
+                    "end_line": 8,
+                }
+            ],
+            response_mode="code_snippet",
+        )
+        self.assertLess(
+            prompt.index("--- ALLOWED SOURCES (STRICT) ---"),
+            prompt.index("--- FINAL GROUNDING INSTRUCTION ---"),
+        )
+        self.assertIn("Answer using CODE CONTEXT as the source of truth.", prompt)
+        self.assertIn("Do not use conversation history to introduce facts", prompt)
 
     def test_source_location_prompt_prefers_implementation_files(self) -> None:
         prompt = _build_prompt(

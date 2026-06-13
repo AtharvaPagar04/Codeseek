@@ -16,6 +16,11 @@ from retrieval.config import (
     ENABLE_DENSE_RETRIEVAL,
     ENABLE_LEXICAL_RETRIEVAL,
     EMBEDDING_MODEL,
+    HISTORY_INJECT_THRESHOLD,
+    PREVIOUS_CANDIDATE_INJECTION_MIN_SCORE,
+    PREVIOUS_CANDIDATE_MAX_COUNT,
+    PREVIOUS_CANDIDATE_MAX_RATIO,
+    PREVIOUS_CANDIDATE_PENALTY,
     QDRANT_HOST,
     QDRANT_PORT,
     QUERY_PREFIX,
@@ -44,6 +49,14 @@ _qdrant_circuit_open_until = 0.0
 _lexical_indexes: dict[str, "_LexicalIndex"] = {}
 IMPORT_TRACE_DEPTH_LIMIT = 3
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
+PREVIOUS_CANDIDATE_BLOCKED_INTENTS = {
+    "CODE_REQUEST",
+    "TRACE",
+    "CONFIG",
+    "ARCHITECTURE",
+    "OVERVIEW",
+    "FILE",
+}
 
 CODE_REQUEST_TOPIC_ROUTES = (
     {
@@ -454,8 +467,29 @@ def search(query_info: dict) -> list[dict]:
     previous_files = conversation_state.get("previous_files", [])
     history_results = []
     history_is_allowed = not matched_code_topic_route or primary_intent == "FOLLOWUP"
+    non_history_candidate_count = (
+        len(dense_results)
+        + len(lexical_results)
+        + len(filter_results)
+        + len(exact_entity_results)
+        + len(dependency_results)
+        + len(local_content_results)
+    )
+    injection_reason = "skipped"
     if (query_info.get("is_followup") or primary_intent == "FOLLOWUP") and previous_files and history_is_allowed:
-        history_results = _inject_previous_files_candidates(previous_files)
+        if _blocked_previous_candidate_injection(query_info):
+            injection_reason = "blocked_intent_or_new_entity"
+        elif _followup_confidence(query_info) < HISTORY_INJECT_THRESHOLD:
+            injection_reason = "low_followup_confidence"
+        else:
+            history_results, injection_reason = _inject_previous_files_candidates(
+                previous_files,
+                raw_query=raw_query,
+                query_info=query_info,
+                candidate_pool_size=non_history_candidate_count,
+            )
+    query_info["previous_candidate_injection_reason"] = injection_reason
+    query_info["previous_candidate_injection_count"] = len(history_results)
 
     direct_topic_results = _inject_direct_topics_candidates(raw_query, primary_intent)
     auth_routing_results = _inject_code_topic_routing_candidates(raw_query, primary_intent, matched_code_topic_route)
@@ -1244,9 +1278,23 @@ def _bm25_score(query_tokens: list[str], document_tokens: list[str], index: _Lex
     return score
 
 
-def _inject_previous_files_candidates(previous_files: list[str]) -> list[tuple[dict, float, str]]:
+def _inject_previous_files_candidates(
+    previous_files: list[str],
+    *,
+    raw_query: str,
+    query_info: dict,
+    candidate_pool_size: int,
+) -> tuple[list[tuple[dict, float, str]], str]:
     if not previous_files:
-        return []
+        return [], "no_previous_files"
+    if _blocked_previous_candidate_injection(query_info):
+        return [], "blocked_intent_or_new_entity"
+    followup_score = _followup_confidence(query_info)
+    if followup_score < HISTORY_INJECT_THRESHOLD:
+        return [], "low_followup_confidence"
+    max_count = _max_previous_candidate_injection_count(candidate_pool_size)
+    if max_count <= 0:
+        return [], "ratio_cap_zero"
     client = _get_client()
     collection = get_collection_name()
     from qdrant_client.models import Filter, FieldCondition, MatchAny
@@ -1259,14 +1307,70 @@ def _inject_previous_files_candidates(previous_files: list[str]) -> list[tuple[d
         with_payload=True,
     ))
     if not response:
-        return []
+        return [], "no_qdrant_hits"
     hits, _ = response
     results = []
     for hit in hits:
         payload = dict(hit.payload or {})
+        injection_score = _previous_candidate_injection_score(payload, raw_query, query_info)
+        if injection_score < PREVIOUS_CANDIDATE_INJECTION_MIN_SCORE:
+            continue
         payload["support_kind"] = "conversation_history"
-        results.append((payload, 0.0, "history"))
-    return results
+        payload["injected_from_previous_turn"] = True
+        payload["injection_reason"] = "confirmed_followup"
+        payload["injection_score"] = round(injection_score, 3)
+        results.append((payload, injection_score, "history"))
+        if len(results) >= max_count:
+            break
+    if not results:
+        return [], "below_relevance_threshold"
+    return results, "confirmed_followup"
+
+
+def _blocked_previous_candidate_injection(query_info: dict) -> bool:
+    primary_intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
+    if primary_intent in PREVIOUS_CANDIDATE_BLOCKED_INTENTS:
+        return True
+    entities = query_info.get("entities") or {}
+    if any(entities.get(key) for key in ("files", "symbols", "routes", "env_keys", "services")):
+        return True
+    if primary_intent == "SYMBOL" and entities.get("symbols"):
+        return True
+    return False
+
+
+def _followup_confidence(query_info: dict) -> float:
+    scores = query_info.get("intent_scores") if isinstance(query_info.get("intent_scores"), dict) else {}
+    return float(scores.get("FOLLOWUP", 0.0) or 0.0)
+
+
+def _max_previous_candidate_injection_count(candidate_pool_size: int) -> int:
+    if candidate_pool_size <= 0:
+        return 0
+    ratio_cap = max(1, math.ceil(candidate_pool_size * PREVIOUS_CANDIDATE_MAX_RATIO))
+    return min(PREVIOUS_CANDIDATE_MAX_COUNT, ratio_cap)
+
+
+def _previous_candidate_injection_score(payload: dict, raw_query: str, query_info: dict) -> float:
+    text = _exact_entity_text(payload).lower()
+    tokens = _query_tokens(raw_query)
+    overlap = 0
+    if tokens:
+        overlap = len(tokens & set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", text)))
+    entities = query_info.get("entities") or {}
+    followup_hint = str(query_info.get("followup_hint") or "").lower()
+    entity_bonus = 0.0
+    for key in ("routes", "env_keys", "services"):
+        for value in entities.get(key, []) or []:
+            if str(value).lower() in text:
+                entity_bonus += 0.15
+    if followup_hint and followup_hint in text:
+        entity_bonus += 0.20
+    base = 0.60 if query_info.get("is_followup") and not any(
+        entities.get(key) for key in ("files", "symbols", "routes", "env_keys", "services")
+    ) else 0.45
+    score = base + min(overlap, 3) * 0.12 + entity_bonus
+    return min(score, 1.0)
 
 
 def _merge_results(*layers):
@@ -2058,6 +2162,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     conversation_state = query_info.get("conversation_state") if query_info else None
     previous_files = conversation_state.get("previous_files", []) if conversation_state else []
     previous_symbols = conversation_state.get("previous_symbols", []) if conversation_state else []
+    followup_hint = str(query_info.get("followup_hint") or "").strip() if query_info else ""
+    followup_hint_entities = query_info.get("followup_hint_entities") if query_info else None
+    hint_files = list((followup_hint_entities or {}).get("files", []) or [])
+    hint_symbols = list((followup_hint_entities or {}).get("symbols", []) or [])
     matched_code_topic_route = (
         query_info.get("code_topic_route") if query_info else None
     ) or match_code_topic_route(raw_query, primary_intent)
@@ -2110,6 +2218,13 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                 if candidate_dir == prev_dir and candidate_dir not in (".", ""):
                     followup_boost += 0.15
                     break
+            if followup_hint:
+                if candidate_path in hint_files:
+                    followup_boost += 0.10
+                if item.get("symbol_name") in hint_symbols:
+                    followup_boost += 0.10
+            if item.get("injected_from_previous_turn"):
+                followup_boost = min(followup_boost, 0.10)
 
         dependency_boost = 0.0
         if (reranker_intent == "DEPENDENCY" or label_intent == "DEPENDENCY" or is_dependency_trace_query(raw_query)) and item.get("support_kind") == "dependency_edge":
@@ -2408,6 +2523,8 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         )
 
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)
+        if item.get("injected_from_previous_turn"):
+            final_score *= PREVIOUS_CANDIDATE_PENALTY
 
         boosted = dict(item)
         boosted["retrieval_score"] = final_score

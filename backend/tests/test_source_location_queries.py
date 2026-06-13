@@ -11,6 +11,68 @@ from retrieval.memory import ConversationMemory
 from retrieval.source_filter import select_sources_for_display
 
 class SourceLocationQueriesTests(unittest.TestCase):
+    def test_fake_symbol_location_query_does_not_force_source_location_mode(self) -> None:
+        source = {
+            "relative_path": "backend/retrieval/source_filter.py",
+            "symbol_name": "has_strong_source_location_evidence",
+            "start_line": 1378,
+            "end_line": 1435,
+            "expansion_type": "primary",
+            "labels": ["question_use:code-location"],
+            "retrieval_score": 0.22,
+            "chunk_type": "function",
+        }
+        chunk = dict(source)
+        chunk["chunk_id"] = "source-filter-1"
+
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": str(repo_root),
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main._resolve_query_info",
+                return_value={
+                    "raw_query": "where is totally_fake_symbol_xyz implemented?",
+                    "user_query": "where is totally_fake_symbol_xyz implemented?",
+                    "intent": "SYMBOL",
+                    "primary_intent": "SYMBOL",
+                    "entities": {"symbols": ["totally_fake_symbol_xyz"], "files": []},
+                    "is_followup": False,
+                    "topic_shift": False,
+                },
+            ), patch(
+                "retrieval.main.search", return_value=[chunk]
+            ), patch(
+                "retrieval.main.expand", return_value=[chunk]
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", [source], 12)
+            ), patch(
+                "retrieval.main.assemble_for_reasoning", return_value=("reasoning", [source], 12)
+            ), patch(
+                "retrieval.main.split_sources_two_layer", return_value=([source], [source])
+            ), patch(
+                "retrieval.main.score_evidence_confidence",
+                return_value={"level": "weak", "reason": "thin evidence", "count": 1},
+            ), patch("retrieval.main.generate_answer") as generate_answer:
+                answer, sources, token_count, meta = run_query(
+                    "where is totally_fake_symbol_xyz implemented?",
+                    memory,
+                    return_meta=True,
+                )
+
+        self.assertIn("I could not find sufficiently relevant code context for this query.", answer)
+        self.assertEqual(meta["response_mode"], "low_context")
+        self.assertTrue(meta["memory_diagnostics"]["retrieval"]["low_confidence_gate"])
+        generate_answer.assert_not_called()
+
     def test_qdrant_upsert_deterministic_answer(self) -> None:
         source = {
             "relative_path": "backend/rag_ingestion/stages/storage.py",

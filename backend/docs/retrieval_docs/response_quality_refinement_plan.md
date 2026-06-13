@@ -1,6 +1,10 @@
 # Response Quality Refinement Plan
 
+Parent roadmap: [memory_isolation_response_quality_roadmap.md](./memory_isolation_response_quality_roadmap.md)
+
 This document defines the current response-quality improvement plan for CodeSeek based on the implementation that exists today. It is not a generic RAG checklist. Every improvement below is grounded in the current ingestion, retrieval, assembly, deterministic-answer, and LLM paths in this repository.
+
+This document is now a child implementation tracker under the parent roadmap above. When memory-isolation and response-quality work overlaps, the parent roadmap defines the implementation order and acceptance intent, while this document records CodeSeek-specific current-state details, completed workstreams, and repo-grounded follow-on tasks.
 
 The purpose of this doc is:
 

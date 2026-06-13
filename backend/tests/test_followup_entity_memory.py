@@ -152,9 +152,13 @@ class TestDetectTopicShift(unittest.TestCase):
 
     def test_followup_phrase_what_about_is_not_a_shift(self) -> None:
         turns = [self._turn(symbols=["auth_github"])]
-        self.assertFalse(
-            detect_topic_shift("what about the token", _make_query_entities(), turns)
-        )
+        with patch(
+            "retrieval.follow_up_memory._query_similarity_details",
+            return_value={"score": 0.84, "keyword_overlap": 0.25, "method": "embedding"},
+        ):
+            self.assertFalse(
+                detect_topic_shift("what about the token", _make_query_entities(), turns)
+            )
 
     def test_followup_phrase_how_does_that_work_is_not_a_shift(self) -> None:
         turns = [self._turn(files=["main.py"])]
@@ -190,13 +194,11 @@ class TestDetectTopicShift(unittest.TestCase):
             detect_topic_shift("explain docker-compose.yml", q_ents, turns)
         )
 
-    # --- short query with no entities → treated as follow-up ---
+    # --- short query with no entities and low similarity → new topic ---
 
-    def test_short_query_no_entities_is_not_a_shift(self) -> None:
+    def test_short_query_no_entities_low_similarity_is_a_shift(self) -> None:
         turns = [self._turn(symbols=["create_session"])]
-        self.assertFalse(
-            detect_topic_shift("show me", _make_query_entities(), turns)
-        )
+        self.assertTrue(detect_topic_shift("show me", _make_query_entities(), turns))
 
     # --- no previous turns → not a shift ---
 
@@ -226,7 +228,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="",
         )
-        self.assertIn("create_session", result)
+        self.assertEqual(result["raw_query"], "where is it used")
+        self.assertEqual(result["followup_hint"], "create_session")
+        self.assertEqual(result["rewrite_mode"], "soft_hint")
 
     def test_injects_recent_file_when_no_symbol(self) -> None:
         entity_set = {
@@ -238,7 +242,7 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="",
         )
-        self.assertIn("retrieval/main.py", result)
+        self.assertEqual(result["followup_hint"], "retrieval/main.py")
 
     def test_combines_with_previous_anchor(self) -> None:
         entity_set = {
@@ -250,8 +254,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="What does auth_github do?",
         )
-        self.assertIn("What does auth_github do?", result)
-        self.assertIn("also provide code", result)
+        self.assertEqual(result["raw_query"], "also provide code")
+        self.assertEqual(result["followup_hint"], "auth_github")
+        self.assertEqual(result["rewrite_anchor"], "What does auth_github do?")
 
     def test_non_vague_query_uses_anchor(self) -> None:
         entity_set = {
@@ -264,8 +269,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="How does search work?",
         )
-        self.assertIn("How does search work?", result)
-        self.assertIn("explain the caching logic", result)
+        self.assertEqual(result["raw_query"], "explain the caching logic")
+        self.assertIsNone(result["followup_hint"])
+        self.assertEqual(result["rewrite_mode"], "none")
 
     def test_no_recent_entities_falls_back_to_anchor(self) -> None:
         entity_set = {
@@ -276,7 +282,8 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="What does run_query do?",
         )
-        self.assertIn("What does run_query do?", result)
+        self.assertIsNone(result["followup_hint"])
+        self.assertEqual(result["rewrite_anchor"], "What does run_query do?")
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +499,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             recent_entity_set,
             previous_resolved_query="What does run_query do?",
         )
-        self.assertIn("run_query", rewritten)
+        self.assertIn("run_query", rewritten["followup_hint"])
 
     def test_also_provide_code_retains_symbol_in_search(self) -> None:
         """'also provide code' should expand to include the last cited symbol."""
@@ -518,9 +525,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             from retrieval.main import run_query
             run_query("also provide code", memory)
 
-        # After entity injection, create_session should appear in symbols
-        symbols = captured.get("query_info", {}).get("entities", {}).get("symbols", [])
-        self.assertIn("create_session", symbols)
+        self.assertIsNone(captured.get("query_info", {}).get("followup_hint"))
 
     def test_topic_shift_does_not_inject_old_entities(self) -> None:
         """A clearly new topic should not drag in entities from the prior turn."""
@@ -576,7 +581,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             entity_set,
             previous_resolved_query="What does search do?\nalso provide code",
         )
-        self.assertIn("search", rewritten)
+        self.assertIn("search", rewritten["followup_hint"])
 
     def test_most_salient_entity_prefers_latest_symbol(self) -> None:
         entity_set = {

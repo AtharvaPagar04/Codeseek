@@ -1445,14 +1445,6 @@ def has_strong_source_location_evidence(
     if is_source_code and score >= 0.5:
         return True
 
-    # 5. query intent is FILE/SYMBOL/CONFIG/DEPENDENCY and context_count > 0
-    intent = str(query_info.get("intent", "")).upper()
-    primary_intent = str(query_info.get("primary_intent", "")).upper()
-    intents_to_check = {intent, primary_intent}
-    target_intents = {"FILE", "SYMBOL", "CONFIG", "DEPENDENCY"}
-    if (intents_to_check & target_intents) and len(display_sources) > 0:
-        return True
-
     return False
 
 

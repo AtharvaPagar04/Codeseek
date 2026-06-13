@@ -100,6 +100,50 @@ def _cap_history_block(full_block: str, max_tokens: int) -> str:
     return "\n".join(rebuilt)
 
 
+def _limit_history_block_turns(full_block: str, max_turns: int) -> str:
+    """Keep only the most recent *max_turns* Q/A pairs from a history block.
+
+    Any rolling summary section is intentionally dropped so prompt history only
+    contains concrete recent turns when history injection is enabled.
+    """
+    if not full_block or max_turns <= 0:
+        return ""
+
+    lines = full_block.splitlines()
+    turn_pairs: list[tuple[str, str]] = []
+    i = len(lines) - 1
+    while i >= 0:
+        line = lines[i]
+        if line.startswith("--- END HISTORY") or line.startswith("--- CONVERSATION HISTORY"):
+            i -= 1
+            continue
+        if line.startswith("--- CONVERSATION SUMMARY") or line.startswith("--- END SUMMARY"):
+            i -= 1
+            continue
+        if line.startswith("A") and i > 0 and lines[i - 1].startswith("Q"):
+            turn_pairs.insert(0, (lines[i - 1], line))
+            i -= 2
+            continue
+        i -= 1
+
+    if not turn_pairs:
+        return ""
+
+    chosen = turn_pairs[-max_turns:]
+    rebuilt = ["--- CONVERSATION HISTORY ---"]
+    for q, a in chosen:
+        rebuilt.append(q)
+        rebuilt.append(a)
+    rebuilt.append("--- END HISTORY ---")
+    return "\n".join(rebuilt)
+
+
+def prepare_history_block(full_block: str, *, max_turns: int, max_tokens: int) -> str:
+    """Trim history to recent turns first, then enforce the token cap."""
+    limited = _limit_history_block_turns(full_block, max_turns=max_turns)
+    return _cap_history_block(limited, max_tokens=max_tokens)
+
+
 class ConversationMemory:
     """Store bounded query/answer turns for prompt continuity.
 

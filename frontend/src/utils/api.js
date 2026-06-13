@@ -253,6 +253,7 @@ export const querySessionStream = async ({
             onSources({
               sources: event.sources,
               context_tokens: event.context_tokens,
+              diagnostics: event.diagnostics || null,
               evidence_confidence: event.evidence_confidence,
             });
           } else if (event.type === 'error' && onError) {
@@ -787,7 +788,6 @@ export const fetchIndexingJobHistory = async (sessionId, limit = 20) => {
   if (!res.ok) await throwApiError('Fetch indexing job history', res);
   return res.json();
 };
-
 
 
 

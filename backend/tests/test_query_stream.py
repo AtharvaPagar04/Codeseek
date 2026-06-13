@@ -27,7 +27,42 @@ def test_query_stream_success():
             stream_handler.on_status("Retrieving...")
             stream_handler.on_delta("Hello ")
             stream_handler.on_delta("world!")
-        return "Hello world!", [], 100, {"evidence_confidence": {"level": "strong"}}
+        return "Hello world!", [], 100, {
+            "query_intent": "CODE_REQUEST",
+            "primary_intent": "CODE_REQUEST",
+            "response_mode": "code_snippet",
+            "evidence_confidence": {"level": "strong"},
+            "display_sources": [],
+            "reasoning_sources": [],
+            "source_filter": {},
+            "memory_diagnostics": {
+                "memory": {
+                    "is_followup": False,
+                    "topic_shift_detected": False,
+                    "followup_confidence": 0.0,
+                    "query_similarity": 0.0,
+                    "keyword_overlap": 0.0,
+                    "similarity_method": "none",
+                    "has_valid_referent": False,
+                    "history_injected": False,
+                    "history_turns_used": 0,
+                },
+                "rewrite": {
+                    "query_rewritten": False,
+                    "rewrite_anchor": None,
+                    "rewrite_mode": "none",
+                },
+                "retrieval": {
+                    "previous_candidates_injected": 0,
+                    "strong_new_entities": [],
+                    "exact_hit": False,
+                    "multi_layer_hit": False,
+                    "top_score": None,
+                    "candidate_count": 0,
+                    "retrieval_confidence": "strong",
+                },
+            },
+        }
 
     with patch("retrieval.api_service._current_auth_user", return_value=mock_user), \
          patch("retrieval.api_service.get_active_provider_credential", return_value=mock_provider), \
@@ -51,6 +86,8 @@ def test_query_stream_success():
         assert events[2] == {"type": "delta", "text": "world!"}
         assert events[3]["type"] == "sources"
         assert events[3]["sources"] == []
+        assert events[3]["diagnostics"]["memory"]["history_injected"] is False
+        assert events[3]["diagnostics"]["retrieval"]["candidate_count"] == 0
         assert events[4] == {"type": "done"}
         
         # The thread ID is randomly generated in ensure_default_thread, so we can assert on args

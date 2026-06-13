@@ -21,6 +21,22 @@ EXPECTED_DEPENDENCY_RE = re.compile(r"^expected_dependency_score:\s*([0-9.]+)\s*
 EXPECTED_NO_ANSWER_RE = re.compile(r"^expected_no_answer_score:\s*([0-9.]+)\s*$")
 EXPECTED_RESPONSE_MODE_RE = re.compile(r"^expected_response_mode_score:\s*([0-9.]+)\s*$")
 EXPECTED_ANSWER_TERM_RE = re.compile(r"^expected_answer_term_score:\s*([0-9.]+)\s*$")
+TOPIC_SHIFT_RE = re.compile(r"^topic_shift_accuracy:\s*([0-9.]+)\s*$")
+FOLLOWUP_PRECISION_RE = re.compile(r"^followup_precision:\s*([0-9.]+)\s*$")
+FOLLOWUP_RECALL_RE = re.compile(r"^followup_recall:\s*([0-9.]+)\s*$")
+FOLLOWUP_DECISION_RE = re.compile(r"^followup_decision_score:\s*([0-9.]+)\s*$")
+HISTORY_INJECTION_SCORE_RE = re.compile(r"^history_injection_score:\s*([0-9.]+)\s*$")
+PREVIOUS_CANDIDATE_SCORE_RE = re.compile(r"^previous_candidate_injection_score:\s*([0-9.]+)\s*$")
+QUERY_REWRITE_SCORE_RE = re.compile(r"^query_rewrite_score:\s*([0-9.]+)\s*$")
+LOW_CONFIDENCE_SCORE_RE = re.compile(r"^low_confidence_refusal_score:\s*([0-9.]+)\s*$")
+ANSWER_RELEVANCE_RE = re.compile(r"^answer_relevance_score:\s*([0-9.]+)\s*$")
+SOURCE_FAITHFULNESS_RE = re.compile(r"^source_faithfulness_score:\s*([0-9.]+)\s*$")
+WRONG_TOPIC_RE = re.compile(r"^wrong_topic_answer_score:\s*([0-9.]+)\s*$")
+RETRIEVAL_CONFIDENCE_RE = re.compile(r"^retrieval_confidence_score:\s*([0-9.]+)\s*$")
+HISTORY_INJECTION_RATE_RE = re.compile(r"^history_injection_rate:\s*([0-9.]+)\s*$")
+PREVIOUS_CANDIDATE_RATE_RE = re.compile(r"^previous_candidate_injection_rate:\s*([0-9.]+)\s*$")
+QUERY_REWRITE_RATE_RE = re.compile(r"^query_rewrite_rate:\s*([0-9.]+)\s*$")
+LOW_CONFIDENCE_RATE_RE = re.compile(r"^low_confidence_refusal_rate:\s*([0-9.]+)\s*$")
 LATENCY_P50_RE = re.compile(r"^latency_p50_ms:\s*(\d+)\s*$")
 LATENCY_P95_RE = re.compile(r"^latency_p95_ms:\s*(\d+)\s*$")
 RETRIEVAL_ONLY_P50_RE = re.compile(r"^retrieval_only_latency_p50_ms:\s*(\d+)\s*$")
@@ -60,6 +76,38 @@ def _parse_eval_output(text: str) -> dict[str, float]:
             metrics["expected_response_mode"] = float(match.group(1))
         elif match := EXPECTED_ANSWER_TERM_RE.match(line):
             metrics["expected_answer_term"] = float(match.group(1))
+        elif match := TOPIC_SHIFT_RE.match(line):
+            metrics["topic_shift_accuracy"] = float(match.group(1))
+        elif match := FOLLOWUP_PRECISION_RE.match(line):
+            metrics["followup_precision"] = float(match.group(1))
+        elif match := FOLLOWUP_RECALL_RE.match(line):
+            metrics["followup_recall"] = float(match.group(1))
+        elif match := FOLLOWUP_DECISION_RE.match(line):
+            metrics["followup_decision"] = float(match.group(1))
+        elif match := HISTORY_INJECTION_SCORE_RE.match(line):
+            metrics["history_injection_score"] = float(match.group(1))
+        elif match := PREVIOUS_CANDIDATE_SCORE_RE.match(line):
+            metrics["previous_candidate_injection_score"] = float(match.group(1))
+        elif match := QUERY_REWRITE_SCORE_RE.match(line):
+            metrics["query_rewrite_score"] = float(match.group(1))
+        elif match := LOW_CONFIDENCE_SCORE_RE.match(line):
+            metrics["low_confidence_refusal_score"] = float(match.group(1))
+        elif match := ANSWER_RELEVANCE_RE.match(line):
+            metrics["answer_relevance_score"] = float(match.group(1))
+        elif match := SOURCE_FAITHFULNESS_RE.match(line):
+            metrics["source_faithfulness_score"] = float(match.group(1))
+        elif match := WRONG_TOPIC_RE.match(line):
+            metrics["wrong_topic_answer_score"] = float(match.group(1))
+        elif match := RETRIEVAL_CONFIDENCE_RE.match(line):
+            metrics["retrieval_confidence_score"] = float(match.group(1))
+        elif match := HISTORY_INJECTION_RATE_RE.match(line):
+            metrics["history_injection_rate"] = float(match.group(1))
+        elif match := PREVIOUS_CANDIDATE_RATE_RE.match(line):
+            metrics["previous_candidate_injection_rate"] = float(match.group(1))
+        elif match := QUERY_REWRITE_RATE_RE.match(line):
+            metrics["query_rewrite_rate"] = float(match.group(1))
+        elif match := LOW_CONFIDENCE_RATE_RE.match(line):
+            metrics["low_confidence_refusal_rate"] = float(match.group(1))
         elif match := LATENCY_P50_RE.match(line):
             metrics["latency_p50_ms"] = float(match.group(1))
         elif match := LATENCY_P95_RE.match(line):
@@ -97,6 +145,22 @@ def _parse_eval_output(text: str) -> dict[str, float]:
         "expected_no_answer",
         "expected_response_mode",
         "expected_answer_term",
+        "topic_shift_accuracy",
+        "followup_precision",
+        "followup_recall",
+        "followup_decision",
+        "history_injection_score",
+        "previous_candidate_injection_score",
+        "query_rewrite_score",
+        "low_confidence_refusal_score",
+        "answer_relevance_score",
+        "source_faithfulness_score",
+        "wrong_topic_answer_score",
+        "retrieval_confidence_score",
+        "history_injection_rate",
+        "previous_candidate_injection_rate",
+        "query_rewrite_rate",
+        "low_confidence_refusal_rate",
         "latency_p50_ms",
         "latency_p95_ms",
         "retrieval_only_latency_p50_ms",
@@ -246,6 +310,22 @@ def main() -> None:
     agg_no_answer = sum(r["expected_no_answer"] * r["cases"] for r in results) / total_cases
     agg_response_mode = sum(r["expected_response_mode"] * r["cases"] for r in results) / total_cases
     agg_answer_term = sum(r["expected_answer_term"] * r["cases"] for r in results) / total_cases
+    agg_topic_shift = sum(r["topic_shift_accuracy"] * r["cases"] for r in results) / total_cases
+    agg_followup_precision = sum(r["followup_precision"] * r["cases"] for r in results) / total_cases
+    agg_followup_recall = sum(r["followup_recall"] * r["cases"] for r in results) / total_cases
+    agg_followup_decision = sum(r["followup_decision"] * r["cases"] for r in results) / total_cases
+    agg_history_injection_score = sum(r["history_injection_score"] * r["cases"] for r in results) / total_cases
+    agg_previous_candidate_score = sum(r["previous_candidate_injection_score"] * r["cases"] for r in results) / total_cases
+    agg_query_rewrite_score = sum(r["query_rewrite_score"] * r["cases"] for r in results) / total_cases
+    agg_low_confidence_score = sum(r["low_confidence_refusal_score"] * r["cases"] for r in results) / total_cases
+    agg_answer_relevance = sum(r["answer_relevance_score"] * r["cases"] for r in results) / total_cases
+    agg_source_faithfulness = sum(r["source_faithfulness_score"] * r["cases"] for r in results) / total_cases
+    agg_wrong_topic = sum(r["wrong_topic_answer_score"] * r["cases"] for r in results) / total_cases
+    agg_retrieval_confidence = sum(r["retrieval_confidence_score"] * r["cases"] for r in results) / total_cases
+    agg_history_injection_rate = sum(r["history_injection_rate"] * r["cases"] for r in results) / total_cases
+    agg_previous_candidate_rate = sum(r["previous_candidate_injection_rate"] * r["cases"] for r in results) / total_cases
+    agg_query_rewrite_rate = sum(r["query_rewrite_rate"] * r["cases"] for r in results) / total_cases
+    agg_low_confidence_rate = sum(r["low_confidence_refusal_rate"] * r["cases"] for r in results) / total_cases
     max_latency_p50 = max(r["latency_p50_ms"] for r in results)
     max_latency_p95 = max(r["latency_p95_ms"] for r in results)
     max_retrieval_only_p50 = max(r["retrieval_only_latency_p50_ms"] for r in results)
@@ -273,6 +353,22 @@ def main() -> None:
     print(f"weighted_expected_no_answer_score: {agg_no_answer:.3f}")
     print(f"weighted_expected_response_mode_score: {agg_response_mode:.3f}")
     print(f"weighted_expected_answer_term_score: {agg_answer_term:.3f}")
+    print(f"weighted_topic_shift_accuracy: {agg_topic_shift:.3f}")
+    print(f"weighted_followup_precision: {agg_followup_precision:.3f}")
+    print(f"weighted_followup_recall: {agg_followup_recall:.3f}")
+    print(f"weighted_followup_decision_score: {agg_followup_decision:.3f}")
+    print(f"weighted_history_injection_score: {agg_history_injection_score:.3f}")
+    print(f"weighted_previous_candidate_injection_score: {agg_previous_candidate_score:.3f}")
+    print(f"weighted_query_rewrite_score: {agg_query_rewrite_score:.3f}")
+    print(f"weighted_low_confidence_refusal_score: {agg_low_confidence_score:.3f}")
+    print(f"weighted_answer_relevance_score: {agg_answer_relevance:.3f}")
+    print(f"weighted_source_faithfulness_score: {agg_source_faithfulness:.3f}")
+    print(f"weighted_wrong_topic_answer_score: {agg_wrong_topic:.3f}")
+    print(f"weighted_retrieval_confidence_score: {agg_retrieval_confidence:.3f}")
+    print(f"weighted_history_injection_rate: {agg_history_injection_rate:.3f}")
+    print(f"weighted_previous_candidate_injection_rate: {agg_previous_candidate_rate:.3f}")
+    print(f"weighted_query_rewrite_rate: {agg_query_rewrite_rate:.3f}")
+    print(f"weighted_low_confidence_refusal_rate: {agg_low_confidence_rate:.3f}")
     print(f"max_latency_p50_ms: {int(max_latency_p50)}")
     print(f"max_latency_p95_ms: {int(max_latency_p95)}")
     print(f"max_retrieval_only_latency_p50_ms: {int(max_retrieval_only_p50)}")
@@ -302,6 +398,22 @@ def main() -> None:
                 "weighted_expected_no_answer_score": round(agg_no_answer, 6),
                 "weighted_expected_response_mode_score": round(agg_response_mode, 6),
                 "weighted_expected_answer_term_score": round(agg_answer_term, 6),
+                "weighted_topic_shift_accuracy": round(agg_topic_shift, 6),
+                "weighted_followup_precision": round(agg_followup_precision, 6),
+                "weighted_followup_recall": round(agg_followup_recall, 6),
+                "weighted_followup_decision_score": round(agg_followup_decision, 6),
+                "weighted_history_injection_score": round(agg_history_injection_score, 6),
+                "weighted_previous_candidate_injection_score": round(agg_previous_candidate_score, 6),
+                "weighted_query_rewrite_score": round(agg_query_rewrite_score, 6),
+                "weighted_low_confidence_refusal_score": round(agg_low_confidence_score, 6),
+                "weighted_answer_relevance_score": round(agg_answer_relevance, 6),
+                "weighted_source_faithfulness_score": round(agg_source_faithfulness, 6),
+                "weighted_wrong_topic_answer_score": round(agg_wrong_topic, 6),
+                "weighted_retrieval_confidence_score": round(agg_retrieval_confidence, 6),
+                "weighted_history_injection_rate": round(agg_history_injection_rate, 6),
+                "weighted_previous_candidate_injection_rate": round(agg_previous_candidate_rate, 6),
+                "weighted_query_rewrite_rate": round(agg_query_rewrite_rate, 6),
+                "weighted_low_confidence_refusal_rate": round(agg_low_confidence_rate, 6),
                 "max_latency_p50_ms": int(max_latency_p50),
                 "max_latency_p95_ms": int(max_latency_p95),
                 "max_retrieval_only_latency_p50_ms": int(max_retrieval_only_p50),

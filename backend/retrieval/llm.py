@@ -36,10 +36,16 @@ from retrieval.local_llm_runtime import (
 
 SYSTEM_PROMPT = (
     "You are a repository-grounded code assistant.\n"
-    "Core rules:\n"
-    "1. Use only the provided CODE CONTEXT and ALLOWED SOURCES. Do not invent files, functions, classes, endpoints, routes, or behavior.\n"
-    "2. Prefer implementation files over docs, tests, generated reports, scratch files, and benchmark scripts unless the user explicitly asks for them.\n"
-    "3. Never expose retrieval internals to the user. Do not expose retrieval internals such as internal payload metadata, scoring fields, injected candidates, reranker boosts, routing/debug details, source weights, or hidden retrieval heuristics.\n"
+    "Grounding rules:\n"
+    "1. Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.\n"
+    "2. Do not invent file names, functions, class names, method names, function signatures, endpoints, routes, import paths, or behavior.\n"
+    "3. If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.\n"
+    "4. If the user asks about a file or symbol that is not present in CODE CONTEXT, say it was not found in the retrieved context.\n"
+    "5. Conversation history is only for resolving confirmed vague follow-ups. It cannot override, replace, or add facts that are absent from the current CODE CONTEXT.\n"
+    "6. If the answer mentions a file, that file must appear in the provided ALLOWED SOURCES.\n"
+    "7. If the answer mentions a function or symbol, it must appear in the provided source metadata or code excerpt.\n"
+    "8. Prefer implementation files over docs, tests, generated reports, scratch files, and benchmark scripts unless the user explicitly asks for them.\n"
+    "9. Never expose retrieval internals to the user. Do not expose retrieval internals such as internal payload metadata, scoring fields, injected candidates, reranker boosts, routing/debug details, source weights, or hidden retrieval heuristics.\n"
     "   Do not remove, rename, sanitize, or alter legitimate source-code identifiers inside code blocks. Preserve source-code identifiers such as payload, score, rank, metadata, source, or context exactly as written in the source file.\n"
     "   Avoid phrases like:\n"
     "   * direct injected candidate\n"
@@ -48,12 +54,10 @@ SYSTEM_PROMPT = (
     "   * source role classifier\n"
     "   * exact retrieval hit\n"
     "   * internal score\n"
-    "4. If evidence is weak or incomplete, say so clearly (e.g., reply with 'I could not find strong evidence...').\n"
-    "5. If the answer mentions a file, that file must appear in the provided ALLOWED SOURCES.\n"
-    "6. If the answer mentions a function/symbol, it must appear in the provided source metadata or code excerpt.\n"
-    "7. For overview and explanation questions, give enough detail to be useful. Use natural paragraphs with clear section headings unless the user asks for a short list.\n"
-    "8. NEVER include a Sources, References, Relevant Sources, Key Sources, or Related Sources section in your answer. The UI already renders source cards separately below your answer. Do not list file paths at the end of your response.\n"
-    "9. Do not start explanation answers with Function:, Signature:, Calls:, Parameters:, or Implementation first lines unless the user explicitly asks for code metadata."
+    "10. If evidence is weak or incomplete, say so clearly (e.g., reply with 'I could not find strong evidence...').\n"
+    "11. For overview and explanation questions, give enough detail to be useful. Use natural paragraphs with clear section headings unless the user asks for a short list.\n"
+    "12. NEVER include a Sources, References, Relevant Sources, Key Sources, or Related Sources section in your answer. The UI already renders source cards separately below your answer. Do not list file paths at the end of your response.\n"
+    "13. Do not start explanation answers with Function:, Signature:, Calls:, Parameters:, or Implementation first lines unless the user explicitly asks for code metadata."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
@@ -528,6 +532,21 @@ def _build_prompt(
         "If the current question explicitly asks for docs, documentation, markdown, reports, policy, guide, or a named document, answer from the current retrieved docs and do not summarize prior turns unless the current question is vague."
     )
 
+    if history_block:
+        parts.append("--- OPTIONAL CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---")
+        parts.append(
+            "Only use this history if the current question is a confirmed vague follow-up. "
+            "Do not use it to introduce facts that are absent from the current code context."
+        )
+        parts.append(history_block)
+
+    parts.append("--- CODE CONTEXT (CURRENT QUERY) ---")
+    parts.append("Fresh retrieved context for the current query. Treat this as the primary evidence.")
+    parts.append(context)
+    for block in extra_context_blocks or []:
+        parts.append(block)
+    parts.append("--- END CODE CONTEXT ---")
+
     if allowed_sources:
         parts.append("--- ALLOWED SOURCES (STRICT) ---")
         for src in allowed_sources:
@@ -536,18 +555,14 @@ def _build_prompt(
                 f"(lines {src.get('start_line',0)}-{src.get('end_line',0)})"
             )
         parts.append("--- END ALLOWED SOURCES ---")
-        parts.append(
-            "You must only reference files/symbols from ALLOWED SOURCES. "
-            "If other code appears in context, ignore it."
-        )
-    parts.append("--- CODE CONTEXT ---")
-    parts.append(context)
-    for block in extra_context_blocks or []:
-        parts.append(block)
-    parts.append("--- END CODE CONTEXT ---")
-    if history_block:
-        parts.append("--- CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---")
-        parts.append(history_block)
+
+    parts.append("--- FINAL GROUNDING INSTRUCTION ---")
+    parts.append(
+        "Answer using CODE CONTEXT as the source of truth. "
+        "Use only files and symbols that appear in ALLOWED SOURCES when citing implementation details. "
+        "Do not use conversation history to introduce facts that are not present in the current CODE CONTEXT. "
+        "If other code appears outside the allowed/current context, ignore it."
+    )
     return "\n\n".join(parts)
 
 

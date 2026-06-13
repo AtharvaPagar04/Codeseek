@@ -1,6 +1,10 @@
 # Current Retrieval, Argumentation, and Prompting Strategy
 
+Parent roadmap for upcoming implementation changes: [memory_isolation_response_quality_roadmap.md](./memory_isolation_response_quality_roadmap.md)
+
 This document describes the retrieval and answer-generation pipeline exactly as it exists in the current backend implementation. It is not a target design. It is a code-based snapshot of the present system so the strategy can be reviewed, challenged, and improved.
+
+Use this doc as the current-state reference and the parent roadmap above as the target implementation guide for memory-isolation and response-quality changes.
 
 Primary implementation files:
 

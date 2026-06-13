@@ -6,6 +6,33 @@ def test_build_query_diagnostics_compacts_safe_fields():
         "query_intent": "CODE_REQUEST",
         "primary_intent": "CODE_REQUEST",
         "response_mode": "code_snippet",
+        "memory_diagnostics": {
+            "memory": {
+                "is_followup": False,
+                "topic_shift_detected": True,
+                "followup_confidence": 0.125,
+                "query_similarity": 0.0,
+                "keyword_overlap": 0.0,
+                "similarity_method": "keyword_overlap",
+                "has_valid_referent": False,
+                "history_injected": False,
+                "history_turns_used": 0,
+            },
+            "rewrite": {
+                "query_rewritten": False,
+                "rewrite_anchor": None,
+                "rewrite_mode": "none",
+            },
+            "retrieval": {
+                "previous_candidates_injected": 0,
+                "strong_new_entities": ["backend/evals/run_safe_evals.py", "main"],
+                "exact_hit": True,
+                "multi_layer_hit": True,
+                "top_score": 0.97,
+                "candidate_count": 4,
+                "retrieval_confidence": "high",
+            },
+        },
         "llm_selection": {
             "provider": "local",
             "model": "qwen2.5-coder:3b-8k",
@@ -60,6 +87,10 @@ def test_build_query_diagnostics_compacts_safe_fields():
     assert diagnostics["selected_source_count"] == 1
     assert diagnostics["reasoning_source_count"] == 1
     assert diagnostics["rendered_source_count"] == 1
+    assert diagnostics["memory"]["topic_shift_detected"] is True
+    assert diagnostics["memory"]["similarity_method"] == "keyword_overlap"
+    assert diagnostics["rewrite"]["rewrite_mode"] == "none"
+    assert diagnostics["retrieval"]["top_score"] == 0.97
     assert diagnostics["rendered_sources"][0] == {
         "relative_path": "backend/evals/run_safe_evals.py",
         "symbol_name": "main",
@@ -71,4 +102,3 @@ def test_build_query_diagnostics_compacts_safe_fields():
     assert diagnostics["reasoning_sources"][0]["symbol_name"] == "get_tail"
     assert diagnostics["validation"]["repaired"] is True
     assert diagnostics["validation"]["reasons"] == ["rebuilt_code_snippet"]
-

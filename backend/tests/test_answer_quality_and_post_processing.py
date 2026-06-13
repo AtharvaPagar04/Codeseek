@@ -118,7 +118,11 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
     def test_system_prompt_grounded_rules(self) -> None:
         self.assertIn("Never expose retrieval internals to the user", SYSTEM_PROMPT)
         self.assertIn("Prefer implementation files over docs, tests, generated reports", SYSTEM_PROMPT)
-        self.assertIn("Do not invent files, functions, classes", SYSTEM_PROMPT)
+        self.assertIn("Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.", SYSTEM_PROMPT)
+        self.assertIn("Do not invent file names, functions, class names", SYSTEM_PROMPT)
+        self.assertIn("If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.", SYSTEM_PROMPT)
+        self.assertIn("it was not found in the retrieved context", SYSTEM_PROMPT)
+        self.assertIn("Conversation history is only for resolving confirmed vague follow-ups.", SYSTEM_PROMPT)
         self.assertIn("internal payload metadata", SYSTEM_PROMPT)
         self.assertIn("Preserve source-code identifiers", SYSTEM_PROMPT)
 

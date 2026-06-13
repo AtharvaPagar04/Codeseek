@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from scripts import retrieval_eval
 
@@ -90,6 +91,105 @@ class RetrievalEvalScoringTests(unittest.TestCase):
             retrieval_eval._latency_profile_for_case({"latency_profile": "llm"}, "flow_summary"),
             "llm",
         )
+
+    def test_forbidden_term_and_count_scores(self) -> None:
+        self.assertEqual(retrieval_eval._forbidden_term_score("answer about auth only", ["qdrant"]), 1.0)
+        self.assertEqual(retrieval_eval._forbidden_term_score("mentions qdrant upsert", ["qdrant"]), 0.0)
+        self.assertEqual(retrieval_eval._expected_count_score(0, False), 1.0)
+        self.assertEqual(retrieval_eval._expected_count_score(2, True), 1.0)
+        self.assertEqual(retrieval_eval._expected_count_score(2, 2), 1.0)
+        self.assertEqual(retrieval_eval._expected_count_score(1, 2), 0.0)
+
+    def test_evaluate_case_supports_multi_turn_memory_isolation_sequences(self) -> None:
+        responses = iter(
+            [
+                (
+                    "Here is _require_auth",
+                    [{"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_require_auth"}],
+                    10,
+                    {
+                        "response_mode": "code_snippet",
+                        "total_latency_ms": 10,
+                        "backend_latency_ms": 10,
+                        "provider_latency_ms": 0,
+                        "stage_latency_ms": {},
+                        "memory_diagnostics": {
+                            "memory": {
+                                "is_followup": False,
+                                "topic_shift_detected": False,
+                                "history_injected": False,
+                            },
+                            "rewrite": {"query_rewritten": False},
+                            "retrieval": {
+                                "previous_candidates_injected": 0,
+                                "low_confidence_gate": False,
+                                "retrieval_confidence": "strong",
+                            },
+                        },
+                    },
+                ),
+                (
+                    "Sidebar.jsx renders the navigation",
+                    [{"relative_path": "frontend/src/components/Sidebar.jsx", "symbol_name": "Sidebar"}],
+                    10,
+                    {
+                        "response_mode": "file_summary",
+                        "total_latency_ms": 12,
+                        "backend_latency_ms": 12,
+                        "provider_latency_ms": 0,
+                        "stage_latency_ms": {},
+                        "memory_diagnostics": {
+                            "memory": {
+                                "is_followup": False,
+                                "topic_shift_detected": True,
+                                "history_injected": False,
+                            },
+                            "rewrite": {"query_rewritten": False},
+                            "retrieval": {
+                                "previous_candidates_injected": 0,
+                                "low_confidence_gate": False,
+                                "retrieval_confidence": "strong",
+                            },
+                        },
+                    },
+                ),
+            ]
+        )
+
+        case = {
+            "id": "mi-001",
+            "turns": [
+                {
+                    "query": "show me _require_auth",
+                    "expected_sources": [{"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_require_auth"}],
+                    "expected_response_mode": "code_snippet",
+                },
+                {
+                    "query": "explain frontend Sidebar.jsx",
+                    "expected_is_followup": False,
+                    "expected_topic_shift": True,
+                    "expected_history_injected": False,
+                    "expected_query_rewritten": False,
+                    "expected_previous_candidates_injected": 0,
+                    "expected_answer_terms": ["Sidebar.jsx"],
+                    "forbidden_answer_terms": ["_require_auth"],
+                    "forbidden_source_terms": ["backend/retrieval/api_service.py"],
+                },
+            ],
+        }
+
+        with patch("scripts.retrieval_eval.run_query", side_effect=lambda *args, **kwargs: next(responses)):
+            result = retrieval_eval.evaluate_case(case, 10)
+
+        self.assertEqual(result["followup_decision_score"], 1.0)
+        self.assertEqual(result["topic_shift_score"], 1.0)
+        self.assertEqual(result["history_injection_score"], 1.0)
+        self.assertEqual(result["previous_candidate_injection_score"], 1.0)
+        self.assertEqual(result["wrong_topic_answer_score"], 1.0)
+        self.assertEqual(result["wrong_topic_source_score"], 1.0)
+        self.assertEqual(result["followup_precision"], 1.0)
+        self.assertEqual(result["followup_recall"], 1.0)
+        self.assertEqual(len(result["turn_results"]), 2)
 
 
 if __name__ == "__main__":

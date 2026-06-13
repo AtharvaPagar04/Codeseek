@@ -138,6 +138,12 @@ GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_USER_URL = "https://api.github.com/user"
 CODESEEK_FRONTEND_URL = os.getenv("CODESEEK_FRONTEND_URL", "http://localhost:5173")
 OAUTH_STATE_COOKIE = "codeseek_oauth_state"
+ENABLE_DEBUG_DIAGNOSTICS = os.getenv("CODESEEK_ENABLE_DEBUG_DIAGNOSTICS", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 app = FastAPI(title="Codeseek Retrieval API", version="1.0.0")
 
@@ -680,6 +686,7 @@ def _build_query_diagnostics(
     llm_selection = meta.get("llm_selection") if isinstance(meta.get("llm_selection"), dict) else {}
     evidence_confidence = meta.get("evidence_confidence") if isinstance(meta.get("evidence_confidence"), dict) else {}
     source_filter = meta.get("source_filter") if isinstance(meta.get("source_filter"), dict) else {}
+    memory_diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -708,6 +715,11 @@ def _build_query_diagnostics(
         "reasoning_sources": _compact_sources(list(meta.get("reasoning_sources") or [])),
         "rendered_sources": _compact_sources(list(sources or [])),
     }
+
+    if memory_diagnostics:
+        diagnostics["memory"] = dict(memory_diagnostics.get("memory") or {})
+        diagnostics["rewrite"] = dict(memory_diagnostics.get("rewrite") or {})
+        diagnostics["retrieval"] = dict(memory_diagnostics.get("retrieval") or {})
 
     validation = meta.get("validation")
     if isinstance(validation, dict):
@@ -864,25 +876,27 @@ def _query_impl(
         )
         observe_api_request(path, "200", total_ms)
         observe_retrieval_meta(meta, source_count=len(sources), context_tokens=token_count)
-        return {
+        response_data = {
             "request_id": request_id,
             "answer": answer,
             "sources": sources,
             "context_tokens": token_count,
             "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
-            "diagnostics": _build_query_diagnostics(
-                meta=meta,
-                sources=sources,
-                token_count=token_count,
-                session=session,
-                provider_config=provider_config,
-            ),
             "metrics": {
                 "total_latency_ms": total_ms,
                 "stage_latency_ms": meta.get("stage_latency_ms", {}),
                 "source_filter": meta.get("source_filter", {}),
             },
         }
+        if ENABLE_DEBUG_DIAGNOSTICS:
+            response_data["diagnostics"] = _build_query_diagnostics(
+                meta=meta,
+                sources=sources,
+                token_count=token_count,
+                session=session,
+                provider_config=provider_config,
+            )
+        return response_data
     except LlmProviderError as exc:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, str(exc.status_code), total_ms)
@@ -1095,12 +1109,21 @@ async def query_stream_v1(
                 )
             
             # Send the final sources and metadata
-            event_queue.put({
+            sources_event = {
                 "type": "sources",
                 "sources": sources,
                 "context_tokens": token_count,
                 "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
-            })
+            }
+            if ENABLE_DEBUG_DIAGNOSTICS:
+                sources_event["diagnostics"] = _build_query_diagnostics(
+                    meta=meta,
+                    sources=sources,
+                    token_count=token_count,
+                    session=session,
+                    provider_config=provider_config,
+                )
+            event_queue.put(sources_event)
 
             # Save the message to DB/history if session exists and not aborted
             if not abort_event.is_set() and session:

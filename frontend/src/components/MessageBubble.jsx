@@ -107,7 +107,7 @@ const markdownComponents = {
   },
 };
 
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, showDiagnostics = false }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [copiedUser, setCopiedUser] = useState(false);
@@ -288,7 +288,7 @@ export default function MessageBubble({ message }) {
                 </div>
               </details>
 
-              {diagnosticsRows.length > 0 && (
+              {showDiagnostics && diagnosticsRows.length > 0 && (
                 <details className="group">
                   <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
                     <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">

@@ -20,6 +20,22 @@ expected_dependency_score: 0.500
 expected_no_answer_score: 1.000
 expected_response_mode_score: 1.000
 expected_answer_term_score: 0.750
+topic_shift_accuracy: 1.000
+followup_precision: 0.500
+followup_recall: 1.000
+followup_decision_score: 0.750
+history_injection_score: 1.000
+previous_candidate_injection_score: 0.500
+query_rewrite_score: 1.000
+low_confidence_refusal_score: 0.500
+answer_relevance_score: 0.750
+source_faithfulness_score: 1.000
+wrong_topic_answer_score: 1.000
+retrieval_confidence_score: 1.000
+history_injection_rate: 0.250
+previous_candidate_injection_rate: 0.250
+query_rewrite_rate: 0.100
+low_confidence_refusal_rate: 0.150
 latency_p50_ms: 123
 latency_p95_ms: 456
 retrieval_only_latency_p50_ms: 45
@@ -45,6 +61,22 @@ llm_total_latency_p95_ms: 3300
         self.assertEqual(metrics["expected_no_answer"], 1.0)
         self.assertEqual(metrics["expected_response_mode"], 1.0)
         self.assertEqual(metrics["expected_answer_term"], 0.75)
+        self.assertEqual(metrics["topic_shift_accuracy"], 1.0)
+        self.assertEqual(metrics["followup_precision"], 0.5)
+        self.assertEqual(metrics["followup_recall"], 1.0)
+        self.assertEqual(metrics["followup_decision"], 0.75)
+        self.assertEqual(metrics["history_injection_score"], 1.0)
+        self.assertEqual(metrics["previous_candidate_injection_score"], 0.5)
+        self.assertEqual(metrics["query_rewrite_score"], 1.0)
+        self.assertEqual(metrics["low_confidence_refusal_score"], 0.5)
+        self.assertEqual(metrics["answer_relevance_score"], 0.75)
+        self.assertEqual(metrics["source_faithfulness_score"], 1.0)
+        self.assertEqual(metrics["wrong_topic_answer_score"], 1.0)
+        self.assertEqual(metrics["retrieval_confidence_score"], 1.0)
+        self.assertEqual(metrics["history_injection_rate"], 0.25)
+        self.assertEqual(metrics["previous_candidate_injection_rate"], 0.25)
+        self.assertEqual(metrics["query_rewrite_rate"], 0.1)
+        self.assertEqual(metrics["low_confidence_refusal_rate"], 0.15)
         self.assertEqual(metrics["latency_p50_ms"], 123.0)
         self.assertEqual(metrics["latency_p95_ms"], 456.0)
         self.assertEqual(metrics["retrieval_only_latency_p50_ms"], 45.0)

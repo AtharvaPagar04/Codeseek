@@ -5,6 +5,7 @@ import ConfirmDialog from './ConfirmDialog';
 import IndexingLiveLog from './IndexingLiveLog';
 import EvaluationPanel from './EvaluationPanel';
 import { useChat } from '../hooks/useChat';
+import { isDiagnosticsDebugEnabled, setDiagnosticsDebugEnabled } from '../utils/debug.js';
 import { listProviderCredentials, fetchSessionRepoStatus, fetchSessionFreshness, indexLatestVersion, fetchLatestEvaluationReport, fetchIndexPreview, indexSessionIncremental, fetchLatestIndexingJob, cancelLatestIndexingJob, fetchIndexingJobHistory } from '../utils/api';
 
 
@@ -40,6 +41,7 @@ export default function SessionView({
   const [isUpdatingRefine, setIsUpdatingRefine] = useState(false);
   const [showMetadata, setShowMetadata] = useState(false);
   const [showEvaluation, setShowEvaluation] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(() => isDiagnosticsDebugEnabled());
   const [evalReport, setEvalReport] = useState(null);
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalError, setEvalError] = useState(null);
@@ -239,6 +241,18 @@ export default function SessionView({
     setShowMetadata(false);
     setShowEvaluation(false);
   }, [session.id]);
+
+  useEffect(() => {
+    const handleStorage = () => setShowDiagnostics(isDiagnosticsDebugEnabled());
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  const handleToggleDiagnostics = () => {
+    const nextValue = !showDiagnostics;
+    setShowDiagnostics(nextValue);
+    setDiagnosticsDebugEnabled(nextValue);
+  };
 
   useEffect(() => {
     const handleOutsideClick = (e) => {
@@ -507,6 +521,19 @@ export default function SessionView({
             </svg>
           </button>
 
+          <button
+            onClick={handleToggleDiagnostics}
+            title={showDiagnostics ? 'Hide query diagnostics' : 'Show query diagnostics'}
+            className={`h-7 rounded-full border px-2.5 font-mono text-[10px] uppercase tracking-[0.18em] transition-all duration-150 shrink-0 ${
+              showDiagnostics
+                ? 'bg-surface-3 border-text-muted text-text-primary'
+                : 'bg-surface-3 border-border text-text-muted hover:text-text-primary hover:border-text-muted'
+            }`}
+            aria-label="Toggle Query Diagnostics"
+          >
+            Debug
+          </button>
+
 
 
         </div>
@@ -704,7 +731,7 @@ export default function SessionView({
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 min-h-0" style={{ paddingBottom: '100px' }}>
             <IndexingLiveLog session={session} onRetryIndexing={onRetryIndexing} />
             {(activeThread?.messages || []).map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble key={msg.id} message={msg} showDiagnostics={showDiagnostics} />
             ))}
             <div ref={bottomRef} />
           </div>
@@ -1633,4 +1660,3 @@ function IndexPreviewPanel({
     </div>
   );
 }
-
