@@ -1773,14 +1773,19 @@ def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict
             ]
         else:
             lines = [
-                "CodeSeek is a repository-aware search and grounded answer generator.",
+                "CodeSeek is a local-first repository RAG assistant for understanding codebases with grounded answers. It indexes a repository into searchable chunks, stores vector evidence in Qdrant, tracks repository/session metadata locally, and uses retrieved source context to answer questions about implementation, architecture, indexing, retrieval, and operational workflows.",
                 "",
-                "At a high level:",
+                "Repository Intelligence",
                 "",
-                "1. Ingests source code repositories and indexes them into Qdrant vector database.",
-                "2. Performs hybrid dense-sparse semantic retrieval based on query intent analysis.",
-                "3. Generates structured, grounded, and context-bound answers for repository queries.",
-                ""
+                "The backend owns most of the intelligence. Repository sessions point CodeSeek at a local checkout or cloned repository, then the ingestion pipeline discovers files, filters unsupported or ignored paths, parses supported source files, creates metadata-rich chunks, generates embeddings, and stores those vectors. That indexed evidence becomes the basis for later answers, source cards, diagnostics, and freshness checks.",
+                "",
+                "Answering And Source Grounding",
+                "",
+                "When a user asks a question, the retrieval layer classifies the query, searches the indexed repository, expands context when useful, filters display sources, and builds an answer from the selected evidence. The system is designed to cite real repository files instead of producing ungrounded summaries. For broad questions it should synthesize README, product docs, ingestion entrypoints, retrieval entrypoints, and session/indexing code rather than exposing internal helper functions.",
+                "",
+                "Developer Workflow",
+                "",
+                "The frontend is the developer-facing workspace. It shows repository sessions, chat responses, source cards, diagnostics, freshness state, indexing controls, and job status. Product workflows include Index latest, Index changed files, cancellation, job history, local model/provider configuration, and offline-oriented operation. In short, this repo is building a private codebase explainer that combines local indexing, retrieval, answer generation, and UI diagnostics."
             ]
         key_areas = []
         seen_paths = set()
@@ -2134,6 +2139,11 @@ def build_docs_summary_answer(raw_query: str, sources: list[dict], chunks: list[
 
 
 def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
+    if _is_indexing_explanation(raw_query):
+        indexing_answer = _build_indexing_explanation_answer(raw_query, sources, chunks)
+        if indexing_answer:
+            return indexing_answer
+
     selected_sources = _preferred_explanation_sources(raw_query, sources)
     if not selected_sources:
         return "Insufficient context in retrieved code to explain this confidently."
@@ -2178,6 +2188,84 @@ def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[d
     lines.append("Sources:")
     lines.extend(_source_reference_lines(all_sources[:5]))
     return "\n".join(lines)
+
+
+def _is_indexing_explanation(raw_query: str) -> bool:
+    from retrieval.query_intent import is_indexing_explanation_query
+
+    return is_indexing_explanation_query(raw_query)
+
+
+def _build_indexing_explanation_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
+    del raw_query
+    candidates = _preferred_indexing_sources(list(sources) + list(chunks))
+    if not candidates:
+        return ""
+
+    lines = [
+        "Indexing in CodeSeek starts from a repository session. A session identifies the repository path or cloned checkout, the Qdrant collection used for that repository, and the metadata the app needs to report whether the index is current. When indexing starts, the backend moves the session into an indexing state and records progress so the UI can show job status instead of treating indexing as an invisible background task.",
+        "",
+        "Pipeline Stages",
+        "",
+        "The ingestion pipeline is staged. It discovers candidate files, applies filtering rules to skip ignored, generated, binary, unsupported, or irrelevant paths, parses supported source files, and then turns parsed content into retrieval chunks. Those chunks carry source metadata such as file path, symbol name, line range, and chunk type so later answers can point back to the exact repository evidence.",
+        "",
+        "Embeddings And Storage",
+        "",
+        "After chunking, CodeSeek generates embeddings for the chunks and stores them in Qdrant. Qdrant is the vector-search layer used during question answering. Local database metadata tracks sessions, file state, indexing jobs, and file-to-vector relationships. That metadata is important because it lets CodeSeek know which vectors belong to which files and which session/collection they belong to.",
+        "",
+        "Reindexing Paths",
+        "",
+        "The project supports both full and incremental indexing workflows. Index latest refreshes the repository index for the current repository state. Index changed files is narrower: it detects added, modified, and deleted files, processes changed files, preserves unchanged vectors, and updates file/vector metadata so small edits can be reflected without rebuilding the entire collection.",
+        "",
+        "Why This Matters",
+        "",
+        "The answer layer depends on this pipeline being source-aware. Retrieval quality is not just about embedding similarity; the chunks need reliable paths, symbols, line ranges, session ownership, and freshness metadata so source cards and diagnostics can explain where an answer came from.",
+        "",
+        "Sources:",
+    ]
+    lines.extend(_source_reference_lines(candidates[:7]))
+    return "\n".join(lines)
+
+
+def _preferred_indexing_sources(sources: list[dict]) -> list[dict]:
+    def score(src: dict) -> int:
+        path = str(src.get("relative_path", "")).lower()
+        symbol = str(src.get("symbol_name", "")).lower()
+        preferred = {
+            "backend/rag_ingestion/main.py": 120,
+            "backend/rag_ingestion/stages/discovery.py": 112,
+            "backend/rag_ingestion/stages/filtering.py": 110,
+            "backend/rag_ingestion/stages/parser.py": 108,
+            "backend/rag_ingestion/stages/chunking.py": 106,
+            "backend/rag_ingestion/stages/embedder.py": 104,
+            "backend/rag_ingestion/stages/storage.py": 102,
+            "backend/retrieval/session_indexer.py": 96,
+            "backend/retrieval/db.py": 86,
+            "docs/product/index_latest.md": 82,
+            "docs/product/index_changed_files.md": 80,
+        }
+        value = preferred.get(path, 0)
+        if symbol in {"run_pipeline", "store_chunks", "_index_job"}:
+            value += 15
+        if path.startswith("frontend/"):
+            value -= 200
+        return value
+
+    ranked = sorted(
+        (src for src in sources if score(src) > 0),
+        key=lambda src: (-score(src), str(src.get("relative_path", "")), int(src.get("start_line", 0))),
+    )
+    deduped: list[dict] = []
+    seen_paths: set[str] = set()
+    for src in ranked:
+        path = str(src.get("relative_path", ""))
+        if not path or path in seen_paths:
+            continue
+        deduped.append(src)
+        seen_paths.add(path)
+        if len(deduped) >= 8:
+            break
+    return deduped
 
 
 def _preferred_explanation_sources(raw_query: str, sources: list[dict]) -> list[dict]:

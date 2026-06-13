@@ -375,7 +375,7 @@ export default function SessionView({
     }
   };
 
-  const { isLoading, sendMessage } = useChat({ appendMessage });
+  const { isLoading, sendMessage, cancelActiveQuery } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
   const activeThread =
     session.threads?.find((thread) => thread.id === session.active_thread_id) ||
@@ -514,7 +514,7 @@ export default function SessionView({
 
       {/* Collapsible Metadata Panel */}
       {showMetadata && (
-        <div ref={metadataRef} className="shrink-0 bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
+        <div ref={metadataRef} className="shrink-0 max-h-[70vh] overflow-y-auto bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs font-mono select-none">
             <div className="space-y-1.5">
               <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Repository Config</h4>
@@ -684,13 +684,17 @@ export default function SessionView({
                 style={{ minHeight: '24px', maxHeight: '84px' }}
               />
               <button
-                onClick={handleSend}
-                disabled={isLoading || !input.trim() || !canChat}
-                title="Send (Enter)"
-                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-                style={{ color: '#0a0a0a' }}
+                onClick={isLoading ? cancelActiveQuery : handleSend}
+                disabled={!isLoading && (!input.trim() || !canChat)}
+                title={isLoading ? "Stop generating" : "Send (Enter)"}
+                className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-base transition-all duration-150 ${
+                  isLoading
+                    ? 'bg-offline text-text-primary hover:bg-offline/80'
+                    : 'bg-text-primary text-[#0a0a0a] hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed'
+                }`}
+                style={isLoading ? undefined : { color: '#0a0a0a' }}
               >
-                {isLoading ? <SpinnerIcon /> : <SendIcon />}
+                {isLoading ? <StopIcon /> : <SendIcon />}
               </button>
             </div>
           </div>
@@ -726,13 +730,17 @@ export default function SessionView({
                   style={{ minHeight: '24px', maxHeight: '84px' }}
                 />
                 <button
-                  onClick={handleSend}
-                  disabled={isLoading || !input.trim() || !canChat}
-                  title="Send (Enter)"
-                  className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-                  style={{ color: '#0a0a0a' }}
+                  onClick={isLoading ? cancelActiveQuery : handleSend}
+                  disabled={!isLoading && (!input.trim() || !canChat)}
+                  title={isLoading ? "Stop generating" : "Send (Enter)"}
+                  className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-base transition-all duration-150 ${
+                    isLoading
+                      ? 'bg-offline text-text-primary hover:bg-offline/80'
+                      : 'bg-text-primary text-[#0a0a0a] hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed'
+                  }`}
+                  style={isLoading ? undefined : { color: '#0a0a0a' }}
                 >
-                  {isLoading ? <SpinnerIcon /> : <SendIcon />}
+                  {isLoading ? <StopIcon /> : <SendIcon />}
                 </button>
               </div>
             </div>
@@ -923,6 +931,14 @@ function SendIcon() {
   );
 }
 
+function StopIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="10" rx="1" />
+    </svg>
+  );
+}
+
 function SpinnerIcon() {
   return (
     <svg
@@ -1040,6 +1056,13 @@ const PROVIDER_MODEL_PRESETS = {
       label: 'Default / AI Credits',
       short: '🪙 GPT-5.4',
       tooltip: 'GPT-5.4 Mini via AI Credits. Fast and cost-effective.',
+    },
+    {
+      value: 'deepseek/deepseek-v4-flash',
+      name: 'DeepSeek v4 Flash',
+      label: 'DeepSeek v4 Flash via AI Credits',
+      short: '🐳 DeepSeek v4',
+      tooltip: 'DeepSeek v4 Flash via AI Credits. Ultra-fast and cost-effective.',
     },
   ],
 };
@@ -1411,34 +1434,37 @@ function IndexPreviewPanel({
   const deletedFiles = preview?.deleted_files || [];
   const unchangedFiles = preview?.unchanged_files || [];
 
-  const isBranchChanged = !!preview?.branch_changed;
-  const isNoChanges = (preview?.estimated_files_to_update || 0) === 0;
-  const isMetadataUnavailable = preview?.freshness_status === 'unknown' && !preview?.indexed_commit_sha;
-  const isFeatureDisabled = isIncrementalDisabled || preview?.can_incremental_reindex === false;
-
   const isButtonEnabled =
     preview &&
-    !isNoChanges &&
-    !isSessionIndexing &&
-    canIndex &&
-    !isFeatureDisabled &&
-    !isBranchChanged;
+    preview.can_incremental_reindex === true &&
+    !isSessionIndexing;
 
   let blockMessage = null;
   let blockType = '';
 
-  if (isBranchChanged) {
-    blockMessage = "Incremental indexing is blocked because the active branch differs from the indexed branch. Use Index latest to switch branches.";
-    blockType = 'error';
-  } else if (isFeatureDisabled) {
+  const blockReason = preview?.incremental_block_reason || '';
+
+  if (isIncrementalDisabled || blockReason === 'feature_disabled') {
     blockMessage = "Incremental indexing is not enabled on this server.";
     blockType = 'error';
-  } else if (isMetadataUnavailable) {
+  } else if (blockReason === 'branch_changed') {
+    blockMessage = "Incremental indexing is blocked because the active branch differs from the indexed branch. Use Index latest to switch branches.";
+    blockType = 'error';
+  } else if (blockReason === 'metadata_unavailable') {
     blockMessage = "Incremental metadata is unavailable. Use Index latest first.";
     blockType = 'warning';
-  } else if (isNoChanges) {
+  } else if (blockReason === 'session_failed') {
+    blockMessage = "This session is in a failed state. Use Index latest to recover before running incremental indexing.";
+    blockType = 'error';
+  } else if (blockReason === 'active_indexing') {
+    blockMessage = "Indexing is already running.";
+    blockType = 'info';
+  } else if (blockReason === 'no_changes') {
     blockMessage = "No changed files detected.";
     blockType = 'info';
+  } else if (blockReason === 'unknown') {
+    blockMessage = "Incremental indexing is unavailable for the current session state. Use Index latest as fallback.";
+    blockType = 'warning';
   }
 
   return (
@@ -1498,7 +1524,7 @@ function IndexPreviewPanel({
           {/* Main layout: left side files list, right side actions */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Left Area: Files List (takes 2 cols on md) */}
-            <div className="md:col-span-2 flex flex-col gap-2">
+            <div className="md:col-span-2 flex flex-col gap-2 max-h-[350px] overflow-y-auto pr-1">
               <FileGroupSection
                 title="Modified Files"
                 files={modifiedFiles}

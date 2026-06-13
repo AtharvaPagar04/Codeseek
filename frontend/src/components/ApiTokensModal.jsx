@@ -48,6 +48,7 @@ const PROVIDER_MODELS = {
   aicredits: [
     { value: 'default', label: 'Default (gpt-5.4-mini)' },
     { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek v4 Flash' },
   ],
 };
 

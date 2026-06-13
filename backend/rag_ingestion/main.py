@@ -531,6 +531,7 @@ def run_incremental_pipeline(
     # --- Parse + chunk ---
     all_chunks = []
     for file in target_processable:
+        emit("parser", f"Processing file {file.relative_path}...", progress=counters.files_parsed_ok)
         try:
             parsed = parse_file(file, counters)
             chunks = generate_chunks(parsed, file)
@@ -611,6 +612,9 @@ def run_incremental_pipeline(
                     if chunk.get("vector_id"):
                         old_vector_ids_to_delete.append(chunk["vector_id"])
 
+    # Cooperative cancel check before storage changes
+    emit("storage", "Preparing storage modifications...", progress=0)
+
     # --- Qdrant Upsert ---
     if all_chunks:
         from rag_ingestion.stages.storage import store_chunks
@@ -630,7 +634,7 @@ def run_incremental_pipeline(
     # --- DB Metadata Update ---
     if session_id:
         try:
-            from retrieval.db import upsert_session_file, replace_session_file_chunks, mark_session_files_deleted
+            from retrieval.db import db_cursor, upsert_session_file, replace_session_file_chunks, mark_session_files_deleted
             last_indexed_at = datetime.now(timezone.utc).isoformat()
 
             chunks_by_file = {}
@@ -639,44 +643,46 @@ def run_incremental_pipeline(
                     continue
                 chunks_by_file.setdefault(chunk.relative_path, []).append(chunk)
 
-            for rel_path in targets:
-                abs_path = root / rel_path
-                file_hash = ""
-                try:
-                    if abs_path.is_file():
-                        with open(abs_path, "rb") as f:
-                            file_hash = hashlib.sha256(f.read()).hexdigest()
-                    else:
+            with db_cursor() as (conn, cursor):
+                for rel_path in targets:
+                    abs_path = root / rel_path
+                    file_hash = ""
+                    try:
+                        if abs_path.is_file():
+                            with open(abs_path, "rb") as f:
+                                file_hash = hashlib.sha256(f.read()).hexdigest()
+                        else:
+                            file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
+                    except Exception:
                         file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
-                except Exception:
-                    file_hash = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
 
-                file_record = upsert_session_file(
-                    session_id=session_id,
-                    repo_path=rel_path,
-                    file_hash=file_hash,
-                    indexed_commit_sha=commit_sha or "",
-                    indexed_branch=branch_name or "",
-                    status="indexed",
-                    last_indexed_at=last_indexed_at,
-                    deleted_at=None,
-                )
+                    file_record = upsert_session_file(
+                        session_id=session_id,
+                        repo_path=rel_path,
+                        file_hash=file_hash,
+                        indexed_commit_sha=commit_sha or "",
+                        indexed_branch=branch_name or "",
+                        status="indexed",
+                        last_indexed_at=last_indexed_at,
+                        deleted_at=None,
+                        cursor=cursor,
+                    )
 
-                file_chunks = chunks_by_file.get(rel_path, [])
-                chunk_mappings = []
-                for c in file_chunks:
-                    chunk_mappings.append({
-                        "chunk_id": c.chunk_id,
-                        "vector_id": c.chunk_id,
-                        "symbol": c.symbol_name or None,
-                        "start_line": c.start_line if c.start_line > 0 else None,
-                        "end_line": c.end_line if c.end_line > 0 else None,
-                    })
+                    file_chunks = chunks_by_file.get(rel_path, [])
+                    chunk_mappings = []
+                    for c in file_chunks:
+                        chunk_mappings.append({
+                            "chunk_id": c.chunk_id,
+                            "vector_id": c.chunk_id,
+                            "symbol": c.symbol_name or None,
+                            "start_line": c.start_line if c.start_line > 0 else None,
+                            "end_line": c.end_line if c.end_line > 0 else None,
+                        })
 
-                replace_session_file_chunks(file_record["id"], chunk_mappings)
+                    replace_session_file_chunks(file_record["id"], chunk_mappings, cursor=cursor)
 
-            if deleted_files:
-                mark_session_files_deleted(session_id, deleted_files)
+                if deleted_files:
+                    mark_session_files_deleted(session_id, deleted_files, cursor=cursor)
 
         except Exception as e:
             logger.error("Failed to record incremental reindex metadata: %s", e)

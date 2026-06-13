@@ -227,25 +227,22 @@ FLOW_FILES = {
 ARCHITECTURE_FILES = [
     "README.md",
     "backend/README.md",
+    "docs/architecture.md",
+    "docs/overview.md",
     "docker-compose.yml",
     "backend/docker-compose.yml",
     "Dockerfile",
-    "backend/Dockerfile",
     ".env.example",
-    "docs/deployment_runbook.md",
-    "backend/docs/deployment_runbook.md",
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "Cargo.toml",
     "retrieval/api_service.py",
     "backend/retrieval/api_service.py",
-    "retrieval/main.py",
     "backend/retrieval/main.py",
-    "retrieval/searcher.py",
-    "backend/retrieval/searcher.py",
-    "retrieval/db.py",
-    "backend/retrieval/db.py",
-    "retrieval/session_indexer.py",
-    "backend/retrieval/session_indexer.py",
-    "rag_ingestion/main.py",
     "backend/rag_ingestion/main.py",
+    "backend/retrieval/db.py",
 ]
 
 
@@ -325,6 +322,7 @@ def process_query(raw_query: str) -> dict:
     }
     _inject_flow_symbols(query, entities)
     _inject_architecture_files(query, entities)
+    _inject_source_contract_files(query, entities)
 
     if ENABLE_SCORED_INTENT:
         entities.update(_extract_scored_entities(query))
@@ -358,11 +356,17 @@ def process_query(raw_query: str) -> dict:
         classifier_latency_ms = (time.perf_counter() - t0) * 1000.0
 
     primary_intent = max(intent_scores, key=intent_scores.get)
+    from retrieval.query_intent import classify_response_mode, classify_source_intent
+
     confidence = float(intent_scores.get(primary_intent, 0.0))
+    response_mode = classify_response_mode(query)
+    source_intent = classify_source_intent(query)
     return {
         "raw_query": query,
         "intent": intent,
         "primary_intent": primary_intent,
+        "response_mode": response_mode,
+        "source_intent": source_intent,
         "intent_scores": intent_scores,
         "entities": entities,
         "is_followup": primary_intent == "FOLLOWUP" or intent_scores.get("FOLLOWUP", 0.0) >= 0.6,
@@ -392,6 +396,22 @@ def _inject_architecture_files(query: str, entities: dict) -> None:
         return
     files = list(entities.get("files") or [])
     files.extend(ARCHITECTURE_FILES)
+    entities["files"] = sorted(set(files))
+
+
+def _inject_source_contract_files(query: str, entities: dict) -> None:
+    from retrieval.query_intent import classify_source_intent, preferred_source_paths_for_intent
+
+    source_intent = classify_source_intent(query)
+    preferred_files = preferred_source_paths_for_intent(source_intent)
+    if not preferred_files:
+        return
+    if source_intent in {"code_location", "exact_symbol", "docs_question", "general"}:
+        return
+    files = list(entities.get("files") or [])
+    for file_path in preferred_files:
+        if file_path not in files:
+            files.append(file_path)
     entities["files"] = sorted(set(files))
 
 
@@ -598,13 +618,42 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     overview_markers = _has_overview_markers(lower)
     architecture_markers = _has_architecture_markers(lower)
     tech_stack_markers = _has_tech_stack_markers(lower)
+    from retrieval.query_intent import classify_source_intent
+
+    source_intent = classify_source_intent(query)
+
+    indexing_markers = _has_indexing_explanation_markers(lower)
+    retrieval_markers = _has_retrieval_explanation_markers(lower)
 
     if overview_markers:
         scores["OVERVIEW"] = 0.86
+        scores["EXPLANATION"] = min(scores["EXPLANATION"], 0.2)
+    if source_intent == "overview":
+        scores["OVERVIEW"] = max(scores["OVERVIEW"], 0.9)
+        scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
+        scores["FILE"] = min(scores["FILE"], 0.35)
     if architecture_markers:
         scores["ARCHITECTURE"] = 0.88
+    if source_intent == "runtime_architecture":
+        scores["ARCHITECTURE"] = max(scores["ARCHITECTURE"], 0.9)
+        scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
+    if source_intent in {
+        "frontend_backend_flow",
+        "repository_analysis",
+        "indexing_pipeline",
+        "incremental_indexing",
+        "retrieval_pipeline",
+        "source_filtering",
+        "failure_recovery",
+        "indexing_status",
+    }:
+        scores["EXPLANATION"] = max(scores["EXPLANATION"], 0.86)
+        scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
     if tech_stack_markers:
         scores["TECH_STACK"] = 0.82
+    if indexing_markers or retrieval_markers:
+        scores["EXPLANATION"] = max(scores["EXPLANATION"], 0.84)
+        scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
     if any(phrase in lower for phrase in ("trace", "flow", "lifecycle", "call path", "step by step")):
         scores["TRACE"] = 0.78
     if entities.get("env_keys") or entities.get("services") or any(word in lower for word in ("env", "environment", "config", "configuration", "service", "container")):
@@ -619,7 +668,19 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["FOLLOWUP"] = 0.82 if not (has_symbols or has_files or has_exact_terms) else 0.58
     if short_query and not any(entities.get(key) for key in ("symbols", "files", "exact_terms", "services")):
         scores["LOW_CONTEXT"] = 0.7
-    if has_symbols or has_files or has_exact_terms:
+    broad_source_contract = source_intent in {
+        "overview",
+        "runtime_architecture",
+        "frontend_backend_flow",
+        "repository_analysis",
+        "indexing_pipeline",
+        "incremental_indexing",
+        "retrieval_pipeline",
+        "source_filtering",
+        "failure_recovery",
+        "indexing_status",
+    }
+    if (has_symbols or has_files or has_exact_terms) and not broad_source_contract:
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.68)
     if has_files and not architecture_markers and any(phrase in lower for phrase in ("explain", "what is in", "show", "open")):
         scores["FILE"] = max(scores["FILE"], 0.86)
@@ -638,6 +699,9 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["CODE_REQUEST"] = max(scores["CODE_REQUEST"], 0.9)
     if short_query and not (has_symbols or has_files or has_exact_terms):
         scores["SEMANTIC"] = min(scores["SEMANTIC"], 0.2)
+    if broad_source_contract:
+        scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
+        scores["FILE"] = min(scores["FILE"], 0.45)
     return scores
 
 
@@ -646,9 +710,17 @@ def _has_overview_markers(lower: str) -> bool:
         phrase in lower
         for phrase in (
             "what is this project about",
+            "what is this repo about",
+            "what is this repository about",
             "what does this project do",
             "what does this codebase do",
             "what does this repo do",
+            "what does this repository do",
+            "what problem does this repository solve",
+            "what problem does this repo solve",
+            "what problem does this project solve",
+            "explain this project",
+            "explain the project",
             "repository overview",
             "repo overview",
             "project overview",
@@ -659,6 +731,18 @@ def _has_overview_markers(lower: str) -> bool:
             "overview",
         )
     )
+
+
+def _has_indexing_explanation_markers(lower: str) -> bool:
+    topic = any(term in lower for term in ("indexing", "index latest", "index changed", "reindex", "ingestion"))
+    explanatory = any(term in lower for term in ("explain", "how", "work", "works", "pipeline", "current project"))
+    return topic and explanatory
+
+
+def _has_retrieval_explanation_markers(lower: str) -> bool:
+    topic = any(term in lower for term in ("retrieval", "rag", "source selection", "rerank", "search pipeline"))
+    explanatory = any(term in lower for term in ("explain", "how", "work", "works", "pipeline", "architecture"))
+    return topic and explanatory
 
 
 def _has_architecture_markers(lower: str) -> bool:

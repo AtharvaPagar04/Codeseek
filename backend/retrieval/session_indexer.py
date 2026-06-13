@@ -1254,7 +1254,10 @@ def index_incremental_version(session_id: str, user_id: str) -> dict:
     if not plan["can_incremental_reindex"]:
         raise ValueError(f"Incremental plan unavailable: {plan['reason']}")
 
-    total_changes = plan["modified_files_count"] + plan["added_files_count"] + plan["deleted_files_count"]
+    modified_count = plan.get("modified_files_count", len(plan.get("modified_files", [])))
+    added_count = plan.get("added_files_count", len(plan.get("added_files", [])))
+    deleted_count = plan.get("deleted_files_count", len(plan.get("deleted_files", [])))
+    total_changes = modified_count + added_count + deleted_count
 
     if total_changes == 0:
         return {
@@ -1296,7 +1299,7 @@ def index_incremental_version(session_id: str, user_id: str) -> dict:
         "status": "indexing",
         "freshness_status": "indexing",
         "indexing_mode": "incremental",
-        "estimated_files_to_update": plan["estimated_files_to_update"],
+        "estimated_files_to_update": plan.get("estimated_files_to_update", modified_count + added_count),
         "message": "Incremental indexing started."
     }
 
@@ -1716,6 +1719,7 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
     if session.get("user_id", "") != user_id:
         raise PermissionError("Access denied")
 
+    incremental_enabled = os.environ.get("CODESEEK_ENABLE_INCREMENTAL_REINDEX", "false").lower() == "true"
     repo_root = session.get("repo_root", "")
     has_git = bool(repo_root and Path(repo_root).exists() and (Path(repo_root) / ".git").exists())
 
@@ -1738,6 +1742,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": False,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "unknown",
+            "branch_changed": False,
             "message": "Repository path is missing or not a Git repository. Preview is unavailable."
         }
 
@@ -1772,6 +1780,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": False,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "unknown",
+            "branch_changed": False,
             "message": f"Failed to read local Git status: {str(e)}"
         }
 
@@ -1825,6 +1837,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": True,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "metadata_unavailable",
+            "branch_changed": False,
             "message": "This session has not been indexed yet. Reindex preview is unavailable."
         }
 
@@ -1937,6 +1953,33 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
 
     estimated_files_to_update = len(changed_files) + len(added_files) + len(deleted_files)
 
+    from retrieval.db import list_session_files
+    db_files = list_session_files(session_id, include_deleted=True)
+    has_db_files = bool(db_files)
+
+    # Determine can_incremental_reindex and block reasons
+    if not incremental_enabled:
+        can_incremental_reindex = False
+        incremental_block_reason = "feature_disabled"
+    elif session_status == "indexing":
+        can_incremental_reindex = False
+        incremental_block_reason = "active_indexing"
+    elif session_status == "failed":
+        can_incremental_reindex = False
+        incremental_block_reason = "session_failed"
+    elif not indexed_commit_sha or not has_db_files:
+        can_incremental_reindex = False
+        incremental_block_reason = "metadata_unavailable"
+    elif branch_changed:
+        can_incremental_reindex = False
+        incremental_block_reason = "branch_changed"
+    elif estimated_files_to_update == 0:
+        can_incremental_reindex = False
+        incremental_block_reason = "no_changes"
+    else:
+        can_incremental_reindex = True
+        incremental_block_reason = ""
+
     return {
         "session_id": session_id,
         "repo_root": repo_root,
@@ -1956,7 +1999,9 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
         "estimated_files_to_update": estimated_files_to_update,
         "estimated_chunks_to_update": None,
         "can_index_latest": can_index_latest,
-        "can_incremental_reindex": False if branch_changed else (freshness_status in ("dirty_worktree", "stale_commit")),
+        "can_incremental_reindex": can_incremental_reindex,
+        "incremental_enabled": incremental_enabled,
+        "incremental_block_reason": incremental_block_reason,
         "message": message,
     }
 

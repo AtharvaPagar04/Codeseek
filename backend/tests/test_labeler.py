@@ -38,16 +38,18 @@ class TestAddLabel(unittest.TestCase):
 
 class TestSelectTopLabels(unittest.TestCase):
     def test_per_category_caps_enforced(self):
-        # artifact category limit is 2
+        # artifact category limit is now 3
         candidates = {
             "artifact:source-code": 0.9,
             "artifact:readme": 0.85,
             "artifact:dockerfile": 0.8,
+            "artifact:test-code": 0.75,
         }
         selected = select_top_labels(candidates)
-        self.assertEqual(len([c for c in selected if c.startswith("artifact:")]), 2)
+        self.assertEqual(len([c for c in selected if c.startswith("artifact:")]), 3)
         self.assertIn("artifact:source-code", selected)
         self.assertIn("artifact:readme", selected)
+        self.assertIn("artifact:dockerfile", selected)
 
     def test_max_total_labels_enforced(self):
         candidates = {
@@ -287,6 +289,105 @@ class TestFirstSentence(unittest.TestCase):
         # should return up to first 120 chars
         long_str = "A" * 150
         self.assertEqual(_first_sentence(long_str), ("A" * 120) + ".")
+
+
+class TestDocumentationLabels(unittest.TestCase):
+    """Task 1 & 2: docs/product chunks get identity labels; topical labels don't dominate."""
+
+    def test_docs_product_chunk_gets_product_doc_labels(self):
+        """docs/product/*.md must receive product-doc + documentation + domain labels."""
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="docs/product/final_handoff.md",
+            content="This document describes the product handoff checklist.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+        self.assertIn("artifact:product-doc", chunk.labels)
+        self.assertIn("artifact:documentation", chunk.labels)
+        self.assertIn("domain:documentation", chunk.labels)
+        self.assertIn("domain:product", chunk.labels)
+        self.assertIn("question_use:general-context", chunk.labels)
+
+    def test_docs_product_chunk_does_not_get_code_labels(self):
+        """docs/product chunks must NOT get code-snippet or code-location blindly."""
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="docs/product/troubleshooting_indexing.md",
+            content="This document explains how to troubleshoot indexing failures.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+        self.assertNotIn("question_use:code-snippet", chunk.labels)
+        self.assertNotIn("question_use:code-location", chunk.labels)
+
+    def test_docs_product_architecture_doc_gets_architecture_label(self):
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="docs/product/architecture_overview.md",
+            content="This is an architecture overview document.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+        self.assertIn("question_use:architecture", chunk.labels)
+
+    def test_generic_docs_md_gets_documentation_labels(self):
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="docs/deployment_runbook.md",
+            content="This document covers the deployment runbook.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+        self.assertIn("artifact:documentation", chunk.labels)
+        self.assertIn("domain:documentation", chunk.labels)
+        self.assertIn("question_use:general-context", chunk.labels)
+        self.assertNotIn("question_use:code-snippet", chunk.labels)
+
+    def test_readme_gets_repo_overview_labels(self):
+        """README.md must get artifact:readme, question_use:repo-overview, and setup."""
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="README.md",
+            file_type="readme",
+            content="# CodeSeek\n\nThis is the main README for the CodeSeek project.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+        self.assertIn("artifact:readme", chunk.labels)
+        self.assertIn("artifact:documentation", chunk.labels)
+        self.assertIn("question_use:repo-overview", chunk.labels)
+        # Should get either setup or general-context (not just code labels)
+        has_non_code = any(
+            lbl in chunk.labels
+            for lbl in ("question_use:setup", "question_use:general-context", "question_use:repo-overview")
+        )
+        self.assertTrue(has_non_code)
+
+    def test_docs_qdrant_mentions_do_not_dominate_doc_role(self):
+        """A product doc mentioning Qdrant should keep doc labels stronger than vector labels."""
+        chunk = Chunk(
+            chunk_type="file",
+            relative_path="docs/product/troubleshooting_indexing.md",
+            content=(
+                "# Troubleshooting Indexing\n\n"
+                "This document explains how to fix Qdrant storage issues and embedding failures. "
+                "The Qdrant vector database is used to persist chunk embeddings."
+            ),
+            summary="Troubleshooting guide for Qdrant-related indexing issues.",
+        )
+        label_chunk(chunk, repo_name="CodeSeek")
+
+        # Product-doc labels must be present
+        self.assertIn("artifact:documentation", chunk.labels)
+
+        # doc labels should appear before or alongside vector labels
+        # i.e., doc identity must not be absent even when Qdrant is mentioned
+        self.assertIn("domain:documentation", chunk.labels)
+        self.assertIn("question_use:general-context", chunk.labels)
+
+        # Topical vector labels may appear, but doc labels must ALSO be present
+        # (the point is dominance of doc identity, not absence of topical)
+        confidences = chunk.label_confidences
+        doc_conf = confidences.get("artifact:documentation", 0)
+        qdrant_conf = confidences.get("capability:qdrant-storage", 0)
+        # doc identity was assigned at STRONG_MATCH so should be >= topical capability
+        self.assertGreaterEqual(doc_conf, qdrant_conf)
 
 
 if __name__ == "__main__":

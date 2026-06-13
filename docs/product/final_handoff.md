@@ -23,6 +23,8 @@ This document summarizes the current state of CodeSeek after completing all core
 12. **Milestone 12**: Security and Secrets Review (FastAPI error handlers and front/backend credentials sanitizers).
 13. **Milestone 13**: Performance Baseline V1 (`perf_baseline.sh` metrics logger).
 14. **Milestone 14**: Release Readiness Checklist V1 (release check guide).
+15. **Milestone 15**: Incremental Failure Recovery V1 (atomic transactions and robust database/Qdrant recovery boundary).
+16. **Milestone 16**: Index Changed Files Documentation Finalization V1 (detailed feature guides and troubleshooting docs).
 
 ---
 
@@ -39,16 +41,18 @@ CodeSeek operates as a secure, repository-grounded RAG engine enabling developer
 - Identifies file updates via `dirty_worktree` or `untracked_files` flags.
 
 ### 6. Incremental Indexing Capabilities
-- Calculates delta of modified files.
-- Provides file preview checklist.
-- Partially indexes updated elements only, reducing embedding latency.
+- Calculates delta of modified files relative to baseline commit.
+- Provides interactive file preview checklists and summary cards in the UI.
+- Process only added and modified files, significantly reducing embedding latency.
+- **Transaction Safety**: Wrap DB metadata updates in a single transaction, rolling back on any SQLite or system crash to preserve database-vector consistency.
+- **Downtime-Free Store**: Upsert new chunks *before* deleting old vectors from Qdrant.
 
 ### 7. Background Job Reliability Capabilities
 - Background jobs run asynchronously on separate thread pools.
 - Records job metadata (`queued`, `indexing`, `succeeded`, `failed`, `cancelled`).
 
 ### 8. Cancellation / History Capabilities
-- graceful job termination at stage boundaries.
+- Graceful job termination at stage boundaries.
 - Read-only historical log for the last 20 jobs.
 
 ### 9. Session Cleanup Capabilities

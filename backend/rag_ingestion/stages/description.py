@@ -9,8 +9,6 @@ import httpx
 from rag_ingestion.config import (
     CHUNK_DESCRIPTION_MAX_CHUNKS,
     CHUNK_DESCRIPTION_MAX_INPUT_CHARS,
-    CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
-    CHUNK_DESCRIPTION_MAX_WORDS,
     CHUNK_DESCRIPTION_RETRY_ON_RATE_LIMIT,
     CHUNK_DESCRIPTION_SLEEP_SECONDS,
     ENABLE_LLM_CHUNK_DESCRIPTIONS,
@@ -192,6 +190,85 @@ def _local_chat(messages: list[dict], provider_config: dict) -> str:
         raise
 
 
+def _is_high_value_path(path: str) -> bool:
+    """Return True if path represents a common full-stack app architectural file or folder."""
+    path = path.lower()
+    
+    # Check common folders/directories
+    high_value_dirs = {
+        "routes/", "controllers/", "middleware/", "services/", "repositories/",
+        "repository/", "schemas/", "validators/", "config/", "database/",
+        "db/", "models/", "components/", "context/", "hooks/", "api/"
+    }
+    if any(d in path for d in high_value_dirs):
+        return True
+
+    # Check common entrypoint filenames
+    if path.endswith(("/app.js", "/server.js", "/index.js", "/app.py", "/main.py", "/app.jsx", "/main.jsx", "/app.tsx", "/main.tsx")):
+        return True
+    if path in {"app.js", "server.js", "index.js", "app.py", "main.py", "app.jsx", "main.jsx", "app.tsx", "main.tsx"}:
+        return True
+
+    # Common filename suffixes for components, contexts, and modules
+    high_value_suffixes = (
+        ".routes.js", ".route.js", ".controller.js", ".service.js",
+        ".repository.js", ".repo.js", ".schema.js", ".validator.js",
+        ".middleware.js", ".routes.ts", ".route.ts", ".controller.ts",
+        ".service.ts", ".repository.ts", ".repo.ts", ".schema.ts",
+        ".validator.ts", ".middleware.ts", ".jsx", ".tsx"
+    )
+    if path.endswith(high_value_suffixes):
+        return True
+
+    return False
+
+
+def _is_high_value_symbol(chunk) -> bool:
+    """Return True if the chunk symbol or path signals high retrieval value.
+
+    Generic signals (no repo-specific hardcoding):
+    - Symbol name contains pipeline, query, search, retrieve, answer, generate, index, ingest,
+      store, source, filter, route, endpoint, render, component, create, run
+    - Path is in ingestion/, retrieval/, search/, source/, answer/, api/, session/, frontend/components
+    - Chunk has a large line range (>= 60 lines) or high token count (>= 200)
+    """
+    symbol = (getattr(chunk, "symbol_name", "") or "").lower()
+    path = (getattr(chunk, "relative_path", "") or "").lower()
+    token_count = int(getattr(chunk, "token_count", 0) or 0)
+    start_line = int(getattr(chunk, "start_line", 0) or 0)
+    end_line = int(getattr(chunk, "end_line", 0) or 0)
+    line_range = max(0, end_line - start_line)
+
+    _HIGH_VALUE_SYMBOL_TERMS = (
+        "pipeline", "query", "search", "retrieve", "answer", "generate",
+        "index", "ingest", "storage", "store", "source", "filter",
+        "route", "endpoint", "render", "component", "create", "run_",
+        "post_process", "build_", "handle", "dispatch", "process",
+        "authenticate", "authorize", "login", "register", "createuser",
+        "createtask", "updatetask", "deletetask", "gettasks", "applyfilters",
+        "errorhandler", "asynchandler", "validate", "middleware", "controller",
+        "service", "repository", "app", "tasklist", "authcontext", "useauth",
+        "formfield", "button", "protectedroute", "dashboard"
+    )
+    _HIGH_VALUE_PATH_TERMS = (
+        "ingestion", "retrieval", "search", "source", "answer",
+        "api", "session", "frontend/components", "frontend/src/pages",
+    )
+
+    if symbol and any(term in symbol for term in _HIGH_VALUE_SYMBOL_TERMS):
+        return True
+
+    if any(term in path for term in _HIGH_VALUE_PATH_TERMS) or _is_high_value_path(path):
+        # Only high-value if the chunk itself is substantive
+        if token_count >= 80 or line_range >= 40:
+            return True
+
+    if token_count >= 200 or line_range >= 80:
+        return True
+
+    return False
+
+
 def _should_describe_chunk(chunk: Chunk) -> bool:
     """Determine whether a chunk is eligible for description generation."""
     if type(chunk).__name__ in {"MagicMock", "Mock"}:
@@ -205,6 +282,42 @@ def _should_describe_chunk(chunk: Chunk) -> bool:
     chunk_part = int(getattr(chunk, "chunk_part", 1) or 1)
 
     if chunk_type == "repo_summary":
+        return True
+
+    # Barrel file detection: skip tiny index.js files with only exports/imports
+    if path.endswith(("/index.js", "/index.ts", "/index.jsx", "/index.tsx")) or path == "index.js":
+        lines = content.strip().split("\n")
+        non_empty_lines = [l.strip() for l in lines if l.strip()]
+        if len(non_empty_lines) <= 15:
+            is_barrel = True
+            for line in non_empty_lines:
+                if not (line.startswith(("import ", "export ", "require(", "module.exports", "const ", "let ", "var ")) or line.startswith(("//", "/*", "*"))):
+                    is_barrel = False
+                    break
+            if is_barrel:
+                return False
+
+    # README and docs/product are high-value documentation: describe all parts.
+    is_readme = path.rsplit("/", 1)[-1].startswith("readme")
+    is_product_doc = (
+        path.startswith("docs/product/")
+        or path.startswith("backend/docs/product/")
+        or "/docs/product/" in path
+    )
+    if is_readme or is_product_doc:
+        if len(content.strip()) >= 10:
+            return True
+
+    # General markdown docs: describe first part only.
+    is_markdown_doc = (
+        path.endswith(".md")
+        and (
+            path.startswith("docs/")
+            or path.startswith("backend/docs/")
+            or "/docs/" in path
+        )
+    )
+    if is_markdown_doc and chunk_part == 1:
         return True
 
     if chunk_part > 1:
@@ -237,13 +350,20 @@ def _should_describe_chunk(chunk: Chunk) -> bool:
             return True
         if basename.endswith((".config.js", ".config.ts", ".config.mjs", ".config.cjs")):
             return True
+        if _is_high_value_path(path):
+            return True
         return False
 
     if chunk_type in {"function", "class"}:
+        # High-value heuristic: always describe if matches high-value criteria
+        if _is_high_value_symbol(chunk) or _is_high_value_path(path):
+            return True
         return True
 
     # Large methods may be worth describing, tiny methods are usually not.
     if chunk_type == "method":
+        if _is_high_value_symbol(chunk) or _is_high_value_path(path):
+            return True
         if token_count == 0 or token_count >= 120:
             return True
         return False
@@ -493,6 +613,7 @@ def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
     shared interactive-query circuit breaker state never blocks background
     ingestion description calls.
     """
+    from rag_ingestion.config import CODESEEK_DESCRIPTION_MAX_TOKENS
     from retrieval.llm import (
         _chat_completion_request,
         _extract_message_content,
@@ -528,7 +649,7 @@ def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
             timeout_seconds=30.0,
             base_url=base_url,
             system_prompt=SYSTEM_INSTRUCTION,
-            max_tokens=CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+            max_tokens=CODESEEK_DESCRIPTION_MAX_TOKENS,
         )
         text = _extract_message_content(response) or ""
 

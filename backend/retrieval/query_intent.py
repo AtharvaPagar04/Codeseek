@@ -130,6 +130,104 @@ def is_explanation_query(query: str) -> bool:
     return False
 
 
+def classify_response_mode(query: str) -> str:
+    """Classify user-facing answer style independently from retrieval intent."""
+    q = query.lower().strip()
+    if is_code_request_query(query):
+        exact_symbol = bool(
+            re.search(r"`_?[A-Za-z][A-Za-z0-9_]*`", query)
+            or re.search(r"\b_+[A-Za-z][A-Za-z0-9_]*\b", query)
+            or re.search(r"\b[A-Za-z][A-Za-z0-9_]*\(\)", query)
+            or re.search(r"\b[a-z][a-z0-9]+_[a-z0-9_]+\b", query)
+            or re.search(r"\b[A-Z][a-zA-Z0-9]{2,}\b", query)
+        )
+        return "exact_symbol" if exact_symbol else "code_location"
+    if is_source_location_query(query):
+        return "code_location"
+    if is_docs_query(query):
+        return "docs_question"
+    source_intent = classify_source_intent(query)
+    if source_intent == "overview":
+        return "overview"
+    if source_intent in {
+        "runtime_architecture",
+        "frontend_backend_flow",
+        "repository_analysis",
+        "indexing_pipeline",
+        "incremental_indexing",
+        "retrieval_pipeline",
+        "source_filtering",
+        "failure_recovery",
+        "indexing_status",
+    }:
+        return "feature_explanation"
+    if source_intent in {"ui_implementation", "api_endpoint", "provider_configuration"}:
+        return "code_location"
+    if is_overview_query(query):
+        return "overview"
+    if is_indexing_explanation_query(query):
+        return "feature_explanation"
+    if is_retrieval_explanation_query(query):
+        return "architecture_explanation"
+    if is_explanation_query(query):
+        return "feature_explanation"
+    if any(term in q for term in ("error", "bug", "fail", "debug", "why is")):
+        return "debug_question"
+    return "feature_explanation"
+
+
+def is_docs_query(query: str) -> bool:
+    q = query.lower()
+    return any(term in q for term in ("docs", "documentation", "readme", ".md", "runbook", "guide"))
+
+
+def is_indexing_explanation_query(query: str) -> bool:
+    q = query.lower()
+    topic = any(
+        term in q
+        for term in (
+            "indexing",
+            "index latest",
+            "index changed",
+            "reindex",
+            "ingestion",
+            "files to index",
+            "what files to index",
+            "chunks persisted",
+            "metadata is tracked",
+            "cloning",
+            "parsing",
+            "chunking",
+            "embedding",
+            "storage",
+        )
+    )
+    explanatory = any(
+        term in q
+        for term in (
+            "explain",
+            "how",
+            "work",
+            "works",
+            "current project",
+            "pipeline",
+            "walk me through",
+            "which backend files",
+            "what metadata",
+            "where are indexed chunks",
+        )
+    )
+    return topic and explanatory
+
+
+def is_retrieval_explanation_query(query: str) -> bool:
+    q = query.lower()
+    return (
+        any(term in q for term in ("retrieval", "rag", "search", "rerank", "source selection", "display sources", "reasoning sources", "rank chunks", "rank retrieved"))
+        and any(term in q for term in ("explain", "how", "work", "works", "pipeline", "architecture"))
+    )
+
+
 def is_source_location_query(query: str) -> bool:
     import re
     q = query.lower().strip()
@@ -157,8 +255,13 @@ def classify_query_intent(query: str) -> dict:
     intent = "general_context"
     boost_labels = []
 
-    # Check for explanation and source location queries first to override other intents
-    if is_explanation_query(query):
+    response_mode = classify_response_mode(query)
+
+    # Check broad explanation modes before symbol/source-location routing.
+    if response_mode == "overview":
+        intent = "general_context"
+        boost_labels = ["question_use:repo-overview", "question_use:general-context"]
+    elif response_mode in {"feature_explanation", "architecture_explanation"}:
         intent = "technical_explanation"
         boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
     elif is_source_location_query(query):
@@ -208,6 +311,7 @@ def classify_query_intent(query: str) -> dict:
 
     return {
         "intent": intent,
+        "response_mode": response_mode,
         "boost_labels": merged_boost,
     }
 
@@ -220,6 +324,115 @@ LABEL_WEIGHTS = {
     "code_role": 0.08,
     "tech": 0.06,
 }
+
+
+# Source contracts are intentionally expressed as intent names only. Path
+# selection is handled dynamically from the indexed repository shape in
+# searcher/source_filter so this layer does not encode CodeSeek-specific files.
+SOURCE_INTENT_CONTRACTS: dict[str, tuple[str, ...]] = {}
+
+
+def classify_source_intent(query: str) -> str:
+    """Classify the source contract needed to ground the answer."""
+    q = query.lower().strip()
+    normalized = re.sub(r"[_-]+", " ", q)
+
+    if is_overview_query(query) or any(
+        phrase in normalized
+        for phrase in (
+            "what problem does this repository solve",
+            "what problem does this repo solve",
+            "what problem does this project solve",
+        )
+    ):
+        return "overview"
+    if any(phrase in normalized for phrase in ("major runtime components", "runtime components", "runtime architecture")):
+        return "runtime_architecture"
+    if "frontend" in normalized and "backend" in normalized and any(
+        term in normalized for term in ("work together", "flow", "calls", "communicate", "connect")
+    ):
+        return "frontend_backend_flow"
+    if any(phrase in normalized for phrase in ("repository analysis", "responsible for repository analysis", "parts of this repo are responsible")):
+        return "repository_analysis"
+    if any(term in normalized for term in ("failed incremental", "fails midway", "failure recovery", "recover from", "indexing fails")):
+        return "failure_recovery"
+    if any(term in normalized for term in ("stale indexing", "stale index", "freshness", "detect stale")):
+        return "indexing_status"
+    if any(term in normalized for term in ("incremental", "changed since", "branch mismatch", "cancelled", "canceled")):
+        return "incremental_indexing"
+    if any(
+        term in normalized
+        for term in (
+            "indexing run",
+            "repository indexing",
+            "full repository indexing",
+            "files to index",
+            "decide what files",
+            "chunks persisted",
+            "metadata is tracked",
+            "cloning",
+            "parsing",
+            "chunking",
+            "embedding",
+            "storage",
+            "index latest",
+            "index changed files",
+        )
+    ):
+        return "indexing_pipeline"
+    if any(term in normalized for term in ("source filtering", "display sources", "reasoning sources", "source cards")):
+        if any(term in normalized for term in ("component", "render", "rendered", "ui", "frontend")):
+            return "ui_implementation"
+        return "source_filtering"
+    if any(term in normalized for term in ("retrieval pipeline", "rank retrieved", "rank chunks", "before answering", "context is passed to the llm")):
+        return "retrieval_pipeline"
+    if any(term in normalized for term in ("provider configuration", "provider config", "provider settings", "api key ui")):
+        return "provider_configuration"
+    if any(
+        term in normalized
+        for term in (
+            "endpoint",
+            "api",
+            "route",
+            "request",
+            "post ",
+            "get ",
+            "session apis",
+            "oauth",
+            "auth",
+            "job history",
+        )
+    ):
+        return "api_endpoint"
+    if any(
+        term in normalized
+        for term in (
+            "component",
+            "ui",
+            "render",
+            "rendered",
+            "frontend",
+            "button",
+            "panel",
+            "screen",
+            "shown",
+        )
+    ):
+        return "ui_implementation"
+    if is_retrieval_explanation_query(query):
+        return "retrieval_pipeline"
+    if is_indexing_explanation_query(query):
+        return "indexing_pipeline"
+    if is_docs_query(query):
+        return "docs_question"
+    if is_source_location_query(query):
+        return "code_location"
+    return "general"
+
+
+def preferred_source_paths_for_intent(source_intent: str) -> tuple[str, ...]:
+    """Backward-compatible API; generic source contracts do not hardcode paths."""
+    return SOURCE_INTENT_CONTRACTS.get(source_intent, ())
 
 
 def compute_label_boost(chunk_labels: list[str], query_profile: dict) -> float:
@@ -280,10 +493,18 @@ def is_overview_query(query: str) -> bool:
     """Check if the query matches codebase overview patterns with word boundaries."""
     q = query.lower()
     patterns = [
+        r"\bwhat\s+is\s+this\s+repo\s+about\b",
+        r"\bwhat\s+is\s+this\s+repository\s+about\b",
+        r"\bwhat\s+is\s+this\s+project\s+about\b",
         r"\bwhat\s+does\s+this\s+repo\s+do\b",
+        r"\bwhat\s+does\s+this\s+repository\s+do\b",
         r"\bwhat\s+does\s+this\s+project\s+do\b",
+        r"\bwhat\s+problem\s+does\s+this\s+repo(?:sitory)?\s+solve\b",
+        r"\bwhat\s+problem\s+does\s+this\s+project\s+solve\b",
         r"\brepo\s+overview\b",
+        r"\brepository\s+overview\b",
         r"\bproject\s+overview\b",
+        r"\bexplain\s+this\s+project\b",
         r"\bexplain\s+this\s+repository\b",
         r"\bsummarize\s+this\s+repo\b",
         r"\barchitecture\s+overview\b",

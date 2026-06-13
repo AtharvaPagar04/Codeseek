@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import patch, MagicMock
 
-from retrieval.db import init_db, db_cursor, upsert_session_file, list_session_files
+from retrieval.db import init_db, db_cursor, upsert_session_file, list_session_files, replace_session_file_chunks
 from retrieval.session_indexer import run_incremental_reindex, get_session
 from rag_ingestion import main as pipeline_main
 from rag_ingestion.stages import storage as storage_stage
@@ -384,3 +384,271 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
     preview = session_indexer.get_session_index_preview("sess-detailed", "user-123")
     assert preview["can_index_latest"] is True
     assert preview["can_incremental_reindex"] is False
+
+
+def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "test_codeseek_recovery.sqlite3"
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(db_path))
+    init_db(force=True)
+
+    repo_dir = tmp_path / "repo_recovery"
+    repo_dir.mkdir()
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True)
+
+    (repo_dir / "unchanged.py").write_text("print('unchanged')", encoding="utf-8")
+    (repo_dir / "modified.py").write_text("print('original modified')", encoding="utf-8")
+    (repo_dir / "deleted.py").write_text("print('deleted')", encoding="utf-8")
+
+    subprocess.run(["git", "add", "."], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(repo_dir), check=True)
+
+    commit_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo_dir), text=True).strip()
+    active_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(repo_dir), text=True).strip()
+
+    # Insert indexing job and session
+    from retrieval.db import create_indexing_job
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO repo_sessions (
+                id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, created_at, updated_at, last_indexed_commit, current_branch, indexed_branch
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sess-recovery",
+                "tenant-1",
+                "user-123",
+                "owner/repo",
+                "https://github.com/owner/repo",
+                str(repo_dir),
+                "col-recovery",
+                "ready",
+                "2026-06-12T00:00:00Z",
+                "2026-06-12T00:00:00Z",
+                commit_sha,
+                active_branch,
+                active_branch,
+            ),
+        )
+
+    # Insert files into DB session_files
+    unchanged_rec = upsert_session_file(
+        session_id="sess-recovery",
+        repo_path="unchanged.py",
+        file_hash=hashlib.sha256(b"print('unchanged')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    replace_session_file_chunks(unchanged_rec["id"], [
+        {"chunk_id": "chunk-unchanged", "vector_id": "vector-unchanged", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    modified_rec = upsert_session_file(
+        session_id="sess-recovery",
+        repo_path="modified.py",
+        file_hash=hashlib.sha256(b"print('original modified')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    replace_session_file_chunks(modified_rec["id"], [
+        {"chunk_id": "chunk-modified-old", "vector_id": "vector-modified-old", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    deleted_rec = upsert_session_file(
+        session_id="sess-recovery",
+        repo_path="deleted.py",
+        file_hash=hashlib.sha256(b"print('deleted')").hexdigest(),
+        indexed_commit_sha=commit_sha,
+        indexed_branch=active_branch,
+        status="indexed",
+        last_indexed_at="2026-06-12T00:00:00Z",
+    )
+    replace_session_file_chunks(deleted_rec["id"], [
+        {"chunk_id": "chunk-deleted", "vector_id": "vector-deleted", "symbol": None, "start_line": 1, "end_line": 1}
+    ])
+
+    # Modify files
+    (repo_dir / "modified.py").write_text("print('new modified')", encoding="utf-8")
+    (repo_dir / "deleted.py").unlink()
+    (repo_dir / "added.py").write_text("print('added')", encoding="utf-8")
+
+    # Mock default pipeline operations
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("retrieval.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
+
+    mock_store = MagicMock()
+    mock_delete = MagicMock()
+    monkeypatch.setattr(storage_stage, "store_chunks", mock_store)
+    monkeypatch.setattr(storage_stage, "delete_vectors_by_ids", mock_delete)
+
+    # 1. Embedding failure before vector deletion preserves old mappings
+    def failing_embed(*args, **kwargs):
+        raise ValueError("Embedding engine offline")
+    
+    # Temporarily patch embedding failure
+    with patch("rag_ingestion.stages.embedder.embed_chunks", failing_embed):
+        job = create_indexing_job("sess-recovery", "incremental")
+        with pytest.raises(ValueError, match="Embedding engine offline"):
+            run_incremental_reindex("sess-recovery", job_id=job["id"])
+        
+        # Verify job and session are marked failed
+        sess = get_session("sess-recovery")
+        assert sess["status"] == "failed"
+        assert "Embedding engine offline" in sess["error"]
+        
+        with db_cursor() as (conn, cursor):
+            cursor.execute("SELECT status, error FROM indexing_jobs WHERE id = ?", (job["id"],))
+            job_status, job_err = cursor.fetchone()
+        assert job_status == "failed"
+        assert "Embedding engine offline" in job_err
+
+        # Check metadata in DB is untouched
+        files = list_session_files("sess-recovery", include_deleted=True)
+        files_by_path = {f["repo_path"]: f for f in files}
+        assert files_by_path["modified.py"]["status"] == "indexed"
+        assert files_by_path["modified.py"]["chunks"][0]["chunk_id"] == "chunk-modified-old"
+        assert files_by_path["deleted.py"]["status"] == "indexed"
+        assert "added.py" not in files_by_path
+
+    # Reset session status for next tests
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+
+    # 2. Qdrant delete failure marks job failed and does not mark session latest
+    def failing_delete(*args, **kwargs):
+        raise RuntimeError("Qdrant delete timeout")
+    
+    monkeypatch.setattr(storage_stage, "delete_vectors_by_ids", failing_delete)
+    job = create_indexing_job("sess-recovery", "incremental")
+    with pytest.raises(RuntimeError, match="Qdrant delete timeout"):
+        run_incremental_reindex("sess-recovery", job_id=job["id"])
+
+    sess = get_session("sess-recovery")
+    assert sess["status"] == "failed"
+    assert "Qdrant delete timeout" in sess["error"]
+    
+    with db_cursor() as (conn, cursor):
+        cursor.execute("SELECT status, error FROM indexing_jobs WHERE id = ?", (job["id"],))
+        job_status, job_err = cursor.fetchone()
+    assert job_status == "failed"
+
+    # Reset session status and restore delete mock
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+    monkeypatch.setattr(storage_stage, "delete_vectors_by_ids", mock_delete)
+
+    # 3. Qdrant upsert/store failure marks job failed and does not mark metadata success
+    def failing_store(*args, **kwargs):
+        raise RuntimeError("Qdrant upsert permission denied")
+    
+    monkeypatch.setattr(storage_stage, "store_chunks", failing_store)
+    job = create_indexing_job("sess-recovery", "incremental")
+    with pytest.raises(RuntimeError, match="Qdrant upsert permission denied"):
+        run_incremental_reindex("sess-recovery", job_id=job["id"])
+
+    sess = get_session("sess-recovery")
+    assert sess["status"] == "failed"
+    assert "Qdrant upsert permission denied" in sess["error"]
+    
+    # Metadata untouched
+    files = list_session_files("sess-recovery", include_deleted=True)
+    files_by_path = {f["repo_path"]: f for f in files}
+    assert files_by_path["modified.py"]["chunks"][0]["chunk_id"] == "chunk-modified-old"
+
+    # Reset session status and restore store mock
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+    monkeypatch.setattr(storage_stage, "store_chunks", mock_store)
+
+    # 4. DB metadata failure marks job failed clearly
+    import sqlite3
+    with patch("retrieval.db.upsert_session_file", side_effect=sqlite3.OperationalError("database is locked")):
+        job = create_indexing_job("sess-recovery", "incremental")
+        with pytest.raises(RuntimeError, match="Metadata recording failed"):
+            run_incremental_reindex("sess-recovery", job_id=job["id"])
+        
+        sess = get_session("sess-recovery")
+        assert sess["status"] == "failed"
+        assert "database is locked" in sess["error"]
+
+    # Reset session status
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+
+    # 5. Cancellation before processing changed files does not mutate vectors
+    # We set cancel requested on the job
+    job = create_indexing_job("sess-recovery", "incremental")
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE indexing_jobs SET cancel_requested = 1 WHERE id = ?", (job["id"],))
+
+    mock_store.reset_mock()
+    mock_delete.reset_mock()
+
+    run_incremental_reindex("sess-recovery", job_id=job["id"])
+
+    mock_store.assert_not_called()
+    mock_delete.assert_not_called()
+    sess = get_session("sess-recovery")
+    assert sess["status"] == "failed"
+    assert "cancelled" in sess["error"]
+
+    # Reset session status
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+
+    # 6. Cancellation before deleted-file vector delete leaves old vectors untouched
+    # We mock cancel_requested returning True *only* when checking during/after embedding
+    job = create_indexing_job("sess-recovery", "incremental")
+    
+    from retrieval.db import is_indexing_job_cancel_requested as db_cancel_requested
+    original_cancel_requested = db_cancel_requested
+    
+    # We want cancel to return True when we reach the storage phase
+    call_count = 0
+    def mock_cancel_check(jid):
+        nonlocal call_count
+        call_count += 1
+        # Trigger cancel when we reach storage checks
+        if call_count >= 3:
+            return True
+        return False
+        
+    monkeypatch.setattr("retrieval.db.is_indexing_job_cancel_requested", mock_cancel_check)
+    
+    mock_store.reset_mock()
+    mock_delete.reset_mock()
+
+    run_incremental_reindex("sess-recovery", job_id=job["id"])
+
+    mock_store.assert_not_called()
+    mock_delete.assert_not_called()
+    
+    sess = get_session("sess-recovery")
+    assert sess["status"] == "failed"
+    assert "cancelled" in sess["error"]
+
+    # Restore cancel check
+    monkeypatch.setattr("retrieval.db.is_indexing_job_cancel_requested", original_cancel_requested)
+    with db_cursor() as (conn, cursor):
+        cursor.execute("UPDATE repo_sessions SET status = 'ready' WHERE id = 'sess-recovery'")
+
+    # 7. Failure during modified-file replacement does not affect unrelated unchanged files
+    # Unchanged files are 'unchanged.py'
+    files = list_session_files("sess-recovery", include_deleted=True)
+    files_by_path = {f["repo_path"]: f for f in files}
+    assert files_by_path["unchanged.py"]["status"] == "indexed"
+    assert files_by_path["unchanged.py"]["chunks"][0]["chunk_id"] == "chunk-unchanged"
+
+    # 8. Full Index latest remains available after failed incremental indexing
+    preview = session_indexer.get_session_index_preview("sess-recovery", "user-123")
+    assert preview["can_index_latest"] is True
+

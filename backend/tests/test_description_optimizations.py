@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from rag_ingestion.config import (
-    CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS,
+    CODESEEK_DESCRIPTION_MAX_TOKENS,
     CHUNK_DESCRIPTION_SLEEP_SECONDS,
 )
 from rag_ingestion.models.chunk import Chunk
@@ -25,7 +25,8 @@ def test_sleep_default_is_zero():
 
 
 def test_max_output_tokens_exists():
-    assert CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS == 60
+    assert CODESEEK_DESCRIPTION_MAX_TOKENS == 160
+
 
 
 def test_should_describe_chunk_eligible():
@@ -64,11 +65,11 @@ def test_should_describe_chunk_skipped():
     assert _should_describe_chunk(c3) is False
 
     # tiny method below 120 tokens
-    c4 = Chunk(relative_path="src/app.py", chunk_type="method", token_count=80, content="def foo(): pass\n" * 5)
+    c4 = Chunk(relative_path="src/utils.py", chunk_type="method", token_count=80, content="def foo(): pass\n" * 5)
     assert _should_describe_chunk(c4) is False
 
     # large method >= 120 tokens is described
-    c5 = Chunk(relative_path="src/app.py", chunk_type="method", token_count=120, content="def foo(): pass\n" * 15)
+    c5 = Chunk(relative_path="src/utils.py", chunk_type="method", token_count=120, content="def foo(): pass\n" * 15)
     assert _should_describe_chunk(c5) is True
 
     # tiny chunk below 40 tokens is skipped
@@ -366,3 +367,224 @@ def test_invalid_env_values_fallback(monkeypatch):
         monkeypatch.delenv("CODESEEK_DESCRIPTION_COOLDOWN_EVERY", raising=False)
         monkeypatch.delenv("CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", raising=False)
         importlib.reload(rag_ingestion.config)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: High-value symbol eligibility and docs/product eligibility
+# ---------------------------------------------------------------------------
+
+from rag_ingestion.stages.description import _is_high_value_symbol
+
+
+def test_description_eligibility_for_high_value_pipeline_functions():
+    """run_pipeline, run_incremental_pipeline, post_process_answer_and_sources are eligible."""
+    run_pipeline = Chunk(
+        relative_path="backend/rag_ingestion/main.py",
+        chunk_type="function",
+        symbol_name="run_pipeline",
+        token_count=250,
+        start_line=1, end_line=120,
+        content="def run_pipeline(session_id, repo_root):\n    pass\n" * 10,
+    )
+    assert _should_describe_chunk(run_pipeline) is True
+
+    run_inc = Chunk(
+        relative_path="backend/rag_ingestion/main.py",
+        chunk_type="function",
+        symbol_name="run_incremental_pipeline",
+        token_count=180,
+        start_line=130, end_line=240,
+        content="def run_incremental_pipeline(session_id):\n    pass\n" * 10,
+    )
+    assert _should_describe_chunk(run_inc) is True
+
+    post_process = Chunk(
+        relative_path="backend/retrieval/main.py",
+        chunk_type="function",
+        symbol_name="post_process_answer_and_sources",
+        token_count=200,
+        start_line=480, end_line=590,
+        content="def post_process_answer_and_sources(answer):\n    pass\n" * 10,
+    )
+    assert _should_describe_chunk(post_process) is True
+
+
+def test_description_eligibility_for_generate_answer():
+    chunk = Chunk(
+        relative_path="backend/retrieval/llm.py",
+        chunk_type="function",
+        symbol_name="generate_answer",
+        token_count=160,
+        start_line=1, end_line=80,
+        content="def generate_answer(query, context):\n    pass\n" * 10,
+    )
+    assert _should_describe_chunk(chunk) is True
+
+
+def test_description_eligibility_excludes_tiny_helpers():
+    """Tiny helper functions with no high-value signals should be skippable."""
+    tiny = Chunk(
+        relative_path="backend/rag_ingestion/utils.py",
+        chunk_type="function",
+        symbol_name="_sleep",
+        token_count=15,
+        start_line=1, end_line=3,
+        content="def _sleep(s):\n    time.sleep(s)\n",
+    )
+    # Does not pass the high-value check, and token_count < 40
+    assert _is_high_value_symbol(tiny) is False
+    assert _should_describe_chunk(tiny) is False
+
+
+def test_description_eligibility_for_docs_product():
+    """docs/product/*.md chunks are eligible regardless of chunk_part."""
+    first_part = Chunk(
+        relative_path="docs/product/final_handoff.md",
+        chunk_type="file",
+        chunk_part=1,
+        token_count=80,
+        content="# Final Handoff\n\nThis document describes the handoff process.\n",
+    )
+    assert _should_describe_chunk(first_part) is True
+
+    second_part = Chunk(
+        relative_path="docs/product/release_readiness_checklist.md",
+        chunk_type="file",
+        chunk_part=2,
+        token_count=80,
+        content="Continued content from page 2 of the release checklist.\n",
+    )
+    assert _should_describe_chunk(second_part) is True
+
+
+def test_description_eligibility_for_readme_second_part():
+    """README.md second parts are eligible (high-value docs)."""
+    chunk = Chunk(
+        relative_path="README.md",
+        chunk_type="file",
+        chunk_part=2,
+        token_count=90,
+        content="## Configuration\n\nTo configure the project, set the following env vars.\n",
+    )
+    assert _should_describe_chunk(chunk) is True
+
+
+def test_is_high_value_symbol_catches_search_and_retrieval():
+    """Generic high-value heuristic catches retrieval/search/answer function names."""
+    for sym in ("search_chunks", "retrieve_context", "generate_answer", "filter_sources",
+                "run_pipeline", "store_chunks", "build_answer", "process_query",
+                "handle_request", "dispatch_query", "post_process"):
+        chunk = Chunk(
+            relative_path="backend/retrieval/main.py",
+            chunk_type="function",
+            symbol_name=sym,
+            token_count=100,
+            start_line=1, end_line=50,
+            content=f"def {sym}(): pass\n" * 5,
+        )
+        assert _is_high_value_symbol(chunk) is True, f"Expected {sym} to be high-value"
+
+
+def test_is_high_value_symbol_does_not_flag_tiny_private_helpers():
+    for sym in ("_sleep", "_noop", "__repr__"):
+        chunk = Chunk(
+            relative_path="backend/rag_ingestion/utils.py",
+            chunk_type="function",
+            symbol_name=sym,
+            token_count=10,
+            start_line=1, end_line=3,
+            content=f"def {sym}(): pass\n",
+        )
+        assert _is_high_value_symbol(chunk) is False, f"Expected {sym} NOT to be high-value"
+
+
+def test_describes_express_app_entrypoint():
+    c = Chunk(
+        relative_path="backend/src/app.js",
+        chunk_type="file",
+        token_count=150,
+        content="const express = require('express');\nconst app = express();\nmodule.exports = app;\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_backend_route_file():
+    c = Chunk(
+        relative_path="backend/src/modules/tasks/task.routes.js",
+        chunk_type="file",
+        token_count=120,
+        content="const router = require('express').Router();\nrouter.get('/', getTasks);\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_backend_service_file():
+    c = Chunk(
+        relative_path="backend/src/modules/auth/auth.service.js",
+        chunk_type="file",
+        token_count=100,
+        content="class AuthService {\n    async login() {}\n}\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_backend_repository_file():
+    c = Chunk(
+        relative_path="backend/src/modules/tasks/task.repository.js",
+        chunk_type="file",
+        token_count=100,
+        content="class TaskRepository {\n    async find() {}\n}\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_backend_middleware_file():
+    c = Chunk(
+        relative_path="backend/src/middleware/authenticate.js",
+        chunk_type="file",
+        token_count=80,
+        content="module.exports = (req, res, next) => { next(); };\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_react_component_file():
+    c = Chunk(
+        relative_path="frontend/src/components/CreateTaskForm.jsx",
+        chunk_type="file",
+        token_count=130,
+        content="export default function CreateTaskForm() { return <form></form>; }\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_describes_react_context_file():
+    c = Chunk(
+        relative_path="frontend/src/context/AuthContext.jsx",
+        chunk_type="file",
+        token_count=100,
+        content="export const AuthContext = createContext();\n"
+    )
+    assert _should_describe_chunk(c) is True
+
+
+def test_skips_tiny_barrel_index():
+    c = Chunk(
+        relative_path="backend/src/modules/auth/index.js",
+        chunk_type="file",
+        token_count=50,
+        content="export * from './auth.service';\nexport * from './auth.routes';\n"
+    )
+    assert _should_describe_chunk(c) is False
+
+
+def test_skips_gitignore():
+    c = Chunk(
+        relative_path=".gitignore",
+        chunk_type="file",
+        token_count=50,
+        content="node_modules/\ndist/\n"
+    )
+    assert _should_describe_chunk(c) is False
+
+

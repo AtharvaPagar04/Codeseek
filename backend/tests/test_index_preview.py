@@ -94,6 +94,9 @@ class SessionIndexPreviewTests(unittest.TestCase):
         res = session_indexer.get_session_index_preview(session_id, self.user_id)
         self.assertEqual(res["freshness_status"], "unknown")
         self.assertIn("missing", res["message"])
+        self.assertIn("incremental_enabled", res)
+        self.assertIn("incremental_block_reason", res)
+        self.assertFalse(res["can_incremental_reindex"])
 
     def test_preview_not_indexed_yet(self):
         session = session_indexer.create_session(
@@ -127,6 +130,8 @@ class SessionIndexPreviewTests(unittest.TestCase):
         self.assertEqual(res["freshness_status"], "unknown")
         self.assertIn("not been indexed", res["message"])
         self.assertTrue(res["can_index_latest"])
+        self.assertFalse(res["can_incremental_reindex"])
+        self.assertEqual(res["incremental_block_reason"], "feature_disabled" if not res["incremental_enabled"] else "metadata_unavailable")
 
     def test_preview_clean_latest(self):
         session = session_indexer.create_session(
@@ -160,6 +165,8 @@ class SessionIndexPreviewTests(unittest.TestCase):
         self.assertEqual(res["freshness_status"], "latest")
         self.assertEqual(res["estimated_files_to_update"], 0)
         self.assertFalse(res["can_index_latest"])
+        self.assertFalse(res["can_incremental_reindex"])
+        self.assertEqual(res["incremental_block_reason"], "feature_disabled" if not res["incremental_enabled"] else "no_changes")
 
     def test_preview_worktree_changes(self):
         session = session_indexer.create_session(
@@ -174,6 +181,17 @@ class SessionIndexPreviewTests(unittest.TestCase):
             status="ready",
             last_indexed_commit="commit123",
             current_branch="main"
+        )
+
+        from retrieval.db import upsert_session_file
+        upsert_session_file(
+            session_id=session_id,
+            repo_path="src/App.js",
+            file_hash="somehash",
+            indexed_commit_sha="commit123",
+            indexed_branch="main",
+            status="ready",
+            last_indexed_at="2026-06-12T12:00:00Z"
         )
 
         def git_side_effect(repo_root, cmd, github_token=""):
@@ -200,6 +218,12 @@ class SessionIndexPreviewTests(unittest.TestCase):
         self.assertEqual(res["deleted_files"], ["src/utils/api.js"])
         self.assertEqual(res["estimated_files_to_update"], 3)
         self.assertTrue(res["can_index_latest"])
+        if res["incremental_enabled"]:
+            self.assertTrue(res["can_incremental_reindex"])
+            self.assertEqual(res["incremental_block_reason"], "")
+        else:
+            self.assertFalse(res["can_incremental_reindex"])
+            self.assertEqual(res["incremental_block_reason"], "feature_disabled")
 
     def test_preview_commit_diff_changes(self):
         session = session_indexer.create_session(

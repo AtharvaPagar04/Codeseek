@@ -12,9 +12,9 @@ MAX_CONFIDENCE = 0.95
 
 # Max labels permitted per category
 MAX_LABELS_PER_CATEGORY = {
-    "artifact": 2,
+    "artifact": 3,
     "code_role": 1,
-    "domain": 2,
+    "domain": 3,
     "capability": 3,
     "tech": 3,
     "question_use": 4,
@@ -28,6 +28,8 @@ LABEL_REGISTRY = {
     "artifact:source-code": "Source code files containing functions, methods, or classes.",
     "artifact:repo-summary": "High-level summary of the entire repository.",
     "artifact:readme": "Project README or documentation overview.",
+    "artifact:documentation": "General documentation or markdown files.",
+    "artifact:product-doc": "Product-level documentation under docs/product/.",
     "artifact:package-manifest": "Project package manifest (e.g. package.json, requirements.txt).",
     "artifact:dockerfile": "Docker build configuration file.",
     "artifact:docker-compose": "Docker compose multi-container orchestration configuration.",
@@ -48,6 +50,8 @@ LABEL_REGISTRY = {
     "domain:testing": "Validation, unit tests, or test execution framework.",
     "domain:devops": "CI/CD, containerization, or deployment setup.",
     "domain:vector-db": "Vector database interface and queries.",
+    "domain:documentation": "Documentation, guides, and technical writing.",
+    "domain:product": "Product-level documentation, roadmaps, and feature overviews.",
 
     # capability
     "capability:dependency-management": "Third-party libraries and package tracking.",
@@ -71,6 +75,7 @@ LABEL_REGISTRY = {
     "question_use:implementation": "Target for editing, modifying, or refactoring code.",
     "question_use:repo-overview": "General understanding of project scope and architecture.",
     "question_use:general-context": "Background knowledge for general queries.",
+    "question_use:architecture": "Explaining system design, module roles, and component relationships.",
     "question_use:setup": "Installing, configuring, or running the application.",
     "question_use:dependency-question": "Questions about packages, versions, or libraries.",
     "question_use:config-question": "Questions about settings, environments, or parameters.",

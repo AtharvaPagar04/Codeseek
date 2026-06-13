@@ -2,9 +2,10 @@
 
 import os
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
+import json
 
 from retrieval.code_answers import (
     is_code_request,
@@ -50,14 +51,16 @@ SYSTEM_PROMPT = (
     "4. If evidence is weak or incomplete, say so clearly (e.g., reply with 'I could not find strong evidence...').\n"
     "5. If the answer mentions a file, that file must appear in the provided ALLOWED SOURCES.\n"
     "6. If the answer mentions a function/symbol, it must appear in the provided source metadata or code excerpt.\n"
-    "7. Keep answers concise by default. Add detail only when the user asks 'how', 'explain', 'flow', 'architecture', or 'why'."
+    "7. For overview and explanation questions, give enough detail to be useful. Use natural paragraphs with clear section headings unless the user asks for a short list.\n"
+    "8. NEVER include a Sources, References, Relevant Sources, Key Sources, or Related Sources section in your answer. The UI already renders source cards separately below your answer. Do not list file paths at the end of your response.\n"
+    "9. Do not start explanation answers with Function:, Signature:, Calls:, Parameters:, or Implementation first lines unless the user explicitly asks for code metadata."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
 OPENROUTER_MODEL = os.getenv("RETRIEVAL_OPENROUTER_MODEL", "openai/gpt-4o-mini")
 GEMINI_MODEL = os.getenv("RETRIEVAL_GEMINI_MODEL", "gemini-1.5-flash")
 AICREDITS_MODEL = os.getenv("RETRIEVAL_AICREDITS_MODEL", "gpt-5.4-mini")
-AICREDITS_BASE_URL = os.getenv("AICREDITS_BASE_URL", "https://api.aicredits.io/v1")
+AICREDITS_BASE_URL = os.getenv("AICREDITS_BASE_URL", "https://api.aicredits.in/v1")
 
 _llm_failures = 0
 _llm_circuit_open_until = 0.0
@@ -198,6 +201,167 @@ def generate_answer(
     return "No LLM provider API key configured. Add one in the frontend API config and make it active."
 
 
+def generate_answer_stream(
+    raw_query: str,
+    context: str,
+    history_block: str,
+    allowed_sources: list[dict] | None = None,
+    extra_context_blocks: list[str] | None = None,
+    provider_config: dict[str, Any] | None = None,
+    query_info: dict[str, Any] | None = None,
+    evidence_confidence: dict[str, Any] | str | None = None,
+    selection_meta: dict[str, Any] | None = None,
+) -> Iterator[str]:
+    """Generate a grounded answer stream from context using a selected provider."""
+    # Resolve the expected response mode
+    response_mode = "technical_trace"
+    if query_info:
+        intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
+        if intent == "SYMBOL":
+            response_mode = "source_location"
+        elif intent in ("FLOW", "TRACE") or is_explanation_request(raw_query):
+            response_mode = "flow_summary"
+        elif intent == "OVERVIEW" or is_overview_request(raw_query):
+            response_mode = "overview_summary"
+        elif intent == "CODE_REQUEST":
+            response_mode = "code_snippet"
+        elif intent == "CONFIG":
+            response_mode = "source_location"
+        elif str(query_info.get("response_mode", "")).strip().lower() == "docs_summary":
+            response_mode = "docs_summary"
+            
+    if evidence_confidence:
+        if isinstance(evidence_confidence, dict):
+            level = str(evidence_confidence.get("level", "")).lower()
+        else:
+            level = str(evidence_confidence).lower()
+        if level == "weak" and response_mode not in ("flow_summary", "overview_summary", "code_snippet"):
+            response_mode = "low_context"
+
+    prompt = _build_prompt(
+        raw_query,
+        context,
+        history_block,
+        allowed_sources or [],
+        extra_context_blocks=extra_context_blocks or [],
+        response_mode=response_mode,
+    )
+    resolved = _resolve_provider_config(
+        provider_config,
+        raw_query=raw_query,
+        query_info=query_info or {},
+        evidence_confidence=evidence_confidence,
+    )
+    if selection_meta is not None and resolved:
+        runtime_state = get_provider_runtime_state(resolved["provider"], resolved["model"])
+        selection_meta.update(
+            {
+                "provider": resolved["provider"],
+                "model": resolved["model"],
+                "routing_mode": resolved.get("routing_mode", ""),
+                "timeout_seconds": resolved.get("timeout_seconds", 0.0),
+                "runtime_status": runtime_state.get("status", ""),
+                "runtime_detail": runtime_state.get("detail", ""),
+            }
+        )
+    if resolved:
+        if resolved["provider"] == "local":
+            try:
+                if resolved["model"] == LOCAL_LLM_COMPLEX_MODEL:
+                    wait_for_model_ready(
+                        resolved["model"],
+                        timeout_seconds=resolved["timeout_seconds"],
+                        reason="query_requires_complex_model",
+                    )
+                else:
+                    background_prime_primary_model()
+            except TimeoutError as exc:
+                raise LlmProviderError(503, str(exc)) from exc
+            except RuntimeError as exc:
+                raise LlmProviderError(502, str(exc)) from exc
+
+        # If it is local and routing mode is auto, we run full generation so we can decide whether to escalate.
+        # This is a safe fallback since we can't discard streamed tokens once sent to the client.
+        is_auto_local = (
+            resolved["provider"] == "local"
+            and resolved.get("routing_mode", "").startswith("auto")
+            and resolved["model"] == LOCAL_LLM_PRIMARY_MODEL
+        )
+        if is_auto_local:
+            answer = _provider_answer(
+                prompt,
+                provider=resolved["provider"],
+                api_key=resolved["api_key"],
+                model=resolved["model"],
+                timeout_seconds=resolved["timeout_seconds"],
+                base_url=resolved.get("base_url", ""),
+                max_tokens=QUERY_MAX_TOKENS,
+            )
+            if _should_escalate_local_answer(answer):
+                try:
+                    wait_for_model_ready(
+                        LOCAL_LLM_COMPLEX_MODEL,
+                        timeout_seconds=resolved["timeout_seconds"],
+                        reason="auto_escalation_required",
+                    )
+                except TimeoutError as exc:
+                    raise LlmProviderError(503, str(exc)) from exc
+                except RuntimeError as exc:
+                    raise LlmProviderError(502, str(exc)) from exc
+                answer = _provider_answer(
+                    prompt,
+                    provider=resolved["provider"],
+                    api_key=resolved["api_key"],
+                    model=LOCAL_LLM_COMPLEX_MODEL,
+                    timeout_seconds=resolved["timeout_seconds"],
+                    base_url=resolved.get("base_url", ""),
+                    max_tokens=QUERY_MAX_TOKENS,
+                )
+                if selection_meta is not None:
+                    selection_meta.update(
+                        {
+                            "escalated": True,
+                            "initial_model": LOCAL_LLM_PRIMARY_MODEL,
+                            "model": LOCAL_LLM_COMPLEX_MODEL,
+                            "fallback_reason": "insufficient_first_pass",
+                        }
+                    )
+            # Yield the final answer in small chunks
+            for i in range(0, len(answer), 8):
+                yield answer[i:i+8]
+                time.sleep(0.01)
+            return
+
+        # Otherwise, perform true streaming!
+        try:
+            for chunk in _provider_answer_stream(
+                prompt,
+                provider=resolved["provider"],
+                api_key=resolved["api_key"],
+                model=resolved["model"],
+                timeout_seconds=resolved["timeout_seconds"],
+                base_url=resolved.get("base_url", ""),
+                max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
+            ):
+                yield chunk
+        except Exception:
+            # Safe fallback: call full-generation function and emit the completed answer in small chunks.
+            answer = _provider_answer(
+                prompt,
+                provider=resolved["provider"],
+                api_key=resolved["api_key"],
+                model=resolved["model"],
+                timeout_seconds=resolved["timeout_seconds"],
+                base_url=resolved.get("base_url", ""),
+                max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
+            )
+            for i in range(0, len(answer), 8):
+                yield answer[i:i+8]
+                time.sleep(0.01)
+        return
+    yield "No LLM provider API key configured. Add one in the frontend API config and make it active."
+
+
 def _build_prompt(
     raw_query: str,
     context: str,
@@ -263,6 +427,7 @@ def _build_prompt(
             "- Docs/tests may be related sources only when the user explicitly asks for docs/tests or no implementation file is available.\n"
             "- Do not include 'Related sources' if there are none.\n"
             "- Do not mention internal routing, injection, ranking, or scoring.\n"
+            "- Do not use this source-location format for overview, architecture, or walkthrough questions.\n"
             "- If the exact implementation is uncertain, start with:\n"
             "  'I found partial evidence. The likely implementation is in:'"
         )
@@ -280,41 +445,31 @@ def _build_prompt(
         )
     elif header == "FLOW_SUMMARY":
         parts.append(
-            "You MUST follow this exact format for the answer:\n\n"
-            "The flow appears to be:\n\n"
-            "1. {role name}\n"
-            "   * file: `{file_path}`{optional_symbol}\n"
-            "   * role: {what this file/symbol does in the flow}\n\n"
-            "2. {role name}\n"
-            "   * file: `{file_path}`{optional_symbol}\n"
-            "   * role: {what this file/symbol does in the flow}\n\n"
-            "Evidence status:\n"
-            "* complete\n\n"
-            "OR:\n\n"
-            "Evidence status:\n"
-            "* partial\n"
-            "* missing: {missing_role_1}, {missing_role_2}\n\n"
+            "The user asked for how a repo feature or flow works. Answer with a detailed, descriptive narrative.\n\n"
             "Rules:\n"
-            "- Do not mark evidence as complete if any required role is missing.\n"
-            "- Do not list a role as missing if a displayed source already covers that role.\n"
+            "- Write in flowing descriptive paragraphs, not bullet points or numbered lists.\n"
+            "- Use a short opening paragraph, then 2-5 meaningful section headings with substantial paragraph explanations under each.\n"
+            "- Do NOT use numbered lists or bullet points unless the user explicitly asks for points, bullets, a list, short, quick, or concise.\n"
+            "- Explain what starts the flow, the main backend stages, what each stage reads/writes/calls, and how control moves to the next stage.\n"
+            "- Target roughly 600-1200 words. Go deeper when the context supports it.\n"
             "- Prefer implementation sources.\n"
-            "- Hide docs/tests unless the user explicitly asks for tests/docs."
+            "- Hide docs/tests unless the user explicitly asks for tests/docs.\n"
+            "- Do not include a manual Sources section."
         )
     elif header == "OVERVIEW":
         parts.append(
             "The user wants a grounded project overview.\n"
-            "You MUST follow this exact format for the answer:\n\n"
-            "{repo_or_feature_name} is {one-sentence purpose}.\n\n"
-            "At a high level:\n\n"
-            "1. {main capability 1}\n"
-            "2. {main capability 2}\n"
-            "3. {main capability 3}\n\n"
-            "Key areas from the retrieved sources:\n\n"
-            "* `{file_path}`: {short role}\n\n"
             "Rules:\n"
-            "- Explain the system, not random helper functions.\n"
-            "- Prefer architecture, API, ingestion, retrieval, frontend, and config entrypoints.\n"
-            "- Avoid dumping source paths without explanation."
+            "- Start with a substantial opening paragraph explaining what the repository does and the problem it solves.\n"
+            "- Then use 3-6 meaningful section headings with detailed paragraph explanations under each.\n"
+            "- Write in flowing descriptive prose. Do NOT use numbered lists or bullet points.\n"
+            "- Target roughly 700-1200 words unless the user asked for a short answer.\n"
+            "- Explain the system architecture, main subsystems, data flow, and key design decisions.\n"
+            "- Prefer README, product docs, API, ingestion, retrieval, frontend, and config entrypoints.\n"
+            "- Do not mention helper functions such as _has_overview_markers unless the user asked about query classification.\n"
+            "- Do not start with Function:, Signature:, Calls:, Parameters:, or Implementation first lines.\n"
+            "- Avoid dumping source paths without explanation.\n"
+            "- Do not include a manual Sources section."
         )
     elif header == "LOW_CONTEXT":
         parts.append(
@@ -331,30 +486,35 @@ def _build_prompt(
     elif header == "EXPLANATION":
         parts.append(
             "The user asked for an explanation, not a raw code dump. "
-            "Answer with a grounded technical walk-through. "
-            "For each step: name the exact file and symbol, state what it does, what it "
-            "reads/writes/calls, and how it connects to the next step. "
-            "Include inputs, return values, and any notable side effects or error handling "
-            "visible in the context. "
+            "Answer with a detailed, grounded technical explanation written in descriptive prose. "
+            "Use a short opening paragraph followed by 3-5 clear section headings with substantial paragraph explanations. "
+            "Do NOT use numbered lists or bullet points. Write in flowing descriptive paragraphs that explain the mechanics, reasoning, and connections in depth. "
+            "Only use a list if the user explicitly asks for points, bullets, a list, short, quick, or concise. "
+            "Name exact files and symbols when useful, but synthesize them into a natural explanation instead of repeating raw function metadata. "
+            "Do not start with Function:, Signature:, Calls:, Parameters:, or Implementation first lines. "
             "Keep the answer concrete and implementation-based — avoid generic descriptions "
             "that could apply to any codebase. "
-            "Format: one-line answer, then 4-8 numbered steps or bullet points. "
+            "Target roughly 600-1200 words when the context supports it. "
             "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
-            "code blocks unless the user explicitly asked for code."
+            "code blocks unless the user explicitly asked for code. "
+            "Do not include a manual Sources section."
         )
     else:
         # TECHNICAL TRACE
         parts.append(
-            "Answer with a grounded technical walk-through. "
-            "For each step: name the exact file and symbol, state what it does, what it "
-            "reads/writes/calls, and how it connects to the next step. "
+            "Answer with a detailed, grounded technical walk-through written in descriptive prose. "
+            "For each stage of the trace: name the exact file and symbol, explain in a paragraph what it does, what it "
+            "reads/writes/calls, and how it connects to the next stage. "
             "Include inputs, return values, and any notable side effects or error handling "
             "visible in the context. "
             "Keep the answer concrete and implementation-based — avoid generic descriptions "
             "that could apply to any codebase. "
-            "Format: one-line answer, then 4-8 numbered steps or bullet points. "
+            "Do NOT use numbered lists or bullet points. Write in flowing descriptive paragraphs with section headings. "
+            "Only use a list if the user explicitly asks for points, bullets, steps, short, quick, or concise. "
+            "Target roughly 600-1200 words when the context supports it. "
             "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
-            "code blocks unless the user explicitly asked for code."
+            "code blocks unless the user explicitly asked for code. "
+            "Do not include a Sources, References, or Related Sources section."
         )
 
     parts.append("--- CURRENT USER QUESTION ---")
@@ -718,3 +878,76 @@ def _extract_message_content(response: dict[str, Any]) -> str:
                     parts.append(str(text))
         return "\n".join(parts).strip()
     return ""
+
+
+def _provider_answer_stream(
+    prompt: str,
+    provider: str,
+    api_key: str,
+    model: str,
+    *,
+    timeout_seconds: float,
+    base_url: str = "",
+    max_tokens: int | None = None,
+) -> Iterator[str]:
+    global _llm_failures, _llm_circuit_open_until
+    now = time.time()
+    if _llm_circuit_open_until > now:
+        remaining = int(_llm_circuit_open_until - now)
+        raise LlmProviderError(
+            503,
+            f"LLM provider temporarily unavailable. Retry after {remaining}s.",
+        )
+
+    if provider == "unsupported":
+        raise LlmProviderError(
+            400,
+            f"Unsupported LLM provider configuration: {model}",
+        )
+
+    url, headers = _provider_endpoint(provider, api_key, base_url=base_url)
+    sys_prompt = SYSTEM_PROMPT
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.1,
+        "stream": True,
+    }
+    effective_max_tokens = max_tokens
+    if effective_max_tokens is None:
+        effective_max_tokens = QUERY_MAX_TOKENS if provider == "local" else MAX_RESPONSE_TOKENS
+    payload["max_tokens"] = effective_max_tokens
+    if provider == "local":
+        payload["options"] = {
+            "temperature": 0.1,
+            "num_ctx": QUERY_NUM_CTX,
+            "num_predict": effective_max_tokens,
+        }
+        payload["keep_alive"] = QUERY_OLLAMA_KEEP_ALIVE
+
+    try:
+        with httpx.stream("POST", url, headers=headers, json=payload, timeout=timeout_seconds) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk_data = json.loads(data_str)
+                        choices = chunk_data.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                    except Exception:
+                        pass
+    except Exception as exc:
+        raise _classify_provider_error(exc)

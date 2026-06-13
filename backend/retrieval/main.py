@@ -4,6 +4,7 @@ import argparse
 import os
 import re
 import time
+from typing import Any
 
 from retrieval.assembler import assemble, assemble_for_reasoning, intent_history_cap
 from retrieval.code_answers import (
@@ -46,7 +47,7 @@ from retrieval.follow_up_memory import (
     latest_rendered_entity_set,
     rewrite_follow_up_query,
 )
-from retrieval.llm import generate_answer
+from retrieval.llm import generate_answer, generate_answer_stream
 from retrieval.memory import ConversationMemory
 from retrieval.observability import StageMetrics, log_event, new_request_id
 from retrieval.query_processor import process_query
@@ -301,6 +302,28 @@ def post_process_answer_and_sources(
             cleaned.append(line)
         return "\n".join(cleaned)
 
+    def _strip_manual_sources_footer(text: str) -> str:
+        # Patterns that indicate a manual sources/references section the LLM added.
+        # We strip from the first match (outside code blocks) to the end.
+        source_patterns = [
+            r"(?im)^#{1,4}\s*(?:Sources|References|Relevant\s+Sources|Key\s+Sources|Related\s+Sources)\s*$",
+            r"(?im)^\s*(?:\*\*)?(?:Sources|References|Relevant\s+Sources|Key\s+Sources|Related\s+Sources)(?::?\s*)(?:\*\*)?\s*$",
+        ]
+        earliest_pos = None
+        for pattern in source_patterns:
+            for match in re.finditer(pattern, text):
+                prefix = text[:match.start()]
+                in_code_block = False
+                for line in prefix.splitlines():
+                    if line.strip().startswith("```"):
+                        in_code_block = not in_code_block
+                if not in_code_block:
+                    if earliest_pos is None or match.start() < earliest_pos:
+                        earliest_pos = match.start()
+        if earliest_pos is not None:
+            return text[:earliest_pos].rstrip()
+        return text
+
     # 1. Strip internal/debug phrases
     internals = [
         "direct injected candidate",
@@ -330,6 +353,7 @@ def post_process_answer_and_sources(
         content = re.sub(r" {2,}", " ", content)
         lines[i] = leading_ws + content
     answer = "\n".join(lines)
+    answer = _strip_manual_sources_footer(answer)
 
     # 1.5. Flow summary formatting post-processing
     if "The flow appears to be:" in answer or "Evidence status:" in answer:
@@ -645,6 +669,8 @@ def run_query(
     return_meta: bool = False,
     provider_config: dict | None = None,
     capture_eval: bool = False,
+    stream_handler: Any | None = None,
+    abort_event: Any | None = None,
 ) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, dict]:
     proxy_memory = PostProcessingMemoryProxy(memory, raw_query)
     res = _run_query_impl(
@@ -654,6 +680,8 @@ def run_query(
         return_meta=return_meta,
         provider_config=provider_config,
         capture_eval=capture_eval,
+        stream_handler=stream_handler,
+        abort_event=abort_event,
     )
     final_answer = proxy_memory.last_answer if proxy_memory.last_answer is not None else res[0]
     final_sources = proxy_memory.last_sources if proxy_memory.last_sources is not None else res[1]
@@ -675,9 +703,13 @@ def _run_query_impl(
     return_meta: bool = False,
     provider_config: dict | None = None,
     capture_eval: bool = False,
+    stream_handler: Any | None = None,
+    abort_event: Any | None = None,
 ) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, dict]:
     """Run one retrieval query end-to-end (implementation)."""
     rid = request_id or new_request_id()
+    if stream_handler:
+        stream_handler.on_status("Retrieving relevant code...")
     metrics = StageMetrics(request_id=rid)
     meta: dict = {"request_id": rid}
     evaluation = meta.setdefault("evaluation", {}) if capture_eval else None
@@ -824,6 +856,13 @@ def _run_query_impl(
                 primary_intent=primary_intent,
                 query_info=query_info,
             )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
             if return_meta:
                 return answer, [], token_count, meta
             return answer, [], token_count
@@ -879,6 +918,13 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, docs_sources, token_count, meta
         return answer, docs_sources, token_count
@@ -936,6 +982,13 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
@@ -1093,6 +1146,13 @@ def _run_query_impl(
                 primary_intent=primary_intent,
                 query_info=query_info,
             )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
             if return_meta:
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
@@ -1105,6 +1165,12 @@ def _run_query_impl(
         )
         if architecture_sources:
             shown_sources = architecture_sources
+        answer, shown_sources = post_process_answer_and_sources(
+            answer,
+            shown_sources,
+            raw_query,
+            primary_intent=primary_intent,
+        )
         cited_entities = extract_cited_entities(shown_sources)
         response_mode = "architecture_summary"
         memory.add(
@@ -1150,11 +1216,24 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
     if is_overview_request(raw_query):
         answer = build_overview_answer(raw_query, shown_sources, expanded)
+        answer, shown_sources = post_process_answer_and_sources(
+            answer,
+            shown_sources,
+            raw_query,
+            primary_intent=primary_intent,
+        )
         cited_entities = extract_cited_entities(shown_sources)
         response_mode = "overview_summary"
         memory.add(
@@ -1200,6 +1279,13 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
@@ -1212,6 +1298,12 @@ def _run_query_impl(
         )
         if flow_sources:
             shown_sources = flow_sources
+        answer, shown_sources = post_process_answer_and_sources(
+            answer,
+            shown_sources,
+            raw_query,
+            primary_intent=primary_intent,
+        )
         cited_entities = extract_cited_entities(shown_sources)
         response_mode = "flow_summary"
         memory.add(
@@ -1257,6 +1349,13 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
@@ -1332,6 +1431,13 @@ def _run_query_impl(
                     primary_intent=primary_intent,
                     query_info=query_info,
                 )
+                if stream_handler:
+                    stream_handler.on_status("Generating answer...")
+                    for i in range(0, len(answer), 8):
+                        if abort_event and abort_event.is_set():
+                            break
+                        stream_handler.on_delta(answer[i:i+8])
+                        time.sleep(0.01)
                 if return_meta:
                     return answer, route_sources, token_count, meta
                 return answer, route_sources, token_count
@@ -1386,6 +1492,13 @@ def _run_query_impl(
             primary_intent=primary_intent,
             query_info=query_info,
         )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
@@ -1445,6 +1558,13 @@ def _run_query_impl(
                 primary_intent=primary_intent,
                 query_info=query_info,
             )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(deep_dive_answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(deep_dive_answer[i:i+8])
+                    time.sleep(0.01)
             if return_meta:
                 return deep_dive_answer, shown_sources, token_count, meta
             return deep_dive_answer, shown_sources, token_count
@@ -1455,6 +1575,12 @@ def _run_query_impl(
         # Weak evidence: let LLM handle instead of a thin deterministic explanation
         if evidence_confidence["level"] != "weak":
             answer = build_explanation_answer(raw_query, shown_sources, expanded)
+            answer, shown_sources = post_process_answer_and_sources(
+                answer,
+                shown_sources,
+                raw_query,
+                primary_intent=primary_intent,
+            )
             cited_entities = extract_cited_entities(shown_sources)
             response_mode = "explanation_summary"
             memory.add(
@@ -1502,6 +1628,13 @@ def _run_query_impl(
                 primary_intent=primary_intent,
                 query_info=query_info,
             )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
             if return_meta:
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
@@ -1561,19 +1694,51 @@ def _run_query_impl(
     llm_backend_started_ms = metrics.total_ms()
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
-    answer = generate_answer(
-        raw_query,
-        reasoning_context,          # broader context for synthesis
-        history_block,
-        allowed_sources=response_sources,  # display_sources — strict citation list
-        extra_context_blocks=extra_context_blocks,
-        provider_config=provider_config,
-        query_info=query_info,
-        evidence_confidence=evidence_confidence,
-        selection_meta=llm_selection,
-    )
+    if stream_handler:
+        stream_handler.on_status("Generating answer...")
+        conf_level = evidence_confidence["level"]
+        if conf_level == "weak":
+            stream_handler.on_delta(WEAK_EVIDENCE_BANNER)
+        elif conf_level == "partial":
+            stream_handler.on_delta(PARTIAL_EVIDENCE_BANNER)
+        
+        answer_chunks = []
+        for chunk in generate_answer_stream(
+            raw_query,
+            reasoning_context,          # broader context for synthesis
+            history_block,
+            allowed_sources=response_sources,  # display_sources — strict citation list
+            extra_context_blocks=extra_context_blocks,
+            provider_config=provider_config,
+            query_info=query_info,
+            evidence_confidence=evidence_confidence,
+            selection_meta=llm_selection,
+        ):
+            if abort_event and abort_event.is_set():
+                break
+            stream_handler.on_delta(chunk)
+            answer_chunks.append(chunk)
+        answer = "".join(answer_chunks)
+    else:
+        answer = generate_answer(
+            raw_query,
+            reasoning_context,          # broader context for synthesis
+            history_block,
+            allowed_sources=response_sources,  # display_sources — strict citation list
+            extra_context_blocks=extra_context_blocks,
+            provider_config=provider_config,
+            query_info=query_info,
+            evidence_confidence=evidence_confidence,
+            selection_meta=llm_selection,
+        )
     token_count = reasoning_token_count
     metrics.add_stage("llm", started)
+    answer, response_sources = post_process_answer_and_sources(
+        answer,
+        response_sources,
+        raw_query,
+        primary_intent=primary_intent,
+    )
     # Prepend evidence-quality banner when confidence is weak or partial.
     conf_level = evidence_confidence["level"]
     if conf_level == "weak":

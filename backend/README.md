@@ -111,7 +111,13 @@ RETRIEVAL_REPO_ROOT=/tmp/trading-bot-e2e \
 ./.venv/bin/uvicorn retrieval.api_service:app --host 0.0.0.0 --port 8000
 ```
 
-Shortcut for local development:
+Shortcut for local development (run from repo root):
+
+```bash
+./scripts/run_local_backend.sh
+```
+
+Or run from the `backend` directory:
 
 ```bash
 ./scripts/run_local_backend.sh
