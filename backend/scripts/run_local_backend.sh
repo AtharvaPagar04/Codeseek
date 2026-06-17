@@ -39,14 +39,21 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${BACKEND_ROOT}/.." && pwd)"
+DEFAULT_SQLITE_PATH="${ROOT_DIR}/data/codeseek.db"
 
 cd "$BACKEND_ROOT"
 
 echo "[local-backend] preparing local backend"
 
-# ---------------------------------------------------------------------------
-# Load .env first so the variables below can be overridden per-project.
-# ---------------------------------------------------------------------------
+# Save existing environment variables to prevent .env from overriding explicit overrides
+SAVED_DB_BACKEND="${CODESEEK_DB_BACKEND:-}"
+SAVED_SQLITE_PATH="${CODESEEK_SQLITE_PATH:-}"
+SAVED_DB_PATH="${CODESEEK_DB_PATH:-}"
+SAVED_DATABASE_URL="${CODESEEK_DATABASE_URL:-}"
+SAVED_DATABASE_URL_LEGACY="${DATABASE_URL:-}"
+
+# Load .env
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -54,29 +61,47 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-# ---------------------------------------------------------------------------
-# Runtime defaults (env takes precedence if already set).
-# ---------------------------------------------------------------------------
+# Restore overrides
+if [[ -n "$SAVED_DB_BACKEND" ]]; then export CODESEEK_DB_BACKEND="$SAVED_DB_BACKEND"; fi
+if [[ -n "$SAVED_SQLITE_PATH" ]]; then export CODESEEK_SQLITE_PATH="$SAVED_SQLITE_PATH"; fi
+if [[ -n "$SAVED_DB_PATH" ]]; then export CODESEEK_DB_PATH="$SAVED_DB_PATH"; fi
+if [[ -n "$SAVED_DATABASE_URL" ]]; then export CODESEEK_DATABASE_URL="$SAVED_DATABASE_URL"; fi
+if [[ -n "$SAVED_DATABASE_URL_LEGACY" ]]; then export DATABASE_URL="$SAVED_DATABASE_URL_LEGACY"; fi
+
+# Determine and normalize backend
+DB_BACKEND="${CODESEEK_DB_BACKEND:-sqlite}"
+DB_BACKEND="$(echo "$DB_BACKEND" | tr '[:upper:]' '[:lower:]')"
+
+if [[ "$DB_BACKEND" == "sqlite" ]]; then
+  export CODESEEK_DB_BACKEND="sqlite"
+  export CODESEEK_SQLITE_PATH="${CODESEEK_SQLITE_PATH:-${CODESEEK_DB_PATH:-$DEFAULT_SQLITE_PATH}}"
+  # If it is relative (e.g. "../data/codeseek.db"), resolve it relative to BACKEND_ROOT
+  if [[ "$CODESEEK_SQLITE_PATH" != /* ]]; then
+    CODESEEK_SQLITE_PATH="$(cd "$BACKEND_ROOT" && mkdir -p "$(dirname "$CODESEEK_SQLITE_PATH")" && cd "$(dirname "$CODESEEK_SQLITE_PATH")" && pwd)/$(basename "$CODESEEK_SQLITE_PATH")"
+  fi
+  export CODESEEK_DB_PATH="$CODESEEK_SQLITE_PATH"
+  mkdir -p "$(dirname "$CODESEEK_SQLITE_PATH")"
+  unset DATABASE_URL
+  unset CODESEEK_DATABASE_URL
+elif [[ "$DB_BACKEND" == "postgres" ]]; then
+  export CODESEEK_DB_BACKEND="postgres"
+  POSTGRES_URL="${CODESEEK_DATABASE_URL:-${DATABASE_URL:-}}"
+  if [[ -z "$POSTGRES_URL" ]]; then
+    echo "[ERROR] CODESEEK_DB_BACKEND=postgres requires CODESEEK_DATABASE_URL or DATABASE_URL to be set." >&2
+    exit 1
+  fi
+  export CODESEEK_DATABASE_URL="$POSTGRES_URL"
+  export DATABASE_URL="$POSTGRES_URL"
+  unset CODESEEK_SQLITE_PATH
+  unset CODESEEK_DB_PATH
+else
+  echo "[ERROR] Unsupported CODESEEK_DB_BACKEND='$DB_BACKEND'. Use sqlite or postgres." >&2
+  exit 1
+fi
+
 export RETRIEVAL_REPO_ROOT="$BACKEND_ROOT"
 export CODESEEK_TENANT_ID="${CODESEEK_TENANT_ID:-local}"
 export CODESEEK_API_KEY="${CODESEEK_API_KEY:-local-dev-key}"
-
-# Prefer Postgres for local dev unless caller overrides to SQLite.
-if [[ "${CODESEEK_FORCE_POSTGRES:-1}" != "1" ]]; then
-  export CODESEEK_DB_BACKEND="sqlite"
-  unset CODESEEK_DATABASE_URL 2>/dev/null || true
-fi
-
-# Real paths used by the backend (must match db.py / session_indexer.py defaults).
-CODESEEK_DB_PATH="${CODESEEK_DB_PATH:-/tmp/codeseek.sqlite3}"
-export CODESEEK_DB_PATH
-
-# Determine and export the database backend.
-DB_BACKEND="${CODESEEK_DB_BACKEND:-sqlite}"
-if [[ -n "${CODESEEK_DATABASE_URL:-}" ]]; then
-  DB_BACKEND="postgres"
-fi
-export CODESEEK_DB_BACKEND="$DB_BACKEND"
 
 CODESEEK_REPO_WORKSPACE="${CODESEEK_REPO_WORKSPACE:-/tmp/codeseek_repo_workspace}"
 export CODESEEK_REPO_WORKSPACE
@@ -94,8 +119,8 @@ export RETRIEVAL_ENABLE_LEXICAL="${RETRIEVAL_ENABLE_LEXICAL:-1}"
 export CHUNK_DESCRIPTION_MAX_CHUNKS="${CHUNK_DESCRIPTION_MAX_CHUNKS:--1}"
 export CHUNK_DESCRIPTION_SLEEP_SECONDS="${CHUNK_DESCRIPTION_SLEEP_SECONDS:-0}"
 export CHUNK_DESCRIPTION_RETRY_ON_RATE_LIMIT="${CHUNK_DESCRIPTION_RETRY_ON_RATE_LIMIT:-0}"
-export CHUNK_DESCRIPTION_MAX_INPUT_CHARS="${CHUNK_DESCRIPTION_MAX_INPUT_CHARS:-1200}"
-export CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS="${CHUNK_DESCRIPTION_MAX_OUTPUT_TOKENS:-60}"
+export CHUNK_DESCRIPTION_MAX_INPUT_CHARS="${CHUNK_DESCRIPTION_MAX_INPUT_CHARS:-1800}"
+export CODESEEK_DESCRIPTION_MAX_TOKENS="${CODESEEK_DESCRIPTION_MAX_TOKENS:-160}"
 export RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS="${RETRIEVAL_LOCAL_LLM_TIMEOUT_SECONDS:-90}"
 
 # ---------------------------------------------------------------------------
@@ -144,11 +169,7 @@ if [[ "$CLEAN_START" == "1" ]]; then
 
 else
   if [[ "$DB_BACKEND" == "sqlite" ]]; then
-    if [[ -f "$CODESEEK_DB_PATH" ]]; then
-      echo "[local-backend] preserving local SQLite db: $CODESEEK_DB_PATH"
-    else
-      echo "[local-backend] local SQLite db not found: $CODESEEK_DB_PATH (will be created on startup)"
-    fi
+    echo "[local-backend] using SQLite db: $CODESEEK_SQLITE_PATH"
   else
     # Mask username:password in CODESEEK_DATABASE_URL for logs
     masked_db_url=$(echo "${CODESEEK_DATABASE_URL:-}" | sed -E 's/([^:]+:\/\/)[^@]+@/\1***:***@/')

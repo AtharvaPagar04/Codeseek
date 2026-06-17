@@ -64,23 +64,16 @@ An active indexing job can be cancelled cooperatively via the **Cancel indexing*
 
 CodeSeek supports both full reindexing and optimized **Incremental Reindexing (V1)** to reduce ingestion time, CPU usage, and LLM API costs.
 
-### How it Works
-1. **Staged Changes Detection:** Uses index preview data to detect added, modified, and deleted files.
-2. **Partial Pipeline Execution:** Runs the RAG ingestion pipeline only for added and modified files.
-3. **Atomic Vector Replacement:** Replacement vectors are generated and upserted before old vectors are deleted to prevent zero-results/downtime windows.
-4. **Pruning of Deleted Files:** Removes old vector IDs and databases records of deleted files.
+For detailed design specifications, transactional safety mechanics, and usage instructions, see the dedicated documentation:
+* [**Index Changed Files (Incremental Reindexing) Documentation**](index_changed_files.md)
 
-### Feature Gate and Activation
-* Gated behind the environment variable `CODESEEK_ENABLE_INCREMENTAL_REINDEX=true`.
-* If disabled on the server, the frontend UI disables the button and displays a clear explanation message.
-* Triggered in the UI via the experimental **Index changed files** button in the Index Preview panel.
-* **Branch Mismatch Safety:** Incremental reindexing is blocked if a branch mismatch (`branch_changed` state) is detected. The "Index changed files" button is disabled and a warning notice is displayed.
+### Key Architectural Concepts
+1. **Delta Change Detection:** Calculates added, modified, and deleted files relative to the last successfully indexed commit.
+2. **Partial Processing:** Ingests and embeds only changed targets, bypassing unchanged codebase contents entirely.
+3. **Transaction Isolation:** DB metadata updates (inserted/deleted file records and chunk mappings) are committed in a single SQLite transaction. Failure triggers automatic rollback, ensuring DB consistency.
+4. **Safety-First Storage Mutations:** Upserts new vectors *before* deleting old ones, guaranteeing zero search downtime during reindexing runs.
+5. **Full Fallback Path:** Users can always execute a full clean rebuild using the primary **Index latest** button.
 
-### Fallback and Failure Recovery
-* **Full Index-Latest Fallback:** Users can always perform a full clean rebuild by clicking the main **Index latest** button.
-* **Branch Switch Recovery:** When active branch changes, users must trigger a full **Index latest** to reindex the repository on the new branch, updating the `indexed_branch` and starting a clean commit baseline.
-* **Metadata Absence Fallback:** If a session lacks previous indexing metadata (e.g., initial indexing or legacy sessions), the backend automatically falls back to full indexing to record the initial state.
-* **Failure Safety:** If an incremental reindexing job fails (e.g., LLM rate limits or network drops), the SQLite transaction is rolled back, the vector store remains completely intact, and the session status is set to `failed`.
 
 ---
 

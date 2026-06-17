@@ -30,7 +30,11 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
-from retrieval.query_intent import classify_query_intent, compute_label_boost
+from retrieval.query_intent import (
+    classify_query_intent,
+    classify_source_intent,
+    compute_label_boost,
+)
 
 _client = None
 _model = None
@@ -1329,30 +1333,18 @@ def _inject_direct_topics_candidates(raw_query: str, primary_intent: str) -> lis
         "login callback",
     }
     
-    target_files = []
-    # Match any of the trigger phrases
-    if any(trigger in q for trigger in freshness_triggers):
-        target_files = [
-            "backend/retrieval/session_indexer.py",
-            "backend/retrieval/api_service.py",
-            "frontend/src/components/SessionView.jsx"
-        ]
-    elif any(trigger in q for trigger in auth_triggers):
-        target_files = [
-            "backend/retrieval/api_service.py",
-            "backend/retrieval/auth_store.py",
-            "backend/retrieval/db.py",
-            "frontend/src/pages/AuthCallback.jsx"
-        ]
-    elif "repo_freshness_report.md" in q or "freshness report" in q:
-        target_files = [
-            "REPO_FRESHNESS_REPORT.md"
-        ]
-        
+    source_intent = classify_source_intent(raw_query)
+    repo_root = Path(get_repo_root()).resolve()
+    target_files = _discover_contract_target_files(repo_root, source_intent, raw_query)
+
+    if not target_files and any(trigger in q for trigger in freshness_triggers):
+        target_files = _discover_contract_target_files(repo_root, "indexing_status", raw_query)
+    elif not target_files and any(trigger in q for trigger in auth_triggers):
+        target_files = _discover_contract_target_files(repo_root, "api_endpoint", raw_query)
+
     if not target_files:
         return []
-        
-    repo_root = Path(get_repo_root()).resolve()
+
     results = []
     
     for rel_path in target_files:
@@ -1376,13 +1368,140 @@ def _inject_direct_topics_candidates(raw_query: str, primary_intent: str) -> lis
                 "content_excerpt": text[:4000],
                 "exact_retrieval_hit": True,
                 "support_kind": "direct_injection",
-                "labels": ["question_use:code-location", "question_use:implementation"],
+                "labels": ["question_use:technical-explanation", "question_use:general-context"],
             }
             results.append((payload, 0.95, "direct_injection"))
         except OSError:
             continue
             
     return results
+
+
+def _discover_contract_target_files(repo_root: Path, source_intent: str, raw_query: str, *, limit: int = 10) -> list[str]:
+    if source_intent in {"general", "code_location", "exact_symbol", "docs_question"}:
+        return []
+    if not repo_root.exists():
+        return []
+
+    scored: list[tuple[int, str]] = []
+    for path in _iter_contract_candidate_files(repo_root):
+        rel_path = path.relative_to(repo_root).as_posix()
+        score = _generic_contract_path_score(rel_path, source_intent, raw_query)
+        if score > 0:
+            scored.append((score, rel_path))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [rel_path for _score, rel_path in scored[:limit]]
+
+
+def _iter_contract_candidate_files(repo_root: Path):
+    skip_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".pytest_cache",
+        "dist",
+        "build",
+        "coverage",
+        ".next",
+        ".nuxt",
+        "target",
+    }
+    allowed_suffixes = {".md", ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".go", ".rs", ".java", ".kt", ".cs", ".php", ".rb"}
+    max_seen = 5000
+    seen = 0
+    for path in repo_root.rglob("*"):
+        if seen >= max_seen:
+            break
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        if not path.is_file():
+            continue
+        seen += 1
+        if path.suffix.lower() not in allowed_suffixes and path.name.lower() not in {"dockerfile", "makefile"}:
+            continue
+        yield path
+
+
+def _generic_contract_path_score(relative_path: str, source_intent: str, raw_query: str) -> int:
+    path = relative_path.lower()
+    name = Path(path).name
+    q = (raw_query or "").lower()
+    score = 0
+
+    is_readme = name.startswith("readme")
+    is_doc = path.startswith("docs/") or "/docs/" in path or path.endswith(".md")
+    is_config = name in {"package.json", "pyproject.toml", "requirements.txt", "go.mod", "cargo.toml", "pom.xml", "build.gradle", "docker-compose.yml", "docker-compose.yaml", "dockerfile"} or "config" in path
+    is_frontend = path.startswith("frontend/") or "/frontend/" in path or "/src/components/" in path or "/src/pages/" in path or "/src/hooks/" in path or path.endswith(("app.jsx", "app.tsx", "app.js", "app.ts"))
+    is_api = any(term in path for term in ("api", "route", "routes", "controller", "controllers", "server", "handler", "handlers", "endpoint", "endpoints")) or name in {"main.py", "app.py", "server.js", "server.ts", "index.js", "index.ts"}
+    is_indexing = any(term in path for term in ("index", "ingest", "parser", "parse", "chunk", "embed", "vector", "store", "storage", "discover", "filter", "crawl"))
+    is_retrieval = any(term in path for term in ("retriev", "search", "rag", "rank", "rerank", "query", "answer", "llm", "source", "citation", "assembler"))
+    is_provider = any(term in path for term in ("provider", "credential", "settings", "config", "llm", "model"))
+    is_failure = any(term in path for term in ("job", "status", "fresh", "recover", "retry", "cancel", "error", "fail", "db", "database", "troubleshoot"))
+    is_auth = any(term in path for term in ("auth", "login", "session", "credential", "token"))
+
+    if path.startswith(("test/", "tests/", "backend/tests/")) or "/tests/" in path or "/scratch/" in path:
+        score -= 1000
+    if "/scripts/" in path and any(term in path for term in ("benchmark", "eval", "report")):
+        score -= 800
+
+    if source_intent == "overview":
+        score += 900 if is_readme else 0
+        score += 650 if is_doc else 0
+        score += 450 if is_config else 0
+        score += 350 if is_api or is_frontend else 0
+        if "architecture" in q or "modules" in q:
+            score += 400 if is_api else 0
+    elif source_intent == "runtime_architecture":
+        score += 750 if is_readme or is_doc else 0
+        score += 650 if is_api else 0
+        score += 550 if is_frontend else 0
+        score += 450 if is_config else 0
+        score += 350 if is_indexing or is_retrieval else 0
+    elif source_intent == "frontend_backend_flow":
+        score += 850 if is_frontend and any(term in path for term in ("api", "client", "hook", "service", "session", "app")) else 0
+        score += 800 if is_api else 0
+        score += 250 if is_doc else 0
+    elif source_intent in {"repository_analysis", "indexing_pipeline", "incremental_indexing"}:
+        score += 900 if is_indexing else 0
+        score += 550 if is_failure and source_intent == "incremental_indexing" else 0
+        score += 350 if is_doc and any(term in path for term in ("index", "ingest", "reindex", "troubleshoot")) else 0
+    elif source_intent in {"retrieval_pipeline", "source_filtering"}:
+        score += 900 if is_retrieval else 0
+        score += 450 if is_api and source_intent == "retrieval_pipeline" else 0
+        score += 400 if is_frontend and source_intent == "source_filtering" and any(term in path for term in ("source", "card", "message", "citation")) else 0
+    elif source_intent == "ui_implementation":
+        score += 1000 if is_frontend else 0
+        score += 450 if any(term in path for term in ("component", "view", "page", "screen", "panel", "button", "card", "message")) else 0
+    elif source_intent == "api_endpoint":
+        score += 1000 if (is_api or is_auth) and not is_frontend else 0
+        score += 300 if is_frontend and ("api" in path or is_auth) else 0
+        score += 700 if name == "db.py" else 0
+        if "authcallback" in path or ("auth" in path and "callback" in path):
+            score += 800
+        if "/scripts/" in path:
+            score -= 400
+        if is_doc or path.endswith((".json", ".yaml", ".yml")):
+            score -= 600
+        if "provider_endpoint" in path or ("llm" in path and "provider" in q):
+            score -= 700
+    elif source_intent == "provider_configuration":
+        score += 850 if is_provider else 0
+        score += 550 if is_frontend and any(term in path for term in ("provider", "settings", "credential", "config")) else 0
+        score += 400 if is_api else 0
+    elif source_intent in {"failure_recovery", "indexing_status"}:
+        score += 850 if is_failure else 0
+        score += 650 if is_indexing else 0
+        score += 350 if is_doc and any(term in path for term in ("troubleshoot", "index", "fresh", "status", "recover")) else 0
+        score += 500 if is_api or "session_indexer" in path else 0
+        if "api_service" in path:
+            score += 800
+
+    return score
 
 
 def _inject_code_topic_routing_candidates(
@@ -1921,6 +2040,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
     from retrieval.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
     label_intent = query_profile.get("intent", "general_context")
+    response_mode = query_profile.get("response_mode", "")
     extracted_entities = query_info.get("entities") if query_info else None
     extracted_symbols = extracted_entities.get("symbols", []) if extracted_entities else []
     is_followup = query_info.get("is_followup", False) if query_info else False
@@ -1969,6 +2089,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
         file_type_boost = 0.0
         relative_path = item.get("relative_path", "")
+        symbol_name = item.get("symbol_name", "")
         filename = Path(relative_path).name.lower()
         clean_filename = filename.rsplit(".", 1)[0]
         if reranker_intent == "FILE" and item.get("chunk_type") == "file":
@@ -2003,11 +2124,56 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         fw_boost = 0.0
         qdrant_boost = 0.0
         config_boost = 0.0
+        response_quality_boost = 0.0
+        response_quality_deboost = 0.0
         if reranker_intent in {"FILE", "SYMBOL"}:
             fw_boost = framework_source_boost(item, raw_query, reranker_intent)
             qdrant_boost = qdrant_upsert_source_boost(item, raw_query, reranker_intent)
         elif reranker_intent == "CONFIG":
             config_boost = config_source_boost(item, raw_query, reranker_intent)
+
+        path_lower = relative_path.lower()
+        q_lower = raw_query.lower()
+        is_ui_query = any(term in q_lower for term in ("frontend", "ui", "component", "dashboard", "message bubble", "source card"))
+        if response_mode == "overview" or reranker_intent == "OVERVIEW":
+            is_readme = path_lower.rsplit("/", 1)[-1].startswith("readme")
+            is_doc = path_lower.startswith("docs/") or "/docs/" in path_lower or path_lower.endswith(".md")
+            is_config = any(part in path_lower for part in ("package.json", "pyproject.toml", "requirements", "docker", "compose", "config", ".env"))
+            is_entrypoint = any(part in path_lower for part in ("api", "route", "routes", "server", "app.", "main.", "index."))
+            if is_readme:
+                response_quality_boost += 1.20
+            if is_doc:
+                response_quality_boost += 1.05
+            if is_entrypoint:
+                response_quality_boost += 0.85
+            if is_config:
+                response_quality_boost += 0.55
+            if symbol_name in {"_has_overview_markers", "_any_term_in_query", "classify_intent", "_llm_classify_intent"}:
+                response_quality_deboost -= 2.25
+            if (path_lower.startswith("frontend/") or "/frontend/" in path_lower) and not is_ui_query:
+                response_quality_deboost -= 0.85
+            if path_lower.startswith(("test/", "tests/", "backend/tests/")) or "/tests/" in path_lower:
+                response_quality_deboost -= 0.75
+
+        if _is_indexing_explanation_query(raw_query):
+            if any(term in path_lower for term in ("index", "ingest", "parser", "parse", "chunk", "embed", "vector", "store", "storage", "discover", "filter", "crawl")):
+                response_quality_boost += 1.35
+            if any(term in path_lower for term in ("job", "worker", "db", "database", "status", "fresh", "retry", "cancel")):
+                response_quality_boost += 1.10
+            if (path_lower.startswith("docs/") or "/docs/" in path_lower or path_lower.endswith(".md")) and any(term in path_lower for term in ("index", "ingest", "reindex", "troubleshoot")):
+                response_quality_boost += 0.85
+            if (path_lower.startswith("frontend/") or "/frontend/" in path_lower) and not is_ui_query:
+                response_quality_deboost -= 2.50
+            if "evaluationpanel" in path_lower:
+                response_quality_deboost -= 3.00
+            if path_lower.startswith(("test/", "tests/", "backend/tests/")) or "/manual_regression" in path_lower:
+                response_quality_deboost -= 0.90
+
+        if _is_retrieval_explanation_query(raw_query):
+            if any(term in path_lower for term in ("retriev", "search", "rag", "rank", "rerank", "query", "answer", "llm", "source", "citation", "assembler")):
+                response_quality_boost += 1.00
+            if (path_lower.startswith("frontend/") or "/frontend/" in path_lower) and not is_ui_query:
+                response_quality_deboost -= 1.25
 
         # Index health targeted boost
         index_health_boost_val = 0.0
@@ -2228,6 +2394,8 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + fw_boost
             + qdrant_boost
             + config_boost
+            + response_quality_boost
+            + response_quality_deboost
             + index_health_boost_val
             + role_boost
             + role_deboost
@@ -2761,7 +2929,15 @@ def _overview_priority(payload: dict) -> int:
     if relative_path == "backend/readme.md":
         score += 38
     if relative_path in {"readme.md", "readme.mdx"}:
-        score += 30
+        score += 46
+    if relative_path in {
+        "docs/product/final_handoff.md",
+        "docs/product/release_readiness_checklist.md",
+        "docs/product/index_latest.md",
+    }:
+        score += 44
+    elif relative_path.startswith("docs/product/"):
+        score += 28
     if relative_path.endswith("retrieval/api_service.py"):
         score += 44
     if relative_path.endswith("retrieval/main.py"):
@@ -2890,6 +3066,10 @@ def _is_overview_intent(primary_intent: str) -> bool:
 
 
 def _is_overview_query(raw_query: str) -> bool:
+    from retrieval.query_intent import is_overview_query
+
+    if is_overview_query(raw_query):
+        return True
     q = raw_query.lower()
     return any(
         phrase in q
@@ -2933,6 +3113,18 @@ def _is_overview_query(raw_query: str) -> bool:
             "stack used",
         )
     )
+
+
+def _is_indexing_explanation_query(raw_query: str) -> bool:
+    from retrieval.query_intent import is_indexing_explanation_query
+
+    return is_indexing_explanation_query(raw_query)
+
+
+def _is_retrieval_explanation_query(raw_query: str) -> bool:
+    from retrieval.query_intent import is_retrieval_explanation_query
+
+    return is_retrieval_explanation_query(raw_query)
 
 
 def _is_architecture_query(raw_query: str) -> bool:

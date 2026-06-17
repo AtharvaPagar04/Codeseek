@@ -197,6 +197,84 @@ export const querySession = async ({ question, session_id, thread_id = '' }) => 
   return sendQuery({ question, session_id, thread_id: thread_id || undefined });
 };
 
+export const querySessionStream = async ({
+  question,
+  session_id,
+  thread_id = '',
+  onStatus,
+  onDelta,
+  onSources,
+  onDone,
+  onError,
+  signal,
+}) => {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/query/stream`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        question,
+        session_id,
+        thread_id: thread_id || undefined,
+      }),
+      signal,
+    });
+
+    if (!res.ok) {
+      const detail = await readErrorDetail(res);
+      const errText = formatApiError({ action: 'Query stream', status: res.status, detail });
+      throw new Error(errText);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const event = JSON.parse(trimmed);
+          if (event.type === 'status' && onStatus) {
+            onStatus(event.message);
+          } else if (event.type === 'delta' && onDelta) {
+            onDelta(event.text);
+          } else if (event.type === 'sources' && onSources) {
+            onSources({
+              sources: event.sources,
+              context_tokens: event.context_tokens,
+              evidence_confidence: event.evidence_confidence,
+            });
+          } else if (event.type === 'error' && onError) {
+            onError(event.message);
+          } else if (event.type === 'done' && onDone) {
+            onDone();
+          }
+        } catch (e) {
+          console.error('Failed to parse NDJSON line:', trimmed, e);
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return;
+    }
+    if (onError) {
+      onError(err.message || 'Stream connection closed unexpectedly');
+    }
+  }
+};
+
 export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local', githubToken = '', enableChunkDescriptions = false }) => {
   const res = await withNetworkError(
     () =>

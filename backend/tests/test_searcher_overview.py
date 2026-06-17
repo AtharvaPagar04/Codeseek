@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 import tempfile
+import os
 from pathlib import Path
 
 from retrieval.searcher import _inject_overview_candidates, _overview_priority, search
@@ -9,11 +10,24 @@ from retrieval.searcher import _inject_overview_candidates, _overview_priority, 
 
 class SearcherOverviewTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
+        if "RETRIEVAL_REPO_ROOT" in os.environ:
+            del os.environ["RETRIEVAL_REPO_ROOT"]
         self._lexical_patcher = patch("retrieval.searcher._lexical_search", return_value=[])
         self._lexical_patcher.start()
+        self._repo_root_patcher = patch(
+            "retrieval.searcher.get_repo_root",
+            side_effect=lambda: os.getenv("RETRIEVAL_REPO_ROOT", "/dummy_nonexistent_path")
+        )
+        self._repo_root_patcher.start()
 
     def tearDown(self) -> None:
         self._lexical_patcher.stop()
+        self._repo_root_patcher.stop()
+        if self.original_repo_root is not None:
+            os.environ["RETRIEVAL_REPO_ROOT"] = self.original_repo_root
+        elif "RETRIEVAL_REPO_ROOT" in os.environ:
+            del os.environ["RETRIEVAL_REPO_ROOT"]
 
     def test_overview_priority_prefers_representative_files(self) -> None:
         repo_summary = {"relative_path": "__repo_summary__.md", "chunk_type": "repo_summary", "file_type": "repo_summary"}

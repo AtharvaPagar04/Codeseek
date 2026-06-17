@@ -31,8 +31,8 @@ const markdownComponents = {
         {children}
       </code>
     ) : (
-      <pre className="bg-surface-3 border border-border rounded-xl p-3 my-3 overflow-x-auto">
-        <code className="font-mono text-text-primary text-xs leading-relaxed" {...props}>
+      <pre className="bg-surface-3 border border-border rounded-lg p-2.5 my-2 overflow-x-auto">
+        <code className="font-mono text-text-primary text-[0.8rem] leading-6" {...props}>
           {children}
         </code>
       </pre>
@@ -51,27 +51,27 @@ const markdownComponents = {
     );
   },
   p({ children }) {
-    return <p className="mb-3 last:mb-0 leading-7 text-[0.96rem] text-text-primary/95">{children}</p>;
+    return <p className="mb-1.5 last:mb-0 leading-[1.55] text-[0.88rem] text-text-primary/95">{children}</p>;
   },
   h1({ children }) {
-    return <h1 className="text-base font-semibold tracking-tight text-text-primary mb-3">{children}</h1>;
+    return <h1 className="text-[0.95rem] font-semibold text-text-primary mb-1.5">{children}</h1>;
   },
   h2({ children }) {
-    return <h2 className="text-sm font-semibold tracking-tight text-text-primary mt-5 mb-2">{children}</h2>;
+    return <h2 className="text-[0.88rem] font-semibold text-text-primary mt-2.5 mb-1">{children}</h2>;
   },
   h3({ children }) {
-    return <h3 className="text-sm font-medium text-text-primary mt-4 mb-2">{children}</h3>;
+    return <h3 className="text-[0.84rem] font-medium text-text-primary mt-2 mb-0.5">{children}</h3>;
   },
   ul({ children }) {
-    return <ul className="mb-3 space-y-2 pl-0">{children}</ul>;
+    return <ul className="mb-1.5 space-y-0.5 pl-0">{children}</ul>;
   },
   ol({ children }) {
-    return <ol className="mb-3 space-y-2 pl-0">{children}</ol>;
+    return <ol className="mb-1.5 space-y-0.5 pl-0">{children}</ol>;
   },
   li({ children, ordered }) {
     return (
-      <li className="flex items-start gap-2.5 text-[0.94rem] leading-7 text-text-primary/92">
-        <span className="mt-[0.72rem] h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
+      <li className="flex items-start gap-1.5 text-[0.87rem] leading-[1.5] text-text-primary/92">
+        <span className="mt-[0.62rem] h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
         <span className="min-w-0">{children}</span>
       </li>
     );
@@ -154,18 +154,7 @@ export default function MessageBubble({ message }) {
   const handleCopyResponse = () => {
     const text = typeof message.content === 'string' ? message.content.trim() : '';
     if (!text) return;
-    const sourceLines = Array.isArray(message.sources)
-      ? message.sources
-          .map((src) => {
-            const file = src.file || src.relative_path || '';
-            const symbol = src.symbol || src.symbol_name || '';
-            const lines = src.lines || formatLines(src.start_line, src.end_line);
-            return `${file}${symbol ? ` :: ${symbol}` : ''}${lines ? ` (lines ${lines})` : ''}`;
-          })
-          .filter(Boolean)
-      : [];
-    const fullText = sourceLines.length > 0 ? `${text}\n\nSources:\n${sourceLines.join('\n')}` : text;
-    navigator.clipboard.writeText(fullText).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -197,8 +186,8 @@ export default function MessageBubble({ message }) {
     );
   }
 
-  // Assistant — loading state
-  if (message.loading) {
+  // Assistant — loading state (only if no content yet)
+  if (message.loading && !message.content) {
     return (
       <div className="flex justify-start animate-fadeIn">
         <div className="max-w-[75%] bg-surface-2 border border-border rounded-2xl px-4 py-3">
@@ -226,18 +215,17 @@ export default function MessageBubble({ message }) {
 
   // Assistant — normal answer
   return (
-    <div className="flex justify-start animate-fadeIn">
+    <div className="flex justify-start animate-fadeIn group">
       <div className="max-w-[80%] min-w-0">
-        <div className="overflow-hidden rounded-2xl border border-border bg-surface-2">
-          <div className="flex items-center justify-between gap-3 border-b border-border bg-surface-3/50 px-4 py-2.5">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="inline-flex h-2 w-2 shrink-0 rounded-full bg-online" />
-              <span className="text-2xs font-mono uppercase tracking-[0.24em] text-text-secondary">
-                Response
-              </span>
+          <div className="px-1 py-1 text-text-primary">
+            <div className="assistant-response max-w-none text-text-primary">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {message.content}
+            </ReactMarkdown>
             </div>
+          </div>
 
-            <div className="flex items-center gap-2 text-2xs text-text-muted shrink-0">
+          <div className="flex items-center gap-2 text-2xs text-text-muted mt-1 pl-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
               <button
                 onClick={handleCopyResponse}
                 className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-3 px-2 py-0.5 font-mono text-text-secondary transition-colors hover:border-text-muted hover:text-text-primary"
@@ -256,19 +244,50 @@ export default function MessageBubble({ message }) {
                 </span>
               )}
               <span>{formatTimestamp(message.timestamp)}</span>
-            </div>
-          </div>
-
-          <div className="px-4 py-3.5 text-text-primary text-sm">
-            <div className="assistant-response prose-sm max-w-none text-text-primary">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-              {message.content}
-            </ReactMarkdown>
-            </div>
           </div>
 
           {(diagnosticsRows.length > 0 || (message.sources && message.sources.length > 0)) && (
-            <div className="border-t border-border bg-surface-3/30 px-4 py-3 space-y-3">
+            <div className="mt-1 border-t border-border/40 pt-2 pl-1 space-y-1.5">
+              <details className="group">
+                <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
+                  <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
+                    <svg
+                      className="h-3 w-3 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={3}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                    Sources
+                  </div>
+                  <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
+                    {(message.sources || []).length}
+                  </div>
+                </summary>
+                <div className="mt-2 space-y-2.5 animate-fadeIn">
+                  {(() => {
+                    const groupedSources = groupSources(message.sources || []);
+                    return Object.entries(groupedSources).map(([role, items]) => {
+                      if (items.length === 0) return null;
+                      return (
+                        <div key={role} className="space-y-1.5">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-text-muted select-none">
+                            {role} ({items.length})
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {items.map((item, idx) => (
+                              <SourceCard key={idx} source={item.original} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </details>
+
               {diagnosticsRows.length > 0 && (
                 <details className="group">
                   <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
@@ -390,49 +409,8 @@ export default function MessageBubble({ message }) {
                   </div>
                 </details>
               )}
-
-              <details className="group">
-                <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
-                  <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
-                    <svg
-                      className="h-3 w-3 transform text-text-muted transition-transform duration-200 group-open:rotate-90"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={3}
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                    Sources
-                  </div>
-                  <div className="rounded-full border border-border bg-surface-3 px-2 py-0.5 text-2xs font-mono text-text-muted">
-                    {(message.sources || []).length}
-                  </div>
-                </summary>
-                <div className="mt-3 space-y-4 animate-fadeIn">
-                  {(() => {
-                    const groupedSources = groupSources(message.sources || []);
-                    return Object.entries(groupedSources).map(([role, items]) => {
-                      if (items.length === 0) return null;
-                      return (
-                        <div key={role} className="space-y-1.5">
-                          <div className="text-[10px] font-mono uppercase tracking-wider text-text-muted select-none">
-                            {role} ({items.length})
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {items.map((item, idx) => (
-                              <SourceCard key={idx} source={item.original} />
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </details>
             </div>
           )}
-        </div>
       </div>
     </div>
   );

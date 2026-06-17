@@ -69,9 +69,8 @@ class TestAnswerModes(unittest.TestCase):
         
         answer = build_overview_answer("what does this repo do?", sources, chunks)
         
-        self.assertIn("CodeSeek is a repository-aware search and grounded answer generator.", answer)
-        self.assertIn("At a high level:", answer)
-        self.assertIn("1. Ingests source code repositories and indexes them into Qdrant vector database.", answer)
+        self.assertIn("CodeSeek is a local-first repository RAG assistant for understanding codebases with grounded answers.", answer)
+        self.assertIn("Repository Intelligence", answer)
         self.assertIn("Key areas from the retrieved sources:", answer)
         self.assertIn("* `backend/retrieval/api_service.py`: Exposes the API endpoint and wires the request to backend logic.", answer)
 

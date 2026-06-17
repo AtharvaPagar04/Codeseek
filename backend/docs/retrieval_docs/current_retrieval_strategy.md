@@ -106,6 +106,7 @@ At a high level, a query currently goes through this sequence:
    - callees for dependency tracing
 7. Context is assembled under a token budget.
 8. Display-time source filtering reduces the visible evidence set.
+   - For broad overview, indexing, retrieval/RAG, and frontend UI-location questions, the same query-family source cleanup is also applied to the broader reasoning source set before LLM context assembly. This keeps source cards and the LLM context aligned instead of letting high-scoring but unrelated helper, eval, benchmark, report, or backend/frontend-mismatched chunks leak into generation.
 9. Response mode is selected:
    - deterministic code answer
    - deterministic architecture answer
@@ -433,9 +434,9 @@ It then favors paths that look like:
 
 Current behavior:
 
-The ranking logic can now surface the synthetic repo-summary chunk and representative repo files. For short overview/architecture/module prompts, the display-source path now also front-loads repo-summary and backend architecture anchors before the display cap is applied, so `__repo_summary__.md`, `backend/README.md`, `backend/retrieval/api_service.py`, and `backend/retrieval/main.py` are less likely to be crowded out by shallow `README.md`-only selections. Backend re-ingestion/eval validation passed for the first repo, but broader multi-repo validation is still needed before treating the rule-based summary as sufficient.
+The ranking logic can now surface the synthetic repo-summary chunk and representative repo files. For short overview/architecture/module prompts, the display-source path now front-loads repo-summary, README/docs, manifest/config files, API/server entrypoints, frontend entrypoints, and other architecture-shaped anchors before the display cap is applied. Backend re-ingestion/eval validation passed for the first repo, but broader multi-repo validation is still needed before treating the rule-based summary as sufficient.
 
-For architecture prompts specifically, search now also prepends exact structural file hits from explicit architecture file hints when those files exist in Qdrant. This reduces dependence on dense README-style matches for anchors such as `backend/retrieval/api_service.py`, `backend/retrieval/main.py`, and `backend/rag_ingestion/main.py`.
+For architecture prompts specifically, search can prepend exact structural file hits from generic architecture file hints when those files exist in Qdrant. This reduces dependence on dense README-style matches for anchors such as route/controller/server entrypoints, frontend app entrypoints, manifests, and deployment/config files.
 
 ### 7.2 Import-backed candidate injection
 
@@ -1134,3 +1135,17 @@ If the system needs materially better answers to questions like:
 - how does this app work end to end
 
 the next step should be better ingestion and retrieval coverage for repo-level evidence, not more prompt complexity.
+
+## 20. Response Quality and Source Relevance V2
+
+The V2 response-quality pass adds an answer/source intent contract on top of the existing scored intent family. `query_processor.py` now records a `source_intent` for broad query families, but it does not inject CodeSeek-specific source paths. `searcher.py` discovers repair candidates dynamically from the indexed repository checkout by scoring generic repo-shape categories such as README/docs, manifests/config, API routes/controllers/servers, frontend components/hooks/API clients, indexing/ingestion modules, retrieval/search/RAG modules, provider/settings files, job/status/database/error-handling files, and troubleshooting docs.
+
+`source_filter.py` applies the same generic contract during display/reasoning source selection. Overview and runtime architecture prompts prefer README/docs, manifests/config, and real entrypoints; indexing prompts prefer files whose paths indicate ingestion, parsing, chunking, embedding, vector storage, jobs, status, or docs about indexing; UI prompts require frontend-shaped sources; API endpoint prompts prioritize backend/server route/controller/handler files while keeping frontend API clients as supporting evidence; failure recovery prompts require failure/status/job/database/troubleshooting sources and demote helper, scratch, test, benchmark, and irrelevant provider endpoint sources.
+
+Answer generation is also stricter. Deterministic and LLM answers pass through source post-processing so the body does not include a manual `Sources:` footer. `answer_validation.py` rejects unsupported speculative recovery language for failure-recovery questions. The final prompt policy explicitly tells the model to synthesize overview/explanation answers in natural paragraphs and not to emit `Function:`, `Signature:`, `Calls:`, `Parameters:`, or implementation-line metadata unless the user asks for code metadata.
+
+Focused validation for this pass:
+
+- `PYTHONPATH=backend backend/.venv/bin/pytest backend/tests/test_query_intent.py backend/tests/test_source_selection_quality.py backend/tests/test_response_quality.py`
+- `cd frontend && node --test src/components/sourceCards.test.js src/components/answerDiagnostics.test.js`
+- `cd frontend && npm run build`

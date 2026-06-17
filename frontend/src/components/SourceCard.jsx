@@ -38,7 +38,7 @@ export default function SourceCard({ source }) {
   };
 
   return (
-    <div className="inline-flex items-center gap-2 bg-surface-3 border border-border/80 rounded-lg px-2.5 py-1 text-2xs font-mono select-none">
+    <div className="inline-flex items-center gap-1.5 bg-surface-3 border border-border/80 rounded-md px-2 py-0.5 text-2xs font-mono select-none">
       {/* Badge Type */}
       <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wide border ${getBadgeStyle(badge)}`}>
         {badge}
@@ -48,14 +48,14 @@ export default function SourceCard({ source }) {
       <button
         onClick={handleCopy}
         title="Copy path and details"
-        className="text-text-primary hover:text-text-secondary transition-colors font-medium truncate max-w-[280px] text-[11px]"
+        className="text-text-primary hover:text-text-secondary transition-colors font-medium truncate max-w-[260px] text-[10.5px]"
       >
         {copied ? '✓ copied' : label || 'unknown source'}
       </button>
 
       {/* Line Ranges */}
       {lines && (
-        <span className="text-text-muted shrink-0 text-[10px] border-l border-border-subtle/50 pl-2">
+        <span className="text-text-muted shrink-0 text-[9.5px] border-l border-border-subtle/50 pl-1.5">
           lines {lines.replace('-', '–')}
         </span>
       )}

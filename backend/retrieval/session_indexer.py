@@ -686,10 +686,15 @@ def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> 
 
 def _index_job(session_id: str) -> None:
     from retrieval.indexing_events import emit_indexing_event
+    from retrieval.db import create_indexing_job, update_indexing_job, mark_indexing_job_cancelled
 
     session = get_session(session_id)
     if not session:
         return
+
+    job = create_indexing_job(session_id, "full", "indexing")
+    job_id = job["id"]
+
     _update_session(session_id, status="indexing", job_started_at=_now(), error="")
     emit_indexing_event(session_id, "queued", "Indexing job started.")
     counters = None
@@ -718,15 +723,43 @@ def _index_job(session_id: str) -> None:
                 embeddings_stored=0,
                 idempotent_reuse=True,
             )
+            from datetime import datetime, timezone
+            update_indexing_job(
+                job_id,
+                status="succeeded",
+                files_indexed=0,
+                chunks_generated=0,
+                embeddings_stored=0,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
             return
 
         emit_indexing_event(session_id, "loader", "Preparing repository for indexing.")
+
+        def _check_cancel():
+            from retrieval.db import is_indexing_job_cancel_requested
+            if is_indexing_job_cancel_requested(job_id):
+                raise CancellationError("Indexing cancelled by user request.")
+
+        _check_cancel()
 
         def _emit(stage, message, level="info", progress=None, total=None, metadata=None):
             emit_indexing_event(
                 session_id, stage, message,
                 level=level, progress=progress, total=total, metadata=metadata,
             )
+            from retrieval.db import update_indexing_job, is_indexing_job_cancel_requested
+            updates = {"current_stage": stage}
+            if stage in ("discovery", "parser") and progress is not None:
+                updates["files_indexed"] = progress
+            elif stage == "chunker" and progress is not None:
+                updates["chunks_generated"] = progress
+            elif stage in ("embedding", "storage") and progress is not None:
+                updates["embeddings_stored"] = progress
+            update_indexing_job(job_id, **updates)
+            # Cooperative cancel check in pipeline progress callbacks
+            if is_indexing_job_cancel_requested(job_id):
+                raise CancellationError("Indexing cancelled by user request.")
 
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
@@ -776,6 +809,30 @@ def _index_job(session_id: str) -> None:
             embeddings_stored=stored,
             idempotent_reuse=False,
         )
+        from datetime import datetime, timezone
+        update_indexing_job(
+            job_id,
+            status="succeeded",
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)),
+            embeddings_stored=stored,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except CancellationError as exc:
+        cancel_msg = str(exc)
+        try:
+            emit_indexing_event(session_id, "cancelled", cancel_msg, level="warning")
+        except Exception:
+            pass
+        _record_indexing_failure(
+            session_id,
+            exc,
+            job_finished_at=_now(),
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else 0,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else 0,
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else 0,
+        )
+        mark_indexing_job_cancelled(job_id, cancel_msg)
     except Exception as exc:
         try:
             emit_indexing_event(
@@ -789,9 +846,16 @@ def _index_job(session_id: str) -> None:
             session_id,
             exc,
             job_finished_at=_now(),
-            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else None,
-            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else None,
-            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else None,
+            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else 0,
+            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else 0,
+            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else 0,
+        )
+        from datetime import datetime, timezone
+        update_indexing_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
 
@@ -1190,7 +1254,10 @@ def index_incremental_version(session_id: str, user_id: str) -> dict:
     if not plan["can_incremental_reindex"]:
         raise ValueError(f"Incremental plan unavailable: {plan['reason']}")
 
-    total_changes = plan["modified_files_count"] + plan["added_files_count"] + plan["deleted_files_count"]
+    modified_count = plan.get("modified_files_count", len(plan.get("modified_files", [])))
+    added_count = plan.get("added_files_count", len(plan.get("added_files", [])))
+    deleted_count = plan.get("deleted_files_count", len(plan.get("deleted_files", [])))
+    total_changes = modified_count + added_count + deleted_count
 
     if total_changes == 0:
         return {
@@ -1232,7 +1299,7 @@ def index_incremental_version(session_id: str, user_id: str) -> dict:
         "status": "indexing",
         "freshness_status": "indexing",
         "indexing_mode": "incremental",
-        "estimated_files_to_update": plan["estimated_files_to_update"],
+        "estimated_files_to_update": plan.get("estimated_files_to_update", modified_count + added_count),
         "message": "Incremental indexing started."
     }
 
@@ -1652,6 +1719,7 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
     if session.get("user_id", "") != user_id:
         raise PermissionError("Access denied")
 
+    incremental_enabled = os.environ.get("CODESEEK_ENABLE_INCREMENTAL_REINDEX", "false").lower() == "true"
     repo_root = session.get("repo_root", "")
     has_git = bool(repo_root and Path(repo_root).exists() and (Path(repo_root) / ".git").exists())
 
@@ -1674,6 +1742,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": False,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "unknown",
+            "branch_changed": False,
             "message": "Repository path is missing or not a Git repository. Preview is unavailable."
         }
 
@@ -1708,6 +1780,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": False,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "unknown",
+            "branch_changed": False,
             "message": f"Failed to read local Git status: {str(e)}"
         }
 
@@ -1761,6 +1837,10 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             "estimated_files_to_update": 0,
             "estimated_chunks_to_update": None,
             "can_index_latest": True,
+            "can_incremental_reindex": False,
+            "incremental_enabled": incremental_enabled,
+            "incremental_block_reason": "feature_disabled" if not incremental_enabled else "metadata_unavailable",
+            "branch_changed": False,
             "message": "This session has not been indexed yet. Reindex preview is unavailable."
         }
 
@@ -1873,6 +1953,33 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
 
     estimated_files_to_update = len(changed_files) + len(added_files) + len(deleted_files)
 
+    from retrieval.db import list_session_files
+    db_files = list_session_files(session_id, include_deleted=True)
+    has_db_files = bool(db_files)
+
+    # Determine can_incremental_reindex and block reasons
+    if not incremental_enabled:
+        can_incremental_reindex = False
+        incremental_block_reason = "feature_disabled"
+    elif session_status == "indexing":
+        can_incremental_reindex = False
+        incremental_block_reason = "active_indexing"
+    elif session_status == "failed":
+        can_incremental_reindex = False
+        incremental_block_reason = "session_failed"
+    elif not indexed_commit_sha or not has_db_files:
+        can_incremental_reindex = False
+        incremental_block_reason = "metadata_unavailable"
+    elif branch_changed:
+        can_incremental_reindex = False
+        incremental_block_reason = "branch_changed"
+    elif estimated_files_to_update == 0:
+        can_incremental_reindex = False
+        incremental_block_reason = "no_changes"
+    else:
+        can_incremental_reindex = True
+        incremental_block_reason = ""
+
     return {
         "session_id": session_id,
         "repo_root": repo_root,
@@ -1892,7 +1999,9 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
         "estimated_files_to_update": estimated_files_to_update,
         "estimated_chunks_to_update": None,
         "can_index_latest": can_index_latest,
-        "can_incremental_reindex": False if branch_changed else (freshness_status in ("dirty_worktree", "stale_commit")),
+        "can_incremental_reindex": can_incremental_reindex,
+        "incremental_enabled": incremental_enabled,
+        "incremental_block_reason": incremental_block_reason,
         "message": message,
     }
 

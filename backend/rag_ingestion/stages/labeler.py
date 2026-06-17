@@ -133,10 +133,64 @@ def filter_repo_specific_labels(candidates: dict[str, float], is_codeseek: bool)
     }
 
 
+def _is_doc_path(path: str) -> bool:
+    """Return True if the path clearly identifies a documentation file (not source code)."""
+    return (
+        path.startswith("docs/")
+        or path.startswith("backend/docs/")
+        or "/docs/" in path
+        or path.endswith(".md")
+    )
+
+
+def _is_product_doc_path(path: str) -> bool:
+    """Return True if the path is a docs/product or backend/docs/product documentation file."""
+    return (
+        path.startswith("docs/product/")
+        or path.startswith("backend/docs/product/")
+        or "/docs/product/" in path
+    )
+
+
 def label_chunk(chunk: Chunk, *, repo_name: str | None = None, repo_root: str | None = None) -> Chunk:
     """Label a single chunk of code/text."""
     candidates: dict[str, float] = {}
     path = (chunk.relative_path or "").lower()
+
+    # a-pre. Documentation identity labels — applied first so doc chunks win over topical labels.
+    #        README is handled below (file_type = 'readme'), so only generic docs are covered here.
+    is_readme = chunk.file_type == "readme" or "readme" in path
+    is_doc = _is_doc_path(path) and not is_readme
+    is_product_doc = _is_product_doc_path(path)
+
+    if is_product_doc:
+        add_label(candidates, "artifact:documentation", STRONG_MATCH)
+        add_label(candidates, "artifact:product-doc", STRONG_MATCH)
+        add_label(candidates, "domain:documentation", STRONG_MATCH)
+        add_label(candidates, "domain:product", STRONG_MATCH)
+        add_label(candidates, "question_use:general-context", STRONG_MATCH)
+        add_label(candidates, "question_use:repo-overview", STRONG_MATCH)
+        # Architecture/design/handoff docs also get architecture use-case
+        doc_title = path.rsplit("/", 1)[-1]
+        if any(kw in doc_title for kw in (
+            "architecture", "design", "handoff", "readiness", "overview", "final"
+        )):
+            add_label(candidates, "question_use:architecture", STRONG_MATCH)
+        # Setup/install docs get setup use-case
+        if any(kw in doc_title for kw in ("setup", "install", "env", "run", "local", "deploy")):
+            add_label(candidates, "question_use:setup", MEDIUM_MATCH)
+    elif is_doc:
+        add_label(candidates, "artifact:documentation", STRONG_MATCH)
+        add_label(candidates, "domain:documentation", STRONG_MATCH)
+        add_label(candidates, "question_use:general-context", STRONG_MATCH)
+        # Architecture/design docs also get architecture use-case
+        doc_title = path.rsplit("/", 1)[-1]
+        if any(kw in doc_title for kw in (
+            "architecture", "design", "handoff", "readiness", "overview"
+        )):
+            add_label(candidates, "question_use:architecture", MEDIUM_MATCH)
+        if any(kw in doc_title for kw in ("setup", "install", "env", "run", "local", "deploy")):
+            add_label(candidates, "question_use:setup", MEDIUM_MATCH)
 
     # b. Artifact + code_role from chunk_type (STRONG_MATCH)
     if chunk.chunk_type == "function":
@@ -154,6 +208,10 @@ def label_chunk(chunk: Chunk, *, repo_name: str | None = None, repo_root: str | 
     # c. Artifact from file_type (STRONG_MATCH)
     if chunk.file_type == "readme" or "readme" in path:
         add_label(candidates, "artifact:readme", STRONG_MATCH)
+        add_label(candidates, "artifact:documentation", STRONG_MATCH)
+        add_label(candidates, "domain:documentation", STRONG_MATCH)
+        add_label(candidates, "question_use:repo-overview", STRONG_MATCH)
+        add_label(candidates, "question_use:general-context", STRONG_MATCH)
     elif chunk.file_type == "package_json" or "package.json" in path:
         add_label(candidates, "artifact:package-manifest", STRONG_MATCH)
         add_label(candidates, "capability:dependency-management", STRONG_MATCH)
@@ -238,8 +296,15 @@ def label_chunk(chunk: Chunk, *, repo_name: str | None = None, repo_root: str | 
         add_label(candidates, "question_use:repo-overview", STRONG_MATCH)
         add_label(candidates, "question_use:general-context", STRONG_MATCH)
     elif chunk.file_type == "readme" or "readme" in path:
+        # Already handled in a-pre and c; just ensure question_use labels
         add_label(candidates, "question_use:repo-overview", STRONG_MATCH)
         add_label(candidates, "question_use:setup", STRONG_MATCH)
+    elif is_product_doc or is_doc:
+        # Docs already got their question_use labels in a-pre; do NOT assign code labels here.
+        # Allow implementation/technical-explanation only when the filename strongly signals it.
+        doc_title = path.rsplit("/", 1)[-1]
+        if any(kw in doc_title for kw in ("implementation", "api", "spec", "guide", "how")):
+            add_label(candidates, "question_use:technical-explanation", MEDIUM_MATCH)
     elif chunk.file_type == "package_json" or "package.json" in path:
         add_label(candidates, "question_use:dependency-question", STRONG_MATCH)
         add_label(candidates, "question_use:setup", STRONG_MATCH)
@@ -278,7 +343,15 @@ def label_chunk(chunk: Chunk, *, repo_name: str | None = None, repo_root: str | 
             add_label(candidates, "question_use:repo-overview", fallback_val)
         elif chunk.file_type == "readme" or "readme" in path:
             add_label(candidates, "artifact:readme", fallback_val)
+            add_label(candidates, "artifact:documentation", fallback_val)
             add_label(candidates, "question_use:repo-overview", fallback_val)
+        elif is_product_doc:
+            add_label(candidates, "artifact:product-doc", fallback_val)
+            add_label(candidates, "artifact:documentation", fallback_val)
+            add_label(candidates, "question_use:general-context", fallback_val)
+        elif is_doc:
+            add_label(candidates, "artifact:documentation", fallback_val)
+            add_label(candidates, "question_use:general-context", fallback_val)
         elif chunk.file_type == "package_json" or "package.json" in path:
             add_label(candidates, "artifact:package-manifest", fallback_val)
             add_label(candidates, "question_use:dependency-question", fallback_val)

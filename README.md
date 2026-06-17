@@ -478,7 +478,10 @@ docker compose up -d qdrant          # vector store
 docker compose up -d postgres qdrant # + Postgres (optional for local)
 
 # 4. Run backend
+# From repository root:
 ./scripts/run_local_backend.sh
+# Or from backend directory:
+# ./scripts/run_local_backend.sh
 
 # 5. Run frontend
 cd ../frontend

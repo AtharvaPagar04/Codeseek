@@ -344,6 +344,38 @@ test('fetchLatestIndexingJob invokes the correct endpoint and includes credentia
 });
 
 
+test('fetchLatestIndexingJob handles response with latest_job null', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = {
+    getItem: (key) => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  const mockResponse = {
+    session_id: 'session-abc',
+    latest_job: null,
+  };
+
+  globalThis.fetch = async (url, options) => {
+    return {
+      ok: true,
+      json: async () => mockResponse,
+    };
+  };
+
+  try {
+    const { fetchLatestIndexingJob } = await import('./api.js');
+    const result = await fetchLatestIndexingJob('session-abc');
+    assert.equal(result.session_id, 'session-abc');
+    assert.equal(result.latest_job, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});
+
+
 test('cancelLatestIndexingJob calls correct endpoint with POST and includes credentials', async () => {
   const originalFetch = globalThis.fetch;
   let calledUrl = null;
@@ -609,3 +641,77 @@ test('deleteSessionApi propagates 409 active-indexing error', async () => {
     delete globalThis.localStorage;
   }
 });
+
+test('querySessionStream parses NDJSON chunks and invokes callbacks', async () => {
+  const originalFetch = globalThis.fetch;
+  let calledUrl = null;
+  let calledOptions = null;
+
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  const chunks = [
+    '{"type": "status", "message": "Retrieving..."}\n',
+    '{"type": "delta", "text": "Hello"}\n',
+    '{"type": "delta", "text": " world"}\n',
+    '{"type": "sources", "sources": [], "context_tokens": 123, "evidence_confidence": null}\n',
+    '{"type": "done"}\n'
+  ];
+
+  let chunkIdx = 0;
+  const mockReader = {
+    read: async () => {
+      if (chunkIdx < chunks.length) {
+        const encoder = new TextEncoder();
+        const value = encoder.encode(chunks[chunkIdx++]);
+        return { value, done: false };
+      }
+      return { value: undefined, done: true };
+    }
+  };
+
+  const mockBody = {
+    getReader: () => mockReader
+  };
+
+  globalThis.fetch = async (url, options) => {
+    calledUrl = url;
+    calledOptions = options;
+    return {
+      ok: true,
+      body: mockBody
+    };
+  };
+
+  try {
+    const { querySessionStream } = await import('./api.js');
+    const statuses = [];
+    const deltas = [];
+    let receivedSources = null;
+    let doneCalled = false;
+
+    await querySessionStream({
+      question: 'Hello?',
+      session_id: 'session-123',
+      onStatus: (msg) => statuses.push(msg),
+      onDelta: (text) => deltas.push(text),
+      onSources: (data) => { receivedSources = data; },
+      onDone: () => { doneCalled = true; }
+    });
+
+    assert.deepEqual(statuses, ['Retrieving...']);
+    assert.deepEqual(deltas, ['Hello', ' world']);
+    assert.ok(receivedSources);
+    assert.equal(receivedSources.context_tokens, 123);
+    assert.equal(doneCalled, true);
+    assert.match(calledUrl, /\/api\/v1\/query\/stream/);
+    assert.equal(calledOptions.method, 'POST');
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});
+

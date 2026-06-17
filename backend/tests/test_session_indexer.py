@@ -139,10 +139,13 @@ def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
     assert retried["status"] == "indexing"
     assert queued == [session["id"], session["id"]]
 
-    assert session_indexer.delete_session(session["id"]) is True
+    res = session_indexer.delete_session(session["id"])
+    assert res["deleted"] is True
     assert session_indexer.get_session(session["id"]) is None
     assert deleted_collections == [session["collection"]]
-    assert session_indexer.delete_session(session["id"]) is False
+    import pytest
+    with pytest.raises(ValueError):
+        session_indexer.delete_session(session["id"])
 
 
 def test_create_session_keeps_github_token_in_memory_only(monkeypatch, tmp_path: Path):

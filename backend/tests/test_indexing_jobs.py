@@ -329,3 +329,62 @@ class IndexingJobsTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["jobs"], [])
 
+    def test_get_latest_job_endpoint_no_job(self):
+        """GET /indexing-job/latest returns 200 with latest_job null if no job exists."""
+        import unittest.mock as mock
+        from fastapi.testclient import TestClient
+        from retrieval import api_service
+
+        with mock.patch(
+            "retrieval.api_service._require_auth_user",
+            return_value={"id": self.user_id, "email": "u@test.com"},
+        ):
+            client = TestClient(api_service.app, raise_server_exceptions=True)
+            resp = client.get(f"/api/v1/sessions/{self.session_a['id']}/indexing-job/latest")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["session_id"], self.session_a["id"])
+        self.assertIsNone(body["latest_job"])
+
+    def test_get_latest_job_endpoint_existing_job(self):
+        """GET /indexing-job/latest returns job details if a job exists."""
+        import unittest.mock as mock
+        from fastapi.testclient import TestClient
+        from retrieval import api_service
+
+        create_indexing_job(self.session_a["id"], "full", "indexing")
+
+        with mock.patch(
+            "retrieval.api_service._require_auth_user",
+            return_value={"id": self.user_id, "email": "u@test.com"},
+        ):
+            client = TestClient(api_service.app, raise_server_exceptions=True)
+            resp = client.get(f"/api/v1/sessions/{self.session_a['id']}/indexing-job/latest")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["session_id"], self.session_a["id"])
+        self.assertIsNotNone(body["latest_job"])
+        self.assertEqual(body["latest_job"]["indexing_mode"], "full")
+        self.assertEqual(body["latest_job"]["status"], "indexing")
+        # Ensure flat attributes compatibility works
+        self.assertEqual(body["indexing_mode"], "full")
+        self.assertEqual(body["status"], "indexing")
+
+    def test_get_latest_job_endpoint_missing_session(self):
+        """GET /indexing-job/latest returns 404 for a missing session."""
+        import unittest.mock as mock
+        from fastapi.testclient import TestClient
+        from retrieval import api_service
+
+        with mock.patch(
+            "retrieval.api_service._require_auth_user",
+            return_value={"id": self.user_id, "email": "u@test.com"},
+        ):
+            client = TestClient(api_service.app, raise_server_exceptions=False)
+            resp = client.get("/api/v1/sessions/doesnotexist/indexing-job/latest")
+
+        self.assertEqual(resp.status_code, 404)
+
+

@@ -182,3 +182,61 @@ def test_incremental_reindex_api_stale_indexing_recovery(monkeypatch):
         data = response.json()
         assert data["status"] == "indexing"
         assert "started" in data["message"].lower()
+
+
+def test_incremental_reindex_api_keyerror_fix(monkeypatch):
+    from retrieval.db import db_cursor
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            "INSERT OR REPLACE INTO repo_sessions (id, repo_full_name, tenant_id, user_id, status, collection, repo_root, repo_url, created_at, updated_at) "
+            "VALUES ('session-123', 'octocat/repo-a', 'local', 'user-1', 'ready', 'col', '/tmp', 'http://github.com/octocat/repo-a.git', '2026-06-12T00:00:00Z', '2026-06-12T00:00:00Z')"
+        )
+    monkeypatch.setenv("CODESEEK_ENABLE_INCREMENTAL_REINDEX", "true")
+    client = TestClient(app)
+
+    # 1. Zero change plan with lists but no *_files_count keys
+    mock_plan_zero = {
+        "can_incremental_reindex": True,
+        "reason": "",
+        "modified_files": [],
+        "added_files": [],
+        "deleted_files": []
+    }
+
+    with patch("retrieval.api_service._require_auth_user", return_value={"id": "user-1"}), \
+         patch("retrieval.api_service.get_session", return_value={"id": "session-123", "status": "ready", "user_id": "user-1"}), \
+         patch("retrieval.session_indexer.get_session", return_value={"id": "session-123", "status": "ready", "user_id": "user-1"}), \
+         patch("retrieval.api_service._session_visible_to_user", return_value=True), \
+         patch("retrieval.session_indexer.build_incremental_reindex_plan", return_value=mock_plan_zero):
+        
+        response = client.post("/api/v1/sessions/session-123/index-incremental")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ready"
+        assert "no indexing required" in data["message"].lower()
+
+    # 2. Changed file plan with lists but no *_files_count keys starts background job
+    mock_plan_changed = {
+        "can_incremental_reindex": True,
+        "reason": "",
+        "modified_files": ["a.py", "b.py"],
+        "added_files": ["c.py"],
+        "deleted_files": []
+    }
+
+    with patch("retrieval.api_service._require_auth_user", return_value={"id": "user-1"}), \
+         patch("retrieval.api_service.get_session", return_value={"id": "session-123", "status": "ready", "user_id": "user-1"}), \
+         patch("retrieval.session_indexer.get_session", return_value={"id": "session-123", "status": "ready", "user_id": "user-1"}), \
+         patch("retrieval.api_service._session_visible_to_user", return_value=True), \
+         patch("retrieval.session_indexer.build_incremental_reindex_plan", return_value=mock_plan_changed), \
+         patch("retrieval.session_indexer._check_and_clean_stale_indexing_sessions"), \
+         patch("retrieval.session_indexer._update_session"), \
+         patch("retrieval.session_indexer.threading.Thread"):
+        
+        response = client.post("/api/v1/sessions/session-123/index-incremental")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "indexing"
+        assert data["estimated_files_to_update"] == 3
+        assert "Incremental indexing started" in data["message"]
+

@@ -965,6 +965,204 @@ def query_v1(
     return _query_impl(body, request, authorization, x_request_id, session_token)
 
 
+@v1.post("/query/stream")
+async def query_stream_v1(
+    body: QueryRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_request_id: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+):
+    import queue
+    import asyncio
+    import json
+    
+    request_id = x_request_id or new_request_id()
+    started = time.perf_counter()
+    path = "/api/v1/query/stream"
+    log_event("api.query_stream.start", request_id, path="/query/stream")
+    
+    # Authenticate: EITHER cookie OR API Key
+    auth_user = None
+    token = None
+    client_ip = request.client.host if request.client else "unknown"
+
+    if session_token:
+        auth_user = _current_auth_user(session_token)
+        if auth_user:
+            token = f"session:{auth_user['id']}"
+
+    if not auth_user:
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Please sign in again.")
+        
+        expected = os.getenv(API_KEY_ENV, "").strip()
+        if not expected:
+            raise HTTPException(
+                status_code=500, detail=f"{API_KEY_ENV} is not configured on server"
+            )
+        try:
+            token = _auth_key(authorization)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        if token != expected:
+            raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
+            
+        auth_user = get_or_create_system_user()
+
+    _enforce_rate_limit(f"{token}:{client_ip}")
+    query_text = (body.query or body.question or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
+    previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
+    previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
+    try:
+        provider_config = get_active_provider_credential(auth_user["id"])
+    except ValueError as e:
+        if "authentication failed" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="Your active provider API key cannot be decrypted. This happens when the server encryption key changes. Please delete and re-add your provider API key, or switch/provide a valid encryption key in settings.",
+            )
+        raise
+    if not provider_config:
+        raise HTTPException(
+            status_code=400,
+            detail="No active provider credential configured for this user",
+        )
+    
+    # Check for client-side model override header
+    model_override = request.headers.get("x-app-model-override", "").strip()
+    if model_override:
+        provider_config["model"] = model_override
+    session = _resolve_query_session(body.session_id, auth_user)
+    thread = None
+    if body.thread_id:
+        thread = get_thread(body.thread_id.strip())
+        if not thread or not _thread_visible_to_user(thread, auth_user):
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if session and thread.get("repo_session_id") != session["id"]:
+            raise HTTPException(status_code=409, detail="Thread does not belong to the selected session")
+    elif session:
+        thread = ensure_default_thread(session["id"], user_id=auth_user["id"] if auth_user else "")
+    if session:
+        os.environ["RETRIEVAL_REPO_ROOT"] = session["repo_root"]
+        os.environ["QDRANT_COLLECTION_NAME"] = session["collection"]
+        log_event(
+            "api.query_stream.session_bound",
+            request_id,
+            session_id=session.get("id"),
+            repo_root=session.get("repo_root"),
+            collection=session.get("collection"),
+        )
+    try:
+        validate_collection_binding(get_collection_name(), get_repo_root())
+    except ValueError as exc:
+        total_ms = int((time.perf_counter() - started) * 1000)
+        observe_api_request(path, "409", total_ms)
+        RETRIEVAL_ERRORS_TOTAL.labels(error_type="isolation").inc()
+        log_event("api.query_stream.error", request_id, error=str(exc), status_code=409)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if thread and session:
+        query_memory = ThreadConversationMemory(thread["id"], session["id"], max_turns=5)
+    elif session:
+        query_memory = SessionConversationMemory(session["id"], max_turns=5)
+    else:
+        query_memory = memory
+
+    event_queue = queue.Queue()
+    abort_event = threading.Event()
+
+    class QueueStreamHandler:
+        def on_status(self, message: str):
+            event_queue.put({"type": "status", "message": message})
+        def on_delta(self, text: str):
+            event_queue.put({"type": "delta", "text": text})
+
+    def worker_thread():
+        try:
+            with _query_lock:
+                answer, sources, token_count, meta = run_query(
+                    query_text,
+                    query_memory,
+                    request_id=request_id,
+                    return_meta=True,
+                    provider_config=provider_config,
+                    stream_handler=QueueStreamHandler(),
+                    abort_event=abort_event,
+                )
+            
+            # Send the final sources and metadata
+            event_queue.put({
+                "type": "sources",
+                "sources": sources,
+                "context_tokens": token_count,
+                "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
+            })
+
+            # Save the message to DB/history if session exists and not aborted
+            if not abort_event.is_set() and session:
+                if thread:
+                    append_thread_message(thread["id"], session["id"], "user", query_text)
+                    append_thread_message(
+                        thread["id"],
+                        session["id"],
+                        "assistant",
+                        answer,
+                        sources=sources,
+                        context_tokens=token_count,
+                    )
+                else:
+                    append_message(session["id"], "user", query_text)
+                    append_message(
+                        session["id"],
+                        "assistant",
+                        answer,
+                        sources=sources,
+                        context_tokens=token_count,
+                    )
+            
+            event_queue.put({"type": "done"})
+        except Exception as exc:
+            event_queue.put({"type": "error", "message": str(exc)})
+
+    thread_obj = threading.Thread(target=worker_thread)
+    thread_obj.start()
+
+    async def event_generator():
+        try:
+            while True:
+                # Check for client disconnect
+                if await request.is_disconnected():
+                    abort_event.set()
+                    break
+
+                try:
+                    event = event_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                if event["type"] == "error":
+                    yield json.dumps(event) + "\n"
+                    break
+
+                yield json.dumps(event) + "\n"
+
+                if event["type"] == "done":
+                    break
+        finally:
+            # Clean up and restore env
+            abort_event.set()
+            if session:
+                os.environ["RETRIEVAL_REPO_ROOT"] = previous_repo
+                os.environ["QDRANT_COLLECTION_NAME"] = previous_collection
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
 @v1.get("/provider-credentials")
 def list_provider_credentials_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
@@ -1367,10 +1565,12 @@ def get_latest_indexing_job_v1(
     from retrieval.db import get_latest_indexing_job
     job = get_latest_indexing_job(session_id)
     if not job:
-        raise HTTPException(status_code=404, detail="No indexing job found for this session")
+        return {
+            "session_id": session_id,
+            "latest_job": None,
+        }
 
-    return {
-        "session_id": job["session_id"],
+    job_data = {
         "job_id": job["id"],
         "indexing_mode": job["indexing_mode"],
         "status": job["status"],
@@ -1382,6 +1582,11 @@ def get_latest_indexing_job_v1(
         "updated_at": job["updated_at"],
         "completed_at": job["completed_at"],
         "error": job["error"],
+    }
+    return {
+        "session_id": job["session_id"],
+        "latest_job": job_data,
+        **job_data
     }
 
 

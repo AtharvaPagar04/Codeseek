@@ -14,7 +14,10 @@ class DbTests(unittest.TestCase):
     def test_backend_uses_postgres_when_database_url_is_set(self) -> None:
         with patch.dict(
             db.os.environ,
-            {"CODESEEK_DATABASE_URL": "postgresql://codeseek:codeseek@localhost:5432/codeseek"},
+            {
+                "CODESEEK_DATABASE_URL": "postgresql://codeseek:codeseek@localhost:5432/codeseek",
+                "CODESEEK_DB_BACKEND": "",
+            },
             clear=False,
         ):
             self.assertEqual(db.get_db_backend(), "postgres")

@@ -1,11 +1,20 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { querySession } from '../utils/api';
+import { querySessionStream } from '../utils/api';
 
 export function useChat({ appendMessage }) {
   const [isLoading, setIsLoading] = useState(false);
-  // Track the current session so we can pair the placeholder message correctly
   const pendingSessionId = useRef(null);
+  const abortControllerRef = useRef(null);
+
+  const cancelActiveQuery = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    pendingSessionId.current = null;
+  }, []);
 
   const sendMessage = useCallback(
     async (session, questionText) => {
@@ -47,30 +56,139 @@ export function useChat({ appendMessage }) {
       };
       appendMessage(session.id, activeThreadId, loadingMessage);
 
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      // Drip buffer: accumulate incoming deltas and release them gradually
+      let dripBuffer = '';
+      let dripTimer = null;
+      const DRIP_INTERVAL_MS = 18;
+      const DRIP_CHARS = 4;
+
+      const flushDrip = () => {
+        if (dripBuffer.length === 0) {
+          dripTimer = null;
+          return;
+        }
+        const chunk = dripBuffer.slice(0, DRIP_CHARS);
+        dripBuffer = dripBuffer.slice(DRIP_CHARS);
+        accumulatedAnswer += chunk;
+        appendMessage(session.id, activeThreadId, {
+          __replaceId: loadingId,
+          id: loadingId,
+          role: 'assistant',
+          content: accumulatedAnswer,
+          sources: answerSources,
+          diagnostics: answerDiagnostics,
+          context_tokens: contextTokens,
+          timestamp: new Date().toISOString(),
+          loading: true,
+          error: false,
+        });
+        dripTimer = setTimeout(flushDrip, DRIP_INTERVAL_MS);
+      };
+
+      const scheduleDrip = (text) => {
+        dripBuffer += text;
+        if (!dripTimer) {
+          dripTimer = setTimeout(flushDrip, DRIP_INTERVAL_MS);
+        }
+      };
+
+      // Flush remaining buffer when stream ends
+      const flushRemainingDrip = () => {
+        if (dripTimer) {
+          clearTimeout(dripTimer);
+          dripTimer = null;
+        }
+        if (dripBuffer.length > 0) {
+          accumulatedAnswer += dripBuffer;
+          dripBuffer = '';
+        }
+      };
+
+      let accumulatedAnswer = '';
+      let answerSources = [];
+      let answerDiagnostics = null;
+      let contextTokens = null;
+
       try {
-        const data = await querySession({
+        await querySessionStream({
           question: trimmed,
           session_id: session.id,
           thread_id: activeThreadId,
+          signal: controller.signal,
+          onStatus: (status) => {
+            console.log('[useChat] Status:', status);
+          },
+          onDelta: (text) => {
+            scheduleDrip(text);
+          },
+          onSources: (data) => {
+            answerSources = data.sources || [];
+            answerDiagnostics = data.evidence_confidence || null;
+            contextTokens = data.context_tokens;
+            
+            appendMessage(session.id, activeThreadId, {
+              __replaceId: loadingId,
+              id: loadingId,
+              role: 'assistant',
+              content: accumulatedAnswer,
+              sources: answerSources,
+              diagnostics: answerDiagnostics,
+              context_tokens: contextTokens,
+              timestamp: new Date().toISOString(),
+              loading: true,
+              error: false,
+            });
+          },
+          onDone: () => {
+            console.log('[useChat] Stream done.');
+          },
+          onError: (errMsg) => {
+            throw new Error(errMsg);
+          },
         });
 
+        // Flush any remaining buffered text
+        flushRemainingDrip();
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
         const assistantMessage = {
-          id: loadingId, // reuse same id so we can replace in UI
+          id: loadingId,
           role: 'assistant',
-          content: data.answer || '(no answer returned)',
-          sources: data.sources || [],
-          diagnostics: data.diagnostics || null,
-          context_tokens: data.context_tokens,
+          content: accumulatedAnswer || '(no answer returned)',
+          sources: answerSources,
+          diagnostics: answerDiagnostics,
+          context_tokens: contextTokens,
           timestamp: new Date().toISOString(),
           loading: false,
           error: false,
         };
-
-        // Replace loading placeholder — use a dedicated append that patches by id
         appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...assistantMessage });
-      } catch (err) {
-        console.error('[useChat] Query failed:', err);
 
+      } catch (err) {
+        flushRemainingDrip();
+        if (controller.signal.aborted) {
+          const assistantMessage = {
+            id: loadingId,
+            role: 'assistant',
+            content: accumulatedAnswer || 'Generation stopped.',
+            sources: answerSources,
+            diagnostics: answerDiagnostics,
+            context_tokens: contextTokens,
+            timestamp: new Date().toISOString(),
+            loading: false,
+            error: false,
+          };
+          appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...assistantMessage });
+          return;
+        }
+
+        console.error('[useChat] Query failed:', err);
         const errorMessage = {
           id: loadingId,
           role: 'assistant',
@@ -80,15 +198,17 @@ export function useChat({ appendMessage }) {
           loading: false,
           error: true,
         };
-
         appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...errorMessage });
       } finally {
         setIsLoading(false);
         pendingSessionId.current = null;
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
       }
     },
     [isLoading, appendMessage]
   );
 
-  return { isLoading, sendMessage };
+  return { isLoading, sendMessage, cancelActiveQuery };
 }

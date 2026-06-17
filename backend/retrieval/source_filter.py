@@ -38,6 +38,7 @@ _OVERVIEW_NOISE_SYMBOLS = frozenset(
         "_cursorwrapper",
         "llmprovidererror",
         "_has_architecture_markers",
+        "_has_overview_markers",
         "post_process_answer_and_sources",
         "_cors_origin_regex",
         "_init_postgres",
@@ -125,6 +126,180 @@ def _normalized_query(raw_query: str) -> str:
     return re.sub(r"\s+", " ", q).strip()
 
 
+def _source_contract_intent(raw_query: str) -> str:
+    from retrieval.query_intent import classify_source_intent
+
+    return classify_source_intent(raw_query)
+
+
+def _source_contract_paths(raw_query: str) -> tuple[str, ...]:
+    del raw_query
+    return ()
+
+
+def _path_has_any(path: str, terms: tuple[str, ...]) -> bool:
+    return any(term in path for term in terms)
+
+
+def _source_contract_score(raw_query: str, src: dict) -> int:
+    source_intent = _source_contract_intent(raw_query)
+    relative_path = str(src.get("relative_path", "")).strip()
+    path_lower = relative_path.lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    chunk_type = str(src.get("chunk_type", "")).strip().lower()
+    file_type = str(src.get("file_type", "")).strip().lower()
+    
+    score = 0
+    is_repo_summary = (
+        path_lower == "__repo_summary__.md"
+        or chunk_type == "repo_summary"
+        or file_type == "repo_summary"
+    )
+
+    name = path_lower.rsplit("/", 1)[-1]
+    normalized_query = _normalized_query(raw_query)
+    is_readme = name.startswith("readme")
+    is_doc = path_lower.startswith("docs/") or "/docs/" in path_lower or path_lower.endswith(".md")
+    is_config = (
+        name in {
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+            "go.mod",
+            "cargo.toml",
+            "pom.xml",
+            "build.gradle",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "dockerfile",
+        }
+        or "config" in path_lower
+    )
+    is_frontend = (
+        path_lower.startswith("frontend/")
+        or "/frontend/" in path_lower
+        or "/src/components/" in path_lower
+        or "/src/pages/" in path_lower
+        or "/src/hooks/" in path_lower
+        or name in {"app.jsx", "app.tsx", "app.js", "app.ts"}
+    )
+    is_api = (
+        _path_has_any(path_lower, ("api", "route", "routes", "controller", "controllers", "server", "handler", "handlers", "endpoint", "endpoints"))
+        or name in {"main.py", "app.py", "server.js", "server.ts", "index.js", "index.ts"}
+    )
+    is_indexing = _path_has_any(path_lower, ("index", "ingest", "parser", "parse", "chunk", "embed", "vector", "store", "storage", "discover", "filter", "crawl"))
+    is_retrieval = _path_has_any(path_lower, ("retriev", "search", "rag", "rank", "rerank", "query", "answer", "llm", "source", "citation", "assembler"))
+    is_provider = _path_has_any(path_lower, ("provider", "credential", "settings", "config", "llm", "model"))
+    is_failure = _path_has_any(path_lower, ("job", "status", "fresh", "recover", "retry", "cancel", "error", "fail", "db", "database", "troubleshoot"))
+
+    if source_intent == "overview":
+        score += 5000 if is_repo_summary else 0
+        score += 1800 if is_readme else 0
+        score += 1300 if is_doc else 0
+        score += 700 if is_config else 0
+        score += 550 if is_api or is_frontend else 0
+    elif source_intent == "runtime_architecture":
+        score += 5000 if is_repo_summary else 0
+        score += 1500 if is_readme or is_doc else 0
+        score += 1300 if is_api else 0
+        score += 1100 if is_frontend else 0
+        score += 850 if is_config else 0
+        score += 650 if is_indexing or is_retrieval else 0
+    elif source_intent == "frontend_backend_flow":
+        score += 1700 if is_frontend and _path_has_any(path_lower, ("api", "client", "hook", "service", "session", "app", "view")) else 0
+        score += 1550 if is_api else 0
+        score += 450 if is_doc else 0
+    elif source_intent in {"repository_analysis", "indexing_pipeline", "incremental_indexing"}:
+        score += 1800 if is_indexing else 0
+        score += 900 if is_failure and source_intent == "incremental_indexing" else 0
+        score += 650 if is_doc and _path_has_any(path_lower, ("index", "ingest", "reindex", "troubleshoot")) else 0
+    elif source_intent == "retrieval_pipeline":
+        score += 1800 if is_retrieval else 0
+        score += 750 if is_api else 0
+    elif source_intent == "source_filtering":
+        score += 1700 if is_retrieval and _path_has_any(path_lower, ("source", "answer", "validation", "assembler", "citation", "card")) else 0
+        score += 900 if is_frontend and _path_has_any(path_lower, ("source", "card", "message", "citation")) else 0
+        if path_lower.endswith("filtering.py") and "answer" in normalized_query:
+            score -= 1800
+    elif source_intent == "ui_implementation":
+        score += 1900 if is_frontend else 0
+        score += 800 if _path_has_any(path_lower, ("component", "view", "page", "screen", "panel", "button", "card", "message")) else 0
+    elif source_intent == "api_endpoint":
+        score += 2000 if is_api and not is_frontend else 0
+        score += 650 if is_frontend and "api" in path_lower else 0
+    elif source_intent == "provider_configuration":
+        score += 1700 if is_provider else 0
+        score += 1100 if is_frontend and _path_has_any(path_lower, ("provider", "settings", "credential", "config")) else 0
+        score += 650 if is_api else 0
+    elif source_intent in {"failure_recovery", "indexing_status"}:
+        score += 1700 if is_failure else 0
+        score += 1200 if is_indexing else 0
+        score += 700 if is_doc and _path_has_any(path_lower, ("troubleshoot", "index", "fresh", "status", "recover")) else 0
+
+    if path_lower.startswith("backend/scratch/") or "/scratch/" in path_lower:
+        score -= 1600
+    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("benchmark", "eval", "ragas")):
+        score -= 1200
+    if is_test_source(src):
+        score -= 1000
+    if path_lower.endswith("label_constants.py") and source_intent in {"indexing_pipeline", "repository_analysis"}:
+        score -= 1200
+    if "llm" in path_lower and source_intent == "api_endpoint":
+        score -= 1600
+    if symbol_name == "_provider_endpoint" and source_intent == "api_endpoint":
+        score -= 2400
+    if symbol_name in _OVERVIEW_NOISE_SYMBOLS and source_intent in {"overview", "runtime_architecture"}:
+        score -= 1600
+    return score
+
+
+def _prepend_contract_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
+    if _source_contract_intent(raw_query) in {"general", "code_location", "exact_symbol", "docs_question"}:
+        return selected
+
+    ranked = sorted(
+        (
+            src for src in all_sources
+            if _source_contract_score(raw_query, src) > 0
+            and _source_allowed_for_contract(raw_query, src)
+        ),
+        key=lambda src: (
+            -_source_contract_score(raw_query, src),
+            str(src.get("relative_path", "")),
+            int(src.get("start_line", 0)),
+            int(src.get("end_line", 0)),
+        ),
+    )
+    return _merge_anchor_sources(ranked[:8], selected)
+
+
+def _source_allowed_for_contract(raw_query: str, src: dict) -> bool:
+    source_intent = _source_contract_intent(raw_query)
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    if not relative_path:
+        return True
+    if relative_path.startswith("backend/scratch/") or "/scratch/" in relative_path:
+        return False
+    if source_intent in {"overview", "runtime_architecture", "frontend_backend_flow", "repository_analysis", "indexing_pipeline", "incremental_indexing", "failure_recovery"}:
+        if is_test_source(src):
+            return False
+        if relative_path.startswith("backend/scripts/") and any(term in relative_path for term in ("benchmark", "eval", "ragas")):
+            return False
+    if source_intent == "ui_implementation":
+        return (
+            relative_path.startswith("frontend/")
+            or "/frontend/" in relative_path
+            or "/src/components/" in relative_path
+            or "/src/pages/" in relative_path
+            or "/src/hooks/" in relative_path
+        )
+    if source_intent == "api_endpoint":
+        if "llm" in relative_path and "_provider_endpoint" in str(src.get("symbol_name", "")).lower():
+            return False
+        return True
+    return True
+
+
 def _query_is_general_project_query(raw_query: str) -> bool:
     q = _normalized_query(raw_query)
     if not q:
@@ -135,6 +310,7 @@ def _query_is_general_project_query(raw_query: str) -> bool:
         phrase in q
         for phrase in (
             "what is this project",
+            "what is this repo",
             "what is this repository",
             "what is this codebase",
             "how is this project structured",
@@ -299,6 +475,24 @@ def source_excluded_for_query(
     if not relative_path:
         return False
 
+    path_lower = relative_path.lower()
+
+    # Eval/report data files are always demoted unless the query is explicitly about evals.
+    # This guard runs BEFORE the general_project early-return so broad queries don't rescue them.
+    _is_eval_report_file = (
+        ("evals/reports/" in path_lower or path_lower.startswith("evals/reports/"))
+        or ("backend/docs/retrieval_docs/" in path_lower and not path_lower.endswith(".md"))
+        or (
+            path_lower.endswith((".json", ".yaml", ".yml"))
+            and any(term in path_lower for term in ("eval", "report", "golden", "benchmark", "fixture"))
+        )
+    )
+    if _is_eval_report_file and not query_is_eval_or_report(raw_query):
+        return True
+
+    if _source_contract_score(raw_query, source) > 0:
+        return False
+
     if _query_is_general_project_query(raw_query) or _query_matches_general_project_intent(intent, mode):
         return False
 
@@ -310,7 +504,7 @@ def source_excluded_for_query(
     wants_searcher_internals = _query_explicitly_requests_searcher_internals(raw_query)
     explicit_non_impl = _query_explicitly_allows_non_implementation_artifacts(raw_query)
 
-    path_lower = relative_path.lower()
+
     is_tests = (
         path_lower.startswith("backend/tests/")
         or path_lower.startswith("tests/")
@@ -326,8 +520,22 @@ def source_excluded_for_query(
         or "/docs/" in path_lower
         or path_lower.endswith(".md")
     )
+    # eval report data files: JSON/YAML artifacts in evals/reports, backend/docs/retrieval_docs, scratch
+    is_eval_report = (
+        ("evals/reports/" in path_lower or path_lower.startswith("evals/reports/"))
+        or ("backend/docs/retrieval_docs/" in path_lower and not path_lower.endswith(".md"))
+        or (path_lower.startswith("scratch/") or "/scratch/" in path_lower)
+        or (
+            path_lower.endswith((".json", ".yaml", ".yml"))
+            and any(term in path_lower for term in ("eval", "report", "golden", "benchmark", "fixture"))
+        )
+    )
 
-    if is_tests and not (allow_tests or explicit_non_impl):
+    allow_eval_or_test = allow_tests or explicit_non_impl or query_is_eval_or_report(raw_query)
+
+    if is_tests and not allow_eval_or_test:
+        return True
+    if is_eval_report and not allow_eval_or_test:
         return True
     if is_docs and not (allow_docs or explicit_non_impl) and not _query_is_retrieval_pipeline_flow(raw_query):
         return True
@@ -414,6 +622,18 @@ def apply_query_negative_filters(
         seen: set[tuple[str, str, int, int, str]] = set()
         filtered: list[dict] = []
         for source in sources:
+            path_l = str(source.get("relative_path", "")).lower()
+            # Even in general-project mode, exclude eval report data files unless query is about evals.
+            _is_eval_report = (
+                ("evals/reports/" in path_l or path_l.startswith("evals/reports/"))
+                or ("backend/docs/retrieval_docs/" in path_l and not path_l.endswith(".md"))
+                or (
+                    path_l.endswith((".json", ".yaml", ".yml"))
+                    and any(term in path_l for term in ("eval", "report", "golden", "benchmark", "fixture"))
+                )
+            )
+            if _is_eval_report and not query_is_eval_or_report(raw_query):
+                continue
             key = (
                 source.get("relative_path", ""),
                 source.get("symbol_name", ""),
@@ -426,6 +646,7 @@ def apply_query_negative_filters(
             seen.add(key)
             filtered.append(source)
         return filtered
+
     topic = classify_negative_filter_topic(raw_query)
     filtered: list[dict] = []
     seen: set[tuple[str, str, int, int, str]] = set()
@@ -605,9 +826,21 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     wants_phase1_flow = query_is_phase1_flow(raw_query)
     wants_overview = query_is_overview_summary(raw_query)
     wants_architecture = query_is_architecture_summary(raw_query)
+    wants_indexing = _query_is_indexing_explanation(raw_query)
+    wants_retrieval = _query_is_retrieval_explanation(raw_query)
+    wants_ui_location = _query_is_frontend_ui_location(raw_query)
+    source_contract_intent = _source_contract_intent(raw_query)
     suppress_overview_meta = should_suppress_overview_meta_sources(raw_query)
     primary = [s for s in sources if s.get("expansion_type") == "primary"]
     expanded = [s for s in sources if s.get("expansion_type") != "primary"]
+
+    if wants_ui_location:
+        frontend_primary = [s for s in primary if _frontend_ui_source_score(s) > 0]
+        frontend_expanded = [s for s in expanded if _frontend_ui_source_score(s) > 0]
+        if frontend_primary:
+            primary = frontend_primary
+        if frontend_expanded:
+            expanded = frontend_expanded
 
     if suppress_overview_meta:
         primary_filtered = _filter_overview_noise(primary)
@@ -645,7 +878,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     strong_primary = [s for s in primary_relevant if overlap(s) >= strong_threshold]
     primary_cap = _primary_source_cap(raw_query, wants_auth_trace, wants_phase1_flow, wants_compound, wants_overview)
     expanded_cap = 3 if (wants_compound or wants_overview) else 2
-    if _query_prefers_implementation_sources(raw_query):
+    if _query_prefers_implementation_sources(raw_query) and source_contract_intent not in {"api_endpoint", "ui_implementation", "provider_configuration"}:
         chosen_primary = primary[:primary_cap]
         chosen_expanded = expanded[:expanded_cap]
     else:
@@ -677,17 +910,36 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         unique = _prepend_overview_anchors(raw_query, sources, unique)
     if wants_architecture:
         unique = _prepend_architecture_anchors(raw_query, sources, unique)
+    if wants_indexing:
+        unique = _prepend_indexing_anchors(raw_query, sources, unique)
+    if wants_retrieval:
+        unique = _prepend_retrieval_anchors(raw_query, sources, unique)
+    unique = _prepend_contract_anchors(raw_query, sources, unique)
     if wants_overview or wants_architecture:
         unique = refine_overview_display_sources(raw_query, unique, sources)
     if suppress_overview_meta:
         filtered_unique = _filter_overview_noise(unique)
         unique = filtered_unique
 
-    if wants_overview or wants_architecture:
+    if wants_overview or wants_architecture or wants_indexing or wants_retrieval or wants_ui_location or source_contract_intent != "general":
         unique = sorted(
             unique,
             key=lambda src: (
-                -_overview_architecture_display_priority(src, wants_architecture=wants_architecture),
+                -(
+                    _frontend_ui_source_score(src)
+                    if wants_ui_location
+                    else (
+                        _source_contract_score(raw_query, src)
+                        if (source_contract_intent != "general" and not (wants_overview or wants_architecture))
+                        else
+                        _intent_display_priority(
+                            src,
+                            wants_architecture=wants_architecture,
+                            wants_indexing=wants_indexing,
+                            wants_retrieval=wants_retrieval,
+                        )
+                    )
+                ),
                 -source_relevance_score(src, query_tokens),
                 str(src.get("relative_path", "")),
                 int(src.get("start_line", 0)),
@@ -713,6 +965,10 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         raw_query,
         matched_route=matched_code_topic_route,
     )
+    if wants_ui_location or wants_indexing or wants_retrieval or suppress_overview_meta or source_contract_intent != "general":
+        aligned_unique = [src for src in unique if _source_allowed_for_reasoning(raw_query, src)]
+        if aligned_unique:
+            unique = aligned_unique
     if matched_code_topic_route and not query_explicitly_requests_non_implementation_artifacts(raw_query):
         routed = []
         seen_routed = set()
@@ -827,12 +1083,24 @@ def split_sources_two_layer(
     display_keys: set[tuple] = {_source_key(s) for s in display}
     reasoning: list[dict] = list(display)
 
-    remaining = [s for s in assembled_sources if _source_key(s) not in display_keys]
+    query_tokens = query_tokens_from_text(raw_query)
+    remaining = [
+        s for s in assembled_sources
+        if _source_key(s) not in display_keys and _source_allowed_for_reasoning(raw_query, s)
+    ]
     if suppress_overview_meta:
         remaining_filtered = _filter_overview_noise(remaining)
         remaining = remaining_filtered
     primary_remaining = [s for s in remaining if s.get("expansion_type") == "primary"]
     expanded_remaining = [s for s in remaining if s.get("expansion_type") != "primary"]
+    primary_remaining = sorted(
+        primary_remaining,
+        key=lambda src: _reasoning_candidate_priority(raw_query, src, query_tokens),
+    )
+    expanded_remaining = sorted(
+        expanded_remaining,
+        key=lambda src: _reasoning_candidate_priority(raw_query, src, query_tokens),
+    )
 
     for candidate in primary_remaining + expanded_remaining:
         if len(reasoning) >= REASONING_SOURCES_CAP:
@@ -985,6 +1253,20 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
     return score
 
 
+def _intent_display_priority(
+    src: dict,
+    *,
+    wants_architecture: bool,
+    wants_indexing: bool,
+    wants_retrieval: bool,
+) -> int:
+    if wants_indexing:
+        return _indexing_anchor_score(src)
+    if wants_retrieval:
+        return _retrieval_anchor_score(src)
+    return _overview_architecture_display_priority(src, wants_architecture=wants_architecture)
+
+
 def _prepend_overview_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
     """Front-load high-signal overview anchors so short prompts keep them after display capping."""
     if not query_is_overview_summary(raw_query):
@@ -1010,6 +1292,48 @@ def _prepend_overview_anchors(raw_query: str, all_sources: list[dict], selected:
     seen = set()
     unique = []
     for src in merged:
+        key = _source_key(src)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(src)
+    return unique
+
+
+def _prepend_indexing_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
+    if not _query_is_indexing_explanation(raw_query):
+        return selected
+    ranked = sorted(
+        (src for src in all_sources if _indexing_anchor_score(src) > 0 and not is_test_source(src)),
+        key=lambda src: (
+            -_indexing_anchor_score(src),
+            str(src.get("relative_path", "")),
+            int(src.get("start_line", 0)),
+        ),
+    )
+    return _merge_anchor_sources(ranked[:7], selected)
+
+
+def _prepend_retrieval_anchors(raw_query: str, all_sources: list[dict], selected: list[dict]) -> list[dict]:
+    if not _query_is_retrieval_explanation(raw_query):
+        return selected
+    query_tokens = query_tokens_from_text(raw_query)
+    ranked = sorted(
+        (src for src in all_sources if _retrieval_anchor_score(src) > 0 and not is_test_source(src)),
+        key=lambda src: (
+            -_retrieval_anchor_score(src),
+            -source_relevance_score(src, query_tokens),
+            str(src.get("relative_path", "")),
+            int(src.get("start_line", 0)),
+        ),
+    )
+    return _merge_anchor_sources(ranked[:7], selected)
+
+
+def _merge_anchor_sources(anchors: list[dict], selected: list[dict]) -> list[dict]:
+    seen = set()
+    unique = []
+    for src in anchors + list(selected):
         key = _source_key(src)
         if key in seen:
             continue
@@ -1475,9 +1799,220 @@ def query_tokens_from_text(raw_query: str) -> set[str]:
     return {t for t in tokens if t not in stop}
 
 
+def _query_is_indexing_explanation(raw_query: str) -> bool:
+    from retrieval.query_intent import is_indexing_explanation_query
+
+    return is_indexing_explanation_query(raw_query)
+
+
+def _query_is_retrieval_explanation(raw_query: str) -> bool:
+    from retrieval.query_intent import is_retrieval_explanation_query
+
+    return is_retrieval_explanation_query(raw_query)
+
+
+def _query_is_frontend_ui_location(raw_query: str) -> bool:
+    q = _normalized_query(raw_query)
+    if not q:
+        return False
+    if "runtime component" in q or "runtime components" in q:
+        return False
+    ui_terms = (
+        "frontend",
+        "ui",
+        "component",
+        "dashboard",
+        "source card",
+        "source cards",
+        "message bubble",
+        "index latest",
+        "button",
+        "rendered",
+        "shown",
+        "displayed",
+    )
+    location_terms = (
+        "where",
+        "implemented",
+        "rendered",
+        "shown",
+        "displayed",
+        "located",
+        "component",
+    )
+    return any(term in q for term in ui_terms) and any(term in q for term in location_terms)
+
+
+def _frontend_ui_source_score(src: dict) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    if not relative_path:
+        return 0
+    score = 0
+    if relative_path.startswith("frontend/src/components/"):
+        score += 120
+    elif relative_path.startswith("frontend/src/"):
+        score += 95
+    elif relative_path.startswith("frontend/"):
+        score += 70
+    elif relative_path.startswith("backend/"):
+        score -= 120
+    elif relative_path.startswith("docs/") or relative_path.endswith(".md"):
+        score -= 80
+
+    if symbol_name and symbol_name not in {"", "<file>"}:
+        score += 20
+    if any(
+        name in relative_path
+        for name in (
+            "sourcecard",
+            "messagebubble",
+            "sessionview",
+            "repositoryview",
+            "view",
+            "page",
+            "screen",
+            "panel",
+            "evaluationpanel",
+            "ragasvalidationmodal",
+            "api.js",
+        )
+    ):
+        score += 35
+    return score
+
+
+def _source_allowed_for_reasoning(raw_query: str, src: dict) -> bool:
+    """Keep the broader LLM context aligned with the query family."""
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    if not relative_path:
+        return True
+
+    if not _source_allowed_for_contract(raw_query, src):
+        return False
+
+    if _query_is_frontend_ui_location(raw_query):
+        return relative_path.startswith("frontend/")
+
+    if _query_is_indexing_explanation(raw_query):
+        if relative_path.startswith("frontend/"):
+            return False
+        if relative_path.startswith("backend/scripts/") and any(
+            term in relative_path for term in ("benchmark", "ragas", "eval")
+        ):
+            return False
+        if "/reports/" in relative_path or relative_path.endswith("evals/reports/latest.json"):
+            return False
+        return True
+
+    if _query_is_retrieval_explanation(raw_query):
+        if relative_path.startswith("frontend/"):
+            return False
+        if relative_path.startswith("backend/scripts/") and any(
+            term in relative_path for term in ("benchmark", "ragas", "eval")
+        ):
+            return False
+        if "/reports/" in relative_path or relative_path.endswith("evals/reports/latest.json"):
+            return False
+        return True
+
+    if should_suppress_overview_meta_sources(raw_query):
+        symbol_name = str(src.get("symbol_name", "")).strip().lower()
+        return not _is_overview_noise_source(relative_path, symbol_name)
+
+    return True
+
+
+def _reasoning_candidate_priority(raw_query: str, src: dict, query_tokens: set[str]) -> tuple:
+    wants_ui_location = _query_is_frontend_ui_location(raw_query)
+    wants_indexing = _query_is_indexing_explanation(raw_query)
+    wants_retrieval = _query_is_retrieval_explanation(raw_query)
+    wants_overview = query_is_overview_summary(raw_query)
+    wants_architecture = query_is_architecture_summary(raw_query)
+
+    if wants_ui_location:
+        intent_score = _frontend_ui_source_score(src)
+    elif wants_indexing:
+        intent_score = _indexing_anchor_score(src)
+    elif wants_retrieval:
+        intent_score = _retrieval_anchor_score(src)
+    elif wants_overview or wants_architecture:
+        intent_score = _overview_architecture_display_priority(
+            src,
+            wants_architecture=wants_architecture,
+        )
+    else:
+        intent_score = 0
+
+    return (
+        -intent_score,
+        -source_relevance_score(src, query_tokens),
+        0 if src.get("expansion_type") == "primary" else 1,
+        str(src.get("relative_path", "")),
+        int(src.get("start_line", 0)),
+        int(src.get("end_line", 0)),
+    )
+
+
+def _indexing_anchor_score(src: dict) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    if not relative_path:
+        return 0
+    score = 0
+    if _path_has_any(relative_path, ("index", "ingest", "parser", "parse", "chunk", "embed", "vector", "store", "storage", "discover", "filter", "crawl")):
+        score += 120
+    if _path_has_any(relative_path, ("job", "worker", "db", "database", "status", "fresh", "retry", "cancel")):
+        score += 80
+    if (relative_path.startswith("docs/") or "/docs/" in relative_path or relative_path.endswith(".md")) and _path_has_any(relative_path, ("index", "ingest", "reindex", "troubleshoot")):
+        score += 70
+    if any(term in symbol_name for term in ("pipeline", "discover", "filter", "parse", "chunk", "embed", "store", "index")):
+        score += 20
+    if relative_path.startswith("frontend/") or "/frontend/" in relative_path:
+        score -= 200
+    if "evaluationpanel" in relative_path:
+        score -= 300
+    if is_test_source(src):
+        score -= 100
+    return score
+
+
+def _retrieval_anchor_score(src: dict) -> int:
+    relative_path = str(src.get("relative_path", "")).strip().lower()
+    symbol_name = str(src.get("symbol_name", "")).strip().lower()
+    score = 0
+    if _path_has_any(relative_path, ("retriev", "search", "rag", "rank", "rerank", "query", "answer", "llm", "source", "citation", "assembler")):
+        score += 116
+    if _path_has_any(relative_path, ("api", "route", "routes", "server", "handler")):
+        score += 70
+    if (relative_path.startswith("docs/") or "/docs/" in relative_path or relative_path.endswith(".md")) and _path_has_any(relative_path, ("retriev", "search", "rag", "diagnostic")):
+        score += 60
+    if any(term in symbol_name for term in ("search", "query", "answer", "source", "generate", "assemble")):
+        score += 18
+    if relative_path.startswith("frontend/") or "/frontend/" in relative_path:
+        score -= 120
+    if is_test_source(src):
+        score -= 80
+    return score
+
+
 def query_mentions_tests(raw_query: str) -> bool:
     q = raw_query.lower()
-    return any(term in q for term in ("test", "tests", "spec", "validation", "unit test"))
+    return any(term in q for term in (
+        "test", "tests", "spec", "validation", "unit test",
+        "pytest", "eval", "evaluation", "ragas", "benchmark",
+        "regression", "report",
+    ))
+
+
+def query_is_eval_or_report(raw_query: str) -> bool:
+    """Return True if the query is specifically about tests, evals, or reports."""
+    q = raw_query.lower()
+    return any(term in q for term in (
+        "test", "tests", "pytest", "spec",
+        "eval", "evaluation", "ragas", "benchmark",
+        "regression", "report", "validation",
+    ))
 
 
 def query_is_compound_trace(raw_query: str) -> bool:
@@ -1581,7 +2116,9 @@ def query_is_overview_summary(raw_query: str) -> bool:
         phrase in q
         for phrase in (
             "what is this project about",
+            "what is this repo about",
             "whats this project about",
+            "whats this repo about",
             "project overview",
             "overview of the project",
             "repository overview",
@@ -1589,6 +2126,9 @@ def query_is_overview_summary(raw_query: str) -> bool:
             "give me a repository overview",
             "what does this project do",
             "what does this app do",
+            "what problem does this repository solve",
+            "what problem does this repo solve",
+            "what problem does this project solve",
             "tech stack",
             "architecture overview",
             "architecture",
@@ -1606,6 +2146,8 @@ def query_is_overview_summary(raw_query: str) -> bool:
             "top level subsystems",
             "module layout",
             "runtime shape",
+            "major runtime components",
+            "runtime components",
         )
     ):
         return True
@@ -1644,6 +2186,8 @@ def query_is_architecture_summary(raw_query: str) -> bool:
             "top level subsystems",
             "module layout",
             "runtime shape",
+            "major runtime components",
+            "runtime components",
         )
     ):
         return True
@@ -1731,6 +2275,14 @@ def _overview_anchor_score(src: dict) -> int:
         return 0
     if chunk_type == "repo_summary" or file_type == "repo_summary" or relative_path == "__repo_summary__.md":
         return 100
+    if relative_path == "readme.md":
+        return 96
+    if relative_path == "docs/product/final_handoff.md":
+        return 94
+    if relative_path == "docs/product/release_readiness_checklist.md":
+        return 92
+    if relative_path == "docs/product/index_latest.md":
+        return 88
     if relative_path == "backend/readme.md":
         return 92
     if relative_path.endswith("backend/retrieval/api_service.py"):
@@ -1743,8 +2295,8 @@ def _overview_anchor_score(src: dict) -> int:
         return 70
     if relative_path.endswith("backend/retrieval/db.py"):
         return 68
-    if relative_path == "readme.md":
-        return 52
+    if relative_path.startswith("docs/product/"):
+        return 50
     if relative_path.endswith("docker-compose.yml"):
         return 48
     if relative_path.endswith(("requirements.txt", "pyproject.toml", "package.json", ".env.example")):
@@ -1764,6 +2316,14 @@ def _architecture_anchor_score(src: dict) -> int:
         return 100
     if relative_path == "backend/readme.md":
         return 96
+    if relative_path == "readme.md":
+        return 95
+    if relative_path == "docs/product/final_handoff.md":
+        return 94
+    if relative_path == "docs/product/release_readiness_checklist.md":
+        return 92
+    if relative_path == "docs/product/index_latest.md":
+        return 88
     if relative_path.endswith("backend/retrieval/api_service.py"):
         return 94
     if relative_path.endswith("backend/retrieval/main.py"):
@@ -1778,7 +2338,7 @@ def _architecture_anchor_score(src: dict) -> int:
         return 84
     if relative_path.endswith("backend/retrieval/db.py"):
         return 82
-    if relative_path == "readme.md":
+    if relative_path.startswith("docs/product/"):
         return 50
     if relative_path.endswith("docker-compose.yml"):
         return 48

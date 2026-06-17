@@ -74,7 +74,6 @@ def validate_generated_answer(
     query_info: dict | None = None,
 ) -> dict:
     """Validate a generated answer and return a repaired version when possible."""
-    del query_info  # reserved for future heuristics
     response_mode = str(response_mode or "").strip().lower()
     allowed_sources = _dedupe_sources(list(allowed_sources or []))
     final_sources = _dedupe_sources(list(final_sources or []))
@@ -87,6 +86,8 @@ def validate_generated_answer(
         answer or "",
         visible_paths=visible_paths,
     )
+    if response_mode not in {"code_snippet", "source_location"}:
+        cleaned_answer = _strip_manual_sources_footer(cleaned_answer)
 
     module_tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
     wants_backend_modules = (
@@ -106,11 +107,9 @@ def validate_generated_answer(
             r"(?i)symbol/function",
         ]
         if any(re.search(pat, cleaned_answer) for pat in bad_patterns):
-            from retrieval.code_answers import DETERMINISTIC_BACKEND_MODULES_SUMMARY, _source_reference_lines
+            from retrieval.code_answers import DETERMINISTIC_BACKEND_MODULES_SUMMARY
             from retrieval.source_filter import _OVERVIEW_NOISE_SYMBOLS
-            lines = [DETERMINISTIC_BACKEND_MODULES_SUMMARY, ""]
-            lines.append("Sources:")
-            lines.extend(_source_reference_lines(final_sources[:5] or allowed_sources[:5]))
+            lines = [DETERMINISTIC_BACKEND_MODULES_SUMMARY]
             repaired_answer = "\n".join(lines).strip()
             repaired_sources = _prune_sources_to_allowed(final_sources or allowed_sources, _source_paths(final_sources or allowed_sources))
             bad_symbols = _OVERVIEW_NOISE_SYMBOLS | {"main", "run_query", "_query_impl"}
@@ -157,14 +156,63 @@ def validate_generated_answer(
             final_sources=final_sources,
             reasons=cleaned_reasons,
         )
+    if _is_failure_recovery_query(raw_query, query_info):
+        speculative = (
+            "could potentially",
+            "would likely",
+            "probably",
+            "might recover",
+            "could recover",
+            "inferred",
+        )
+        if any(term in cleaned_answer.lower() for term in speculative):
+            repaired = (
+                "The retrieved evidence is incomplete for a full recovery walkthrough. "
+                "The available sources should be limited to the actual failure-handling paths, "
+                "such as session status updates, indexing job records, ingestion failure handling, "
+                "and troubleshooting documentation. I will not infer unimplemented recovery behavior from weak evidence."
+            )
+            return {
+                "valid": False,
+                "repaired_answer": repaired,
+                "repaired_sources": _prune_sources_to_allowed(final_sources or allowed_sources, visible_paths),
+                "reasons": cleaned_reasons + ["unsupported_failure_recovery_speculation"],
+            }
 
     repaired_sources = _prune_sources_to_allowed(final_sources, allowed_paths or final_paths)
     return {
         "valid": not cleaned_reasons,
-        "repaired_answer": cleaned_answer.strip(),
+        "repaired_answer": _strip_manual_sources_footer(cleaned_answer).strip(),
         "repaired_sources": repaired_sources,
         "reasons": cleaned_reasons,
     }
+
+
+def _strip_manual_sources_footer(text: str) -> str:
+    source_patterns = [
+        r"(?im)^#{1,4}\s*(?:Sources|References|Relevant\s+Sources|Key\s+Sources|Related\s+Sources)\s*$",
+        r'(?im)^\s*(?:\*\*)?(?:Sources|References|Relevant\s+Sources|Key\s+Sources|Related\s+Sources)(?::?\s*)(?:\*\*)?\s*$',
+    ]
+    earliest_pos = None
+    for pattern in source_patterns:
+        for match in re.finditer(pattern, text or ""):
+            in_code_block = False
+            for line in (text or "")[:match.start()].splitlines():
+                if line.strip().startswith("```"):
+                    in_code_block = not in_code_block
+            if not in_code_block:
+                if earliest_pos is None or match.start() < earliest_pos:
+                    earliest_pos = match.start()
+    if earliest_pos is not None:
+        return (text or "")[:earliest_pos].rstrip()
+    return text or ""
+
+
+def _is_failure_recovery_query(raw_query: str, query_info: dict | None) -> bool:
+    if isinstance(query_info, dict) and query_info.get("source_intent") == "failure_recovery":
+        return True
+    q = (raw_query or "").lower()
+    return any(term in q for term in ("recover from", "failed incremental", "indexing fails", "fails midway", "failure recovery"))
 
 
 def _validate_docs_summary(

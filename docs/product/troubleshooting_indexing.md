@@ -170,3 +170,15 @@ If you experience issues during indexing, use this guide to identify and resolve
     ```
     And refresh the page to clear the warning and restore incremental indexing support.
 
+---
+
+## 16. Incremental Indexing Failures
+* **Symptoms:** An incremental indexing job status shows `failed` or `cancelled` in the Job History list.
+* **Explanation:** Ingestion failed due to external outages (e.g. LLM timeouts, Qdrant service crash, or SQLite database locking) or the user manually cancelled the run.
+* **Resolution:**
+  - Because metadata updates are transactionally isolated, any failure triggers an automatic SQL rollback. The database remains consistent with the pre-failure state.
+  - If the job was cancelled or failed before vector store mutations began, no vectors are deleted or modified.
+  - Resolve the root issue (e.g., restart Ollama, check Docker status) and click **Index changed files** again.
+  - If the index has become corrupted due to consecutive failed updates, trigger a full **Index latest** rebuild to establish a healthy baseline.
+
+

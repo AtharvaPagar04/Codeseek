@@ -15,7 +15,16 @@ except Exception:  # pragma: no cover - optional dependency during local sqlite-
     psycopg = None
     dict_row = None
 
-SQLITE_DEFAULT_PATH = Path(os.getenv("CODESEEK_DB_PATH", "/tmp/codeseek.sqlite3")).resolve()
+# Resolve default SQLite path:
+#   1. CODESEEK_SQLITE_PATH (preferred, new name)
+#   2. CODESEEK_DB_PATH     (legacy alias, kept for backward compat)
+#   3. ./data/codeseek.db  (default — relative to CWD at startup)
+_SQLITE_PATH_DEFAULT = Path("data") / "codeseek.db"
+SQLITE_DEFAULT_PATH = Path(
+    os.getenv("CODESEEK_SQLITE_PATH", "")
+    or os.getenv("CODESEEK_DB_PATH", "")
+    or str(_SQLITE_PATH_DEFAULT)
+).resolve()
 
 _init_lock = threading.Lock()
 _initialized = False
@@ -227,14 +236,28 @@ def _postgres_schema_sql() -> str:
 
 def get_db_backend() -> str:
     explicit = os.getenv("CODESEEK_DB_BACKEND", "").strip().lower()
-    if explicit in {"sqlite", "postgres"}:
-        return explicit
+    if explicit == "sqlite":
+        return "sqlite"
+    if explicit == "postgres":
+        return "postgres"
+    if explicit and explicit not in ("sqlite", "postgres"):
+        raise RuntimeError(
+            f"Unknown CODESEEK_DB_BACKEND value '{explicit}'. "
+            "Expected 'sqlite' or 'postgres'."
+        )
+    # Auto-detect from DATABASE_URL when CODESEEK_DB_BACKEND not set
     database_url = os.getenv("CODESEEK_DATABASE_URL", "").strip()
-    return "postgres" if database_url.startswith("postgres") else "sqlite"
+    if database_url.startswith("postgres"):
+        return "postgres"
+    # Default: SQLite for local/offline deployments
+    return "sqlite"
 
 
 def get_db_path() -> Path:
-    raw = os.getenv("CODESEEK_DB_PATH", "").strip()
+    raw = (
+        os.getenv("CODESEEK_SQLITE_PATH", "").strip()
+        or os.getenv("CODESEEK_DB_PATH", "").strip()
+    )
     return Path(raw).resolve() if raw else SQLITE_DEFAULT_PATH
 
 
@@ -502,21 +525,23 @@ def upsert_session_file(
     status: str,
     last_indexed_at: str,
     deleted_at: str | None = None,
+    cursor = None,
 ) -> dict:
     """Insert or update a session file metadata record."""
     import uuid
     from datetime import datetime, timezone
     now_str = datetime.now(timezone.utc).isoformat()
-    with db_cursor() as (conn, cursor):
-        row = cursor.execute(
+
+    def _run(cur):
+        row = cur.execute(
             "SELECT id, created_at FROM session_files WHERE session_id = ? AND repo_path = ?",
             (session_id, repo_path),
         ).fetchone()
 
         if row:
-            file_id = row["id"]
-            created_at = row["created_at"]
-            cursor.execute(
+            fid = row["id"]
+            cat = row["created_at"]
+            cur.execute(
                 """
                 UPDATE session_files
                 SET file_hash = ?,
@@ -536,13 +561,13 @@ def upsert_session_file(
                     last_indexed_at,
                     deleted_at,
                     now_str,
-                    file_id,
+                    fid,
                 ),
             )
         else:
-            file_id = uuid.uuid4().hex
-            created_at = now_str
-            cursor.execute(
+            fid = uuid.uuid4().hex
+            cat = now_str
+            cur.execute(
                 """
                 INSERT INTO session_files (
                     id, session_id, repo_path, file_hash, indexed_commit_sha,
@@ -550,7 +575,7 @@ def upsert_session_file(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    file_id,
+                    fid,
                     session_id,
                     repo_path,
                     file_hash,
@@ -559,10 +584,17 @@ def upsert_session_file(
                     status,
                     last_indexed_at,
                     deleted_at,
-                    created_at,
+                    cat,
                     now_str,
                 ),
             )
+        return fid, cat
+
+    if cursor is not None:
+        file_id, created_at = _run(cursor)
+    else:
+        with db_cursor() as (conn, cur):
+            file_id, created_at = _run(cur)
 
     return {
         "id": file_id,
@@ -582,19 +614,21 @@ def upsert_session_file(
 def replace_session_file_chunks(
     session_file_id: str,
     chunks: list[dict],
+    cursor = None,
 ) -> None:
     """Replace all chunk mappings associated with a specific session file."""
     import uuid
     from datetime import datetime, timezone
     now_str = datetime.now(timezone.utc).isoformat()
-    with db_cursor() as (conn, cursor):
-        cursor.execute(
+
+    def _run(cur):
+        cur.execute(
             "DELETE FROM session_file_chunks WHERE session_file_id = ?",
             (session_file_id,),
         )
         for chunk in chunks:
             chunk_row_id = uuid.uuid4().hex
-            cursor.execute(
+            cur.execute(
                 """
                 INSERT INTO session_file_chunks (
                     id, session_file_id, chunk_id, vector_id, symbol, start_line, end_line, created_at
@@ -611,6 +645,12 @@ def replace_session_file_chunks(
                     now_str,
                 ),
             )
+
+    if cursor is not None:
+        _run(cursor)
+    else:
+        with db_cursor() as (conn, cur):
+            _run(cur)
 
 
 def list_session_files(
@@ -676,15 +716,17 @@ def list_session_files(
 def mark_session_files_deleted(
     session_id: str,
     repo_paths: list[str],
+    cursor = None,
 ) -> None:
     """Soft delete specific files by setting their deleted_at timestamp."""
     if not repo_paths:
         return
     from datetime import datetime, timezone
     now_str = datetime.now(timezone.utc).isoformat()
-    with db_cursor() as (conn, cursor):
+
+    def _run(cur):
         for path in repo_paths:
-            cursor.execute(
+            cur.execute(
                 """
                 UPDATE session_files
                 SET deleted_at = ?,
@@ -694,6 +736,12 @@ def mark_session_files_deleted(
                 """,
                 (now_str, now_str, session_id, path),
             )
+
+    if cursor is not None:
+        _run(cursor)
+    else:
+        with db_cursor() as (conn, cur):
+            _run(cur)
 
 
 def create_indexing_job(

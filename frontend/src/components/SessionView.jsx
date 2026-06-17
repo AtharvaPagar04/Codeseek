@@ -53,10 +53,18 @@ export default function SessionView({
   const [loadingJobHistory, setLoadingJobHistory] = useState(false);
   const bottomRef = useRef(null);
 
+  const repoStatus = session.repo_status;
+  const freshness = session.freshness;
+  const freshnessStatus = freshness?.freshness_status || (session.status === 'indexing' ? 'indexing' : (repoStatus?.status === 'up_to_date' ? 'latest' : (repoStatus?.status === 'out_of_date' ? 'stale_commit' : repoStatus?.status)));
+
   const fetchLatestJobData = async () => {
     try {
       const data = await fetchLatestIndexingJob(session.id);
-      setLatestJob(data);
+      if (data && data.latest_job === null) {
+        setLatestJob(null);
+      } else {
+        setLatestJob(data);
+      }
     } catch (err) {
       console.warn('Failed to fetch latest indexing job:', err);
     }
@@ -367,7 +375,7 @@ export default function SessionView({
     }
   };
 
-  const { isLoading, sendMessage } = useChat({ appendMessage });
+  const { isLoading, sendMessage, cancelActiveQuery } = useChat({ appendMessage });
   const isReady = session.status === 'ready';
   const activeThread =
     session.threads?.find((thread) => thread.id === session.active_thread_id) ||
@@ -404,9 +412,6 @@ export default function SessionView({
   }, [input]);
 
   const hasMessages = (activeThread?.messages || []).length > 0;
-  const repoStatus = session.repo_status;
-  const freshness = session.freshness;
-  const freshnessStatus = freshness?.freshness_status || (session.status === 'indexing' ? 'indexing' : (repoStatus?.status === 'up_to_date' ? 'latest' : (repoStatus?.status === 'out_of_date' ? 'stale_commit' : repoStatus?.status)));
 
   const repoNamePart = session.repo_full_name ? session.repo_full_name.split('/').pop() : '';
   const isSubdirectorySession = !!(session.repo_root && repoNamePart && !session.repo_root.endsWith(repoNamePart) && !session.repo_root.endsWith(repoNamePart + '/'));
@@ -509,7 +514,7 @@ export default function SessionView({
 
       {/* Collapsible Metadata Panel */}
       {showMetadata && (
-        <div ref={metadataRef} className="shrink-0 bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
+        <div ref={metadataRef} className="shrink-0 max-h-[70vh] overflow-y-auto bg-surface-2 border-b border-border px-6 py-4 animate-fadeIn relative z-10">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs font-mono select-none">
             <div className="space-y-1.5">
               <h4 className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Repository Config</h4>
@@ -608,6 +613,21 @@ export default function SessionView({
               </div>
             </div>
           </div>
+          {freshnessStatus && freshnessStatus !== 'indexing' && (
+            <div className="mt-4 pt-4 border-t border-border w-full">
+              <IndexPreviewPanel
+                sessionId={session.id}
+                sessionStatus={session.status}
+                updateSession={updateSession}
+                fetchFreshness={fetchFreshness}
+                fetchRepoStatus={fetchRepoStatus}
+                freshnessStatus={freshnessStatus}
+                canIndexLatest={freshness?.can_index_latest}
+                isReindexing={isReindexing}
+                sessionFreshness={session.freshness}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -626,276 +646,15 @@ export default function SessionView({
         </div>
       )}
 
-      {/* Safety Warnings & Notices */}
-      {(isSubdirectorySession ||
-        freshnessStatus === 'dirty_worktree' ||
-        freshnessStatus === 'stale_commit' ||
-        freshnessStatus === 'stale_indexing' ||
-        freshnessStatus === 'indexing' ||
-        session.status === 'indexing' ||
-        reindexingError) && (
+      {/* Reindexing Error Notice */}
+      {reindexingError && (
         <div className="shrink-0 px-6 pt-3 flex flex-col items-center animate-fadeIn">
-          {reindexingError && (
-            <StatusNotice
-              tone="error"
-              message={`Reindexing Error: ${reindexingError}`}
-              actionLabel="Dismiss"
-              onAction={() => setReindexingError(null)}
-            />
-          )}
-          {(freshnessStatus === 'indexing' || session.status === 'indexing') && (
-            <div className="w-full max-w-xl mb-4 bg-online/5 border border-online/20 rounded-xl px-4 py-3 font-mono text-xs flex flex-col gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-2 text-online">
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
-                  </svg>
-                  <span className="font-semibold text-text-primary">
-                    {latestJob?.indexing_mode === 'incremental' || freshness?.latest_job?.indexing_mode === 'incremental'
-                      ? 'Incremental indexing...'
-                      : 'Full indexing...'}
-                  </span>
-                  {(latestJob?.current_stage || freshness?.latest_job?.current_stage || freshness?.current_stage) && (
-                    <span className="text-text-muted">
-                      ({latestJob?.current_stage || freshness?.latest_job?.current_stage || freshness?.current_stage})
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-4 text-text-secondary text-[11px]">
-                    <span>Files: <code className="text-text-primary font-bold">{latestJob?.files_indexed ?? freshness?.latest_job?.files_indexed ?? freshness?.files_indexed ?? repoStatus?.files_indexed ?? 0}</code></span>
-                    <span>Chunks: <code className="text-text-primary font-bold">{latestJob?.chunks_generated ?? freshness?.latest_job?.chunks_generated ?? freshness?.chunks_generated ?? repoStatus?.chunks_generated ?? 0}</code></span>
-                    <span>Embeddings: <code className="text-text-primary font-bold">{latestJob?.embeddings_stored ?? freshness?.latest_job?.embeddings_stored ?? freshness?.embeddings_stored ?? repoStatus?.embeddings_stored ?? 0}</code></span>
-                    {(latestJob?.updated_at || freshness?.latest_job?.updated_at || freshness?.updated_at) && (
-                      <span className="text-text-muted text-[10px]">
-                        Last Update: {new Date(latestJob?.updated_at || freshness?.latest_job?.updated_at || freshness?.updated_at).toLocaleTimeString()}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => {
-                      fetchRepoStatus();
-                      fetchLatestJobData();
-                    }}
-                    disabled={checkingStatus}
-                    className="py-1 px-2 bg-surface-3 hover:bg-surface-4 border border-border rounded text-[10px] text-text-primary transition-colors flex items-center gap-1 disabled:opacity-50"
-                    title="Manual Refresh"
-                  >
-                    <svg className={`w-3 h-3 ${checkingStatus ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
-                    </svg>
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              {/* Cancel button row */}
-              <div className="flex flex-col gap-1.5 border-t border-online/10 pt-2.5">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleCancelIndexing}
-                    disabled={isCancelling}
-                    className="py-1 px-2.5 bg-offline/10 hover:bg-offline/20 border border-offline/30 rounded text-[10px] text-offline font-semibold transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Request cooperative cancellation"
-                  >
-                    {isCancelling ? (
-                      <>
-                        <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" /></svg>
-                        Cancelling…
-                      </>
-                    ) : 'Cancel indexing'}
-                  </button>
-                  <span className="text-[9px] text-text-muted italic">
-                    Cooperative — stops after the current stage finishes.
-                  </span>
-                </div>
-                {cancelMessage && (
-                  <span className="text-[10px] text-text-secondary">{cancelMessage}</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── Recent indexing jobs history ── */}
-          <div className="w-full max-w-xl mb-3">
-            <button
-              onClick={handleToggleJobHistory}
-              className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text-secondary transition-colors py-0.5 group"
-              aria-expanded={showJobHistory}
-            >
-              <svg
-                className={`w-3 h-3 transition-transform ${showJobHistory ? 'rotate-90' : ''}`}
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-              <span className="font-medium">Recent indexing jobs</span>
-              {loadingJobHistory && (
-                <svg className="w-3 h-3 animate-spin ml-1 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1 1 21.306 7M7 9a5 5 0 0 1 10 0" />
-                </svg>
-              )}
-            </button>
-
-            {showJobHistory && (
-              <div className="mt-2 border border-border rounded-xl overflow-hidden bg-surface-2">
-                {loadingJobHistory ? (
-                  <div className="px-4 py-3 text-[11px] text-text-muted text-center">Loading job history…</div>
-                ) : jobHistory.length === 0 ? (
-                  <div className="px-4 py-3 text-[11px] text-text-muted text-center">No indexing jobs recorded yet.</div>
-                ) : (
-                  <ul className="divide-y divide-border">
-                    {jobHistory.map((job, idx) => {
-                      const statusColor = {
-                        succeeded: 'text-online',
-                        indexing: 'text-info',
-                        failed: 'text-offline',
-                        cancelled: 'text-text-muted',
-                        queued: 'text-text-muted',
-                      }[job.status] || 'text-text-muted';
-
-                      const statusIcon = {
-                        succeeded: '✓',
-                        failed: '✕',
-                        cancelled: '⊘',
-                        indexing: '↻',
-                        queued: '…',
-                      }[job.status] || '?';
-
-                      const modeLabel = job.indexing_mode === 'incremental' ? 'Incremental' : 'Full';
-
-                      const fmtTime = (iso) => {
-                        if (!iso) return '—';
-                        try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-                        catch { return iso; }
-                      };
-                      const fmtDate = (iso) => {
-                        if (!iso) return '';
-                        try {
-                          const d = new Date(iso);
-                          return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                        } catch { return ''; }
-                      };
-
-                      return (
-                        <li key={job.job_id ?? idx} className="px-3 py-2.5 font-mono text-[10px]">
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            {/* Mode + Status */}
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-text-muted px-1 py-0.5 bg-surface-3 rounded text-[9px] font-semibold uppercase tracking-wide">
-                                {modeLabel}
-                              </span>
-                              <span className={`font-bold ${statusColor}`}>
-                                {statusIcon} {job.status}
-                              </span>
-                              {job.cancel_requested && job.status !== 'cancelled' && (
-                                <span className="text-[9px] text-text-muted italic">(cancel pending)</span>
-                              )}
-                            </div>
-
-                            {/* Timing */}
-                            <div className="flex items-center gap-1 text-text-muted text-[9px]">
-                              <span>{fmtDate(job.started_at)}</span>
-                              <span>{fmtTime(job.started_at)}</span>
-                              {job.completed_at && (
-                                <span>→ {fmtTime(job.completed_at)}</span>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Counters */}
-                          <div className="flex items-center gap-3 mt-1 text-text-secondary text-[9px]">
-                            <span>Files <code className="text-text-primary">{job.files_indexed ?? 0}</code></span>
-                            <span>Chunks <code className="text-text-primary">{job.chunks_generated ?? 0}</code></span>
-                            <span>Embeddings <code className="text-text-primary">{job.embeddings_stored ?? 0}</code></span>
-                            {job.current_stage && job.status === 'indexing' && (
-                              <span className="text-info">Stage: {job.current_stage}</span>
-                            )}
-                          </div>
-
-                          {/* Error / cancel message */}
-                          {job.error && (
-                            <div className="mt-1 text-[9px] text-offline truncate" title={job.error}>
-                              {job.error}
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-
-                {/* Refresh history button */}
-                {!loadingJobHistory && (
-                  <div className="border-t border-border px-3 py-1.5 flex justify-end">
-                    <button
-                      onClick={fetchJobHistoryData}
-                      className="text-[9px] text-text-muted hover:text-text-secondary transition-colors"
-                    >
-                      ↻ Refresh history
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {isSubdirectorySession && (
-            <StatusNotice
-              tone="warning"
-              message={`Subdirectory Session: This session is bound to a subdirectory (${session.repo_root}). Git operations or freshness status checks outside this folder may not be indexed.`}
-            />
-          )}
-          {freshnessStatus === 'branch_changed' && (
-            <StatusNotice
-              tone="warning"
-              message={`Branch Changed: The active branch (${freshness?.current_branch || 'N/A'}) differs from the indexed branch (${freshness?.indexed_branch || 'N/A'}). Incremental indexing is blocked. Run a full index to switch branches.`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'dirty_worktree' && (
-            <StatusNotice
-              tone="warning"
-              message={`Uncommitted Changes: There are uncommitted changes in your repository (${freshness?.modified_files_count ?? repoStatus?.modified_files_count ?? 0} modified, ${freshness?.untracked_files_count ?? repoStatus?.untracked_files_count ?? 0} untracked, ${freshness?.deleted_files_count ?? repoStatus?.deleted_files_count ?? 0} deleted). The indexed code segments may not match your active worktree.`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'stale_commit' && (
-            <StatusNotice
-              tone="warning"
-              message={`Repository Stale: The indexed commit (${(freshness?.indexed_commit_sha || repoStatus?.indexed_commit_sha)?.slice(0, 7) || 'N/A'}) differs from the current commit (${(freshness?.current_commit_sha || repoStatus?.current_commit_sha)?.slice(0, 7) || 'N/A'}).`}
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Index latest')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus === 'stale_indexing' && (
-            <StatusNotice
-              tone="warning"
-              message="Indexing Stale: Indexing appears stuck or stale. You can retry indexing."
-              actionLabel={isReindexing ? 'Starting index…' : (freshnessStatus === 'indexing' ? 'Indexing…' : 'Retry Indexing')}
-              disabled={isReindexing || freshness?.can_index_latest === false || freshnessStatus === 'indexing'}
-              onAction={() => handleIndexLatest()}
-            />
-          )}
-          {freshnessStatus && freshnessStatus !== 'indexing' && (
-            <IndexPreviewPanel
-              sessionId={session.id}
-              sessionStatus={session.status}
-              updateSession={updateSession}
-              fetchFreshness={fetchFreshness}
-              fetchRepoStatus={fetchRepoStatus}
-              freshnessStatus={freshnessStatus}
-              canIndexLatest={freshness?.can_index_latest}
-              isReindexing={isReindexing}
-              sessionFreshness={session.freshness}
-            />
-          )}
+          <StatusNotice
+            tone="error"
+            message={`Reindexing Error: ${reindexingError}`}
+            actionLabel="Dismiss"
+            onAction={() => setReindexingError(null)}
+          />
         </div>
       )}
 
@@ -925,13 +684,17 @@ export default function SessionView({
                 style={{ minHeight: '24px', maxHeight: '84px' }}
               />
               <button
-                onClick={handleSend}
-                disabled={isLoading || !input.trim() || !canChat}
-                title="Send (Enter)"
-                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-                style={{ color: '#0a0a0a' }}
+                onClick={isLoading ? cancelActiveQuery : handleSend}
+                disabled={!isLoading && (!input.trim() || !canChat)}
+                title={isLoading ? "Stop generating" : "Send (Enter)"}
+                className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-base transition-all duration-150 ${
+                  isLoading
+                    ? 'bg-offline text-text-primary hover:bg-offline/80'
+                    : 'bg-text-primary text-[#0a0a0a] hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed'
+                }`}
+                style={isLoading ? undefined : { color: '#0a0a0a' }}
               >
-                {isLoading ? <SpinnerIcon /> : <SendIcon />}
+                {isLoading ? <StopIcon /> : <SendIcon />}
               </button>
             </div>
           </div>
@@ -967,13 +730,17 @@ export default function SessionView({
                   style={{ minHeight: '24px', maxHeight: '84px' }}
                 />
                 <button
-                  onClick={handleSend}
-                  disabled={isLoading || !input.trim() || !canChat}
-                  title="Send (Enter)"
-                  className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-text-primary text-base hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
-                  style={{ color: '#0a0a0a' }}
+                  onClick={isLoading ? cancelActiveQuery : handleSend}
+                  disabled={!isLoading && (!input.trim() || !canChat)}
+                  title={isLoading ? "Stop generating" : "Send (Enter)"}
+                  className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-base transition-all duration-150 ${
+                    isLoading
+                      ? 'bg-offline text-text-primary hover:bg-offline/80'
+                      : 'bg-text-primary text-[#0a0a0a] hover:bg-text-secondary disabled:opacity-30 disabled:cursor-not-allowed'
+                  }`}
+                  style={isLoading ? undefined : { color: '#0a0a0a' }}
                 >
-                  {isLoading ? <SpinnerIcon /> : <SendIcon />}
+                  {isLoading ? <StopIcon /> : <SendIcon />}
                 </button>
               </div>
             </div>
@@ -1164,6 +931,14 @@ function SendIcon() {
   );
 }
 
+function StopIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="10" rx="1" />
+    </svg>
+  );
+}
+
 function SpinnerIcon() {
   return (
     <svg
@@ -1281,6 +1056,13 @@ const PROVIDER_MODEL_PRESETS = {
       label: 'Default / AI Credits',
       short: '🪙 GPT-5.4',
       tooltip: 'GPT-5.4 Mini via AI Credits. Fast and cost-effective.',
+    },
+    {
+      value: 'deepseek/deepseek-v4-flash',
+      name: 'DeepSeek v4 Flash',
+      label: 'DeepSeek v4 Flash via AI Credits',
+      short: '🐳 DeepSeek v4',
+      tooltip: 'DeepSeek v4 Flash via AI Credits. Ultra-fast and cost-effective.',
     },
   ],
 };
@@ -1503,6 +1285,63 @@ function InfoIcon() {
   );
 }
 
+function FileGroupSection({
+  title,
+  files,
+  colorClass,
+  isExpanded,
+  onToggleExpand,
+  showAll,
+  onToggleShowAll,
+  prefix,
+}) {
+  if (!files || files.length === 0) return null;
+  const visibleFiles = showAll ? files : files.slice(0, 5);
+  const hasMore = files.length > 5;
+
+  return (
+    <div className="border border-border rounded-lg bg-surface-1 overflow-hidden mb-2">
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        className="w-full flex items-center justify-between p-2.5 bg-surface-2 hover:bg-surface-3 transition-colors text-left"
+      >
+        <span className={`font-semibold tracking-wide uppercase text-[9px] ${colorClass}`}>
+          {title} ({files.length})
+        </span>
+        <svg
+          className={`w-3.5 h-3.5 text-text-muted transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+
+      {isExpanded && (
+        <div className="p-2.5 space-y-1 text-[10px] divide-y divide-border/20 border-t border-border/50 max-h-[250px] overflow-y-auto bg-surface-1">
+          {visibleFiles.map((file) => (
+            <div key={file} className="py-1 flex items-center justify-between text-text-secondary select-text font-mono truncate" title={file}>
+              <span className="truncate">{prefix} {file}</span>
+            </div>
+          ))}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={onToggleShowAll}
+              className="w-full text-center text-text-secondary hover:text-text-primary py-1.5 mt-1 border-t border-dashed border-border/30 text-[9px] uppercase tracking-wider font-semibold transition-colors"
+            >
+              {showAll ? 'Show less' : `Show ${files.length - 5} more`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IndexPreviewPanel({
   sessionId,
   sessionStatus,
@@ -1514,7 +1353,6 @@ function IndexPreviewPanel({
   isReindexing,
   sessionFreshness
 }) {
-  const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState(null);
@@ -1524,8 +1362,18 @@ function IndexPreviewPanel({
   const [incrementalSuccess, setIncrementalSuccess] = useState(null);
   const [isTriggering, setIsTriggering] = useState(false);
 
-  const handleToggle = async () => {
-    if (!isOpen) {
+  const [showAllModified, setShowAllModified] = useState(false);
+  const [showAllAdded, setShowAllAdded] = useState(false);
+  const [showAllDeleted, setShowAllDeleted] = useState(false);
+  const [showAllUnchanged, setShowAllUnchanged] = useState(false);
+
+  const [isModifiedExpanded, setIsModifiedExpanded] = useState(true);
+  const [isAddedExpanded, setIsAddedExpanded] = useState(true);
+  const [isDeletedExpanded, setIsDeletedExpanded] = useState(true);
+  const [isUnchangedExpanded, setIsUnchangedExpanded] = useState(false);
+
+  useEffect(() => {
+    async function loadPreview() {
       setLoading(true);
       setError(null);
       setIncrementalError(null);
@@ -1539,8 +1387,8 @@ function IndexPreviewPanel({
         setLoading(false);
       }
     }
-    setIsOpen(!isOpen);
-  };
+    loadPreview();
+  }, [sessionId]);
 
   const handleIndexIncremental = async () => {
     if (isTriggering || isReindexing || sessionStatus === 'indexing') return;
@@ -1578,202 +1426,208 @@ function IndexPreviewPanel({
     }
   };
 
-  const hasPreview = !!preview;
-  const estimatedFiles = preview?.estimated_files_to_update ?? 0;
   const isSessionIndexing = sessionStatus === 'indexing' || freshnessStatus === 'indexing' || isReindexing;
   const canIndex = canIndexLatest !== false;
 
+  const modifiedFiles = preview?.changed_files || [];
+  const addedFiles = preview?.added_files || [];
+  const deletedFiles = preview?.deleted_files || [];
+  const unchangedFiles = preview?.unchanged_files || [];
+
   const isButtonEnabled =
-    hasPreview &&
-    estimatedFiles > 0 &&
-    !isSessionIndexing &&
-    canIndex &&
-    preview?.can_incremental_reindex !== false &&
-    !isIncrementalDisabled;
+    preview &&
+    preview.can_incremental_reindex === true &&
+    !isSessionIndexing;
+
+  let blockMessage = null;
+  let blockType = '';
+
+  const blockReason = preview?.incremental_block_reason || '';
+
+  if (isIncrementalDisabled || blockReason === 'feature_disabled') {
+    blockMessage = "Incremental indexing is not enabled on this server.";
+    blockType = 'error';
+  } else if (blockReason === 'branch_changed') {
+    blockMessage = "Incremental indexing is blocked because the active branch differs from the indexed branch. Use Index latest to switch branches.";
+    blockType = 'error';
+  } else if (blockReason === 'metadata_unavailable') {
+    blockMessage = "Incremental metadata is unavailable. Use Index latest first.";
+    blockType = 'warning';
+  } else if (blockReason === 'session_failed') {
+    blockMessage = "This session is in a failed state. Use Index latest to recover before running incremental indexing.";
+    blockType = 'error';
+  } else if (blockReason === 'active_indexing') {
+    blockMessage = "Indexing is already running.";
+    blockType = 'info';
+  } else if (blockReason === 'no_changes') {
+    blockMessage = "No changed files detected.";
+    blockType = 'info';
+  } else if (blockReason === 'unknown') {
+    blockMessage = "Incremental indexing is unavailable for the current session state. Use Index latest as fallback.";
+    blockType = 'warning';
+  }
 
   return (
-    <div className="w-full max-w-xl mb-4 font-mono text-xs select-none">
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface-3 hover:bg-surface-4 text-[10px] uppercase tracking-wider text-text-secondary transition-all"
-      >
-        <span>{isOpen ? 'Hide Index Preview' : 'Show Index Preview'}</span>
-        <svg
-          className={`w-3 h-3 transform transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+    <div className="w-full flex flex-col gap-3 font-mono text-xs select-none">
+      {loading && (
+        <div className="flex items-center justify-center py-6 text-text-muted">
+          <span className="animate-pulse">Loading preview data...</span>
+        </div>
+      )}
 
-      {isOpen && (
-        <div className="mt-2.5 rounded-xl border border-border bg-surface-2 p-4 shadow-lg animate-fadeIn flex flex-col gap-3">
-          {loading && (
-            <div className="flex items-center justify-center py-6 text-text-muted">
-              <span className="animate-pulse">Loading preview data...</span>
+      {error && (
+        <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-3">
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && preview && (
+        <div className="flex flex-col gap-4">
+          {/* Summary Cards Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Modified</span>
+              <span className="text-sm font-semibold text-warning">{modifiedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Added</span>
+              <span className="text-sm font-semibold text-online">{addedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Deleted</span>
+              <span className="text-sm font-semibold text-offline">{deletedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Unchanged</span>
+              <span className="text-sm font-semibold text-text-secondary">{unchangedFiles.length}</span>
+            </div>
+            <div className="bg-surface-2 border border-border p-2.5 rounded-lg text-center flex flex-col justify-center col-span-2 sm:col-span-1">
+              <span className="text-[9px] text-text-muted uppercase tracking-wider mb-0.5">Total Updates</span>
+              <span className="text-sm font-semibold text-text-primary">{preview.estimated_files_to_update || 0}</span>
+            </div>
+          </div>
+
+          {/* Block/Friendly message box if present */}
+          {blockMessage && (
+            <div className={`p-3 rounded-lg flex items-start gap-2 border text-[10px] ${
+              blockType === 'error'
+                ? 'bg-offline/10 border-offline/20 text-offline'
+                : blockType === 'warning'
+                ? 'bg-warning/10 border-warning/20 text-warning'
+                : 'bg-surface-2 border-border text-text-muted'
+            }`}>
+              <InfoIcon />
+              <span>{blockMessage}</span>
             </div>
           )}
 
-          {error && (
-            <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-3">
-              {error}
+          {/* Main layout: left side files list, right side actions */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Left Area: Files List (takes 2 cols on md) */}
+            <div className="md:col-span-2 flex flex-col gap-2 max-h-[350px] overflow-y-auto pr-1">
+              <FileGroupSection
+                title="Modified Files"
+                files={modifiedFiles}
+                colorClass="text-warning"
+                isExpanded={isModifiedExpanded}
+                onToggleExpand={() => setIsModifiedExpanded(!isModifiedExpanded)}
+                showAll={showAllModified}
+                onToggleShowAll={() => setShowAllModified(!showAllModified)}
+                prefix="~"
+              />
+              <FileGroupSection
+                title="Added Files"
+                files={addedFiles}
+                colorClass="text-online"
+                isExpanded={isAddedExpanded}
+                onToggleExpand={() => setIsAddedExpanded(!isAddedExpanded)}
+                showAll={showAllAdded}
+                onToggleShowAll={() => setShowAllAdded(!showAllAdded)}
+                prefix="+"
+              />
+              <FileGroupSection
+                title="Deleted Files"
+                files={deletedFiles}
+                colorClass="text-offline"
+                isExpanded={isDeletedExpanded}
+                onToggleExpand={() => setIsDeletedExpanded(!isDeletedExpanded)}
+                showAll={showAllDeleted}
+                onToggleShowAll={() => setShowAllDeleted(!showAllDeleted)}
+                prefix="-"
+              />
+              <FileGroupSection
+                title="Unchanged Files"
+                files={unchangedFiles}
+                colorClass="text-text-muted"
+                isExpanded={isUnchangedExpanded}
+                onToggleExpand={() => setIsUnchangedExpanded(!isUnchangedExpanded)}
+                showAll={showAllUnchanged}
+                onToggleShowAll={() => setShowAllUnchanged(!showAllUnchanged)}
+                prefix="•"
+              />
             </div>
-          )}
 
-          {!loading && !error && preview && (
-            <>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 border-b border-border pb-3 text-[11px] text-text-muted">
-                <div className="col-span-2 sm:col-span-1">
-                  <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Branch info</div>
-                  <span className="text-text-primary font-semibold truncate block" title={`Indexed: ${preview.indexed_branch || 'N/A'} | Current: ${preview.current_branch || 'N/A'}`}>
-                    {preview.branch_changed ? (
-                      <span className="text-warning font-bold">{preview.indexed_branch || 'N/A'} ➔ {preview.current_branch || 'N/A'}</span>
-                    ) : (
-                      preview.current_branch || 'N/A'
-                    )}
-                  </span>
-                </div>
-                <div>
-                  <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Estimated Updates</div>
-                  <span className="text-text-primary font-bold">
-                    {preview.estimated_files_to_update ?? 0}
-                  </span>
-                </div>
-                <div>
-                  <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Changes</div>
-                  <div className="flex gap-2 font-mono text-[10px] mt-0.5">
-                    <span className="text-warning font-semibold" title="Modified files">
-                      ~{preview.changed_files?.length ?? preview.modified_files_count ?? 0}
-                    </span>
-                    <span className="text-online font-semibold" title="Added files">
-                      +{preview.added_files?.length ?? preview.untracked_files_count ?? 0}
-                    </span>
-                    <span className="text-offline font-semibold" title="Deleted files">
-                      -{preview.deleted_files?.length ?? preview.deleted_files_count ?? 0}
-                    </span>
-                  </div>
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <div className="text-[9px] uppercase tracking-wider text-text-muted mb-0.5">Commit Comparison</div>
-                  <div className="flex items-center gap-1.5 mt-0.5 truncate">
-                    <code className="bg-surface-3 px-1 py-0.5 rounded text-[9px]">{preview.indexed_commit_sha?.slice(0, 7) || 'N/A'}</code>
-                    <span>➔</span>
-                    <code className={`bg-surface-3 px-1 py-0.5 rounded text-[9px] ${preview.indexed_commit_sha !== preview.current_commit_sha ? 'text-warning font-semibold' : ''}`}>{preview.current_commit_sha?.slice(0, 7) || 'N/A'}</code>
-                  </div>
-                </div>
-              </div>
+            {/* Right Area: Buttons & Actions (takes 1 col on md) */}
+            <div className="flex flex-col justify-between gap-4 md:border-l border-border md:pl-6">
+              <div className="flex flex-col gap-3">
+                <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Actions</div>
+                
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleIndexIncremental}
+                    disabled={!isButtonEnabled || isTriggering}
+                    className={`px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                      isButtonEnabled && !isTriggering
+                        ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer font-bold'
+                        : 'bg-surface-2 border border-border text-text-muted cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    {isTriggering ? 'Triggering...' : 'Index changed files'}
+                  </button>
 
-              {preview.branch_changed && (
-                <div className="text-warning bg-warning/10 border border-warning/20 rounded-lg p-3 text-[11px] leading-normal flex items-start gap-2">
-                  <span className="mt-0.5 text-warning shrink-0"><InfoIcon /></span>
-                  <div>
-                    <strong>Branch mismatch:</strong> {preview.message || 'The active working tree branch has changed. Incremental indexing is blocked. Please run a full index to update the session.'}
-                  </div>
-                </div>
-              )}
-
-              {preview.estimated_files_to_update === 0 ? (
-                <div className="text-center py-4 text-text-muted">
-                  No pending index changes detected. Your index is up to date.
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {/* Changed list */}
-                  {preview.changed_files && preview.changed_files.length > 0 && (
-                    <div>
-                      <div className="text-[9px] uppercase tracking-wider text-warning font-bold mb-1.5">
-                        Modified Files ({preview.changed_files.length})
-                      </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-3 rounded-lg border border-border p-2 space-y-1">
-                        {preview.changed_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            ~ {file}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Added list */}
-                  {preview.added_files && preview.added_files.length > 0 && (
-                    <div>
-                      <div className="text-[9px] uppercase tracking-wider text-online font-bold mb-1.5">
-                        Added / Untracked Files ({preview.added_files.length})
-                      </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-3 rounded-lg border border-border p-2 space-y-1">
-                        {preview.added_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            + {file}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Deleted list */}
-                  {preview.deleted_files && preview.deleted_files.length > 0 && (
-                    <div>
-                      <div className="text-[9px] uppercase tracking-wider text-offline font-bold mb-1.5">
-                        Deleted Files ({preview.deleted_files.length})
-                      </div>
-                      <div className="max-h-24 overflow-y-auto bg-surface-3 rounded-lg border border-border p-2 space-y-1">
-                        {preview.deleted_files.map((file) => (
-                          <div key={file} className="text-text-secondary select-text truncate" title={file}>
-                            - {file}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-3 border-t border-border pt-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleIndexIncremental}
-                      disabled={!isButtonEnabled || isTriggering}
-                      className={`px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider font-semibold transition-all ${
-                        isButtonEnabled && !isTriggering
-                          ? 'bg-warning/20 border border-warning/40 hover:bg-warning/30 text-warning shadow-md shadow-warning/5 cursor-pointer'
-                          : 'bg-surface-3 border border-border text-text-muted cursor-not-allowed'
-                      }`}
-                    >
-                      {isTriggering ? 'Triggering...' : 'Index changed files'}
-                    </button>
+                  <div className="flex items-center gap-1.5">
                     <span className="bg-warning/10 border border-warning/30 text-warning px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase">
                       Experimental
                     </span>
+                    <span className="text-[9px] text-text-muted italic">
+                      Incremental Flow (V1)
+                    </span>
                   </div>
-                  <span className="text-[10px] text-text-muted italic">
-                    Incremental Flow (V1)
-                  </span>
+                </div>
+
+                {/* Safety Note */}
+                <div className="flex items-start gap-1.5 bg-surface-2 p-2.5 rounded-lg border border-border text-[9px] text-text-muted leading-relaxed">
+                  <InfoIcon />
+                  <span>Unchanged files are preserved. Only added, modified, and deleted files are processed.</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {/* Action Meanings */}
+                <div className="bg-surface-2/50 border border-border/50 rounded-lg p-2.5 space-y-1.5 text-[9px] text-text-muted">
+                  <div>
+                    <strong className="text-text-primary">Index changed files:</strong> updates only added, modified, and deleted files.
+                  </div>
+                  <div>
+                    <strong className="text-text-primary">Index latest:</strong> full clean reindex (fallback).
+                  </div>
                 </div>
 
                 {incrementalError && (
-                  <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2.5 mt-1">
+                  <div className="text-offline bg-offline/10 border border-offline/20 rounded-lg p-2 text-[10px]">
                     {incrementalError}
                   </div>
                 )}
 
                 {incrementalSuccess && (
-                  <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2.5 mt-1">
+                  <div className="text-online bg-online/10 border border-online/20 rounded-lg p-2 text-[10px]">
                     {incrementalSuccess}
                   </div>
                 )}
-
-                <div className="text-[9px] text-text-muted leading-relaxed">
-                  * Triggers partial indexing of added/modified/deleted files only. Use <strong className="text-text-secondary">Index latest</strong> above for a full clean rebuild.
-                </div>
               </div>
-            </>
-          )}
+            </div>
+          </div>
         </div>
       )}
     </div>
