@@ -13,3 +13,15 @@ __pycache__/
 eval_output.txt
 out*.txt
 failures_analysis.json
+
+# Local AI tooling configs — not project source
+.agents/
+.codex/
+.continue/agents/
+
+# Benchmark caches
+.benchmarks/
+backend/.benchmarks/
+
+# Scratch/debug scripts
+backend/scratch/
