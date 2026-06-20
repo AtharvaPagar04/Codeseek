@@ -92,13 +92,9 @@ def build_answer_trace(
     created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     retrieved_contexts = []
-    contexts_for_ragas = []
     for rank, chunk in enumerate(retrieved_chunks, start=1):
         compact = compact_context_chunk(chunk, rank)
         retrieved_contexts.append(compact)
-        contexts_for_ragas.append(compact["content"])
-
-    ragas_ready = bool(question and answer)
 
     return {
         "trace_id": trace_id,
@@ -117,13 +113,6 @@ def build_answer_trace(
         "reranker_intent": reranker_intent,
         "latency_ms": latency_ms,
         "retrieved_contexts": retrieved_contexts,
-        "ragas": {
-            "ready": ragas_ready,
-            "question": question,
-            "answer": answer,
-            "contexts": contexts_for_ragas,
-            "ground_truth": None,
-        },
         "extra": extra or {},
     }
 
@@ -171,10 +160,6 @@ if __name__ == "__main__":
     assert len(trace_data["retrieved_contexts"]) == 1
     assert trace_data["retrieved_contexts"][0]["chunk_id"] == "fake-123"
     assert trace_data["retrieved_contexts"][0]["score"] == 0.99
-    assert trace_data["ragas"]["ready"] is True
-    assert len(trace_data["ragas"]["contexts"]) == 1
-    assert trace_data["ragas"]["contexts"][0] == "def test_func():\n    pass"
-
     with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 

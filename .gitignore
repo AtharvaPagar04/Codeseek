@@ -4,4 +4,11 @@ frontend/.env
 frontend/node_modules/
 frontend/dist/
 __pycache__/
-  
+
+# Runtime artifacts
+*.db
+:memory:
+.rag_ingestion_state.json
+eval_output.txt
+out*.txt
+failures_analysis.json

@@ -9,6 +9,7 @@ from rag_ingestion.config import (
 )
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
+from retrieval.path_utils import path_metadata
 
 CONTENT_EXCERPT_CHARS = 12000
 
@@ -106,10 +107,15 @@ def _point_id(chunk: Chunk) -> str:
 
 
 def _payload(chunk: Chunk) -> dict:
+    path_fields = path_metadata(chunk.relative_path, repo_root=None)
     return {
         "chunk_id": chunk.chunk_id,
         "file_path": chunk.file_path,
         "relative_path": chunk.relative_path,
+        "normalized_path": path_fields["normalized_path"] or chunk.relative_path,
+        "filename": path_fields["filename"],
+        "basename": path_fields["basename"],
+        "extension": path_fields["extension"],
         "language": chunk.language,
         "chunk_type": chunk.chunk_type,
         "symbol_name": chunk.symbol_name,
@@ -126,6 +132,13 @@ def _payload(chunk: Chunk) -> dict:
         "parameters": chunk.parameters,
         "methods": chunk.methods,
         "file_symbols": chunk.file_symbols,
+        "symbol_role": chunk.symbol_role,
+        "defined_symbols": chunk.defined_symbols,
+        "used_symbols": chunk.used_symbols,
+        "imported_symbols": chunk.imported_symbols,
+        "source_of_truth": bool(chunk.source_of_truth),
+        "centrality_score": float(chunk.centrality_score or 0.0),
+        "exported_symbols": chunk.exported_symbols,
         "docstring": chunk.docstring,
         "summary": chunk.summary,
         "description": chunk.description,
@@ -174,5 +187,3 @@ def delete_vectors_by_ids(
         collection_name=collection,
         points_selector=PointIdsList(points=vector_ids),
     )
-
-

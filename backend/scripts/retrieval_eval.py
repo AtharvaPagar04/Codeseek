@@ -240,6 +240,24 @@ def _expected_text_score(actual: str, expected: str) -> float:
     return 1.0 if _norm(actual) == _norm(expected) else 0.0
 
 
+def _first_source_match_score(items: list[dict], expected_sources: list[dict], expected_files: list[str], expected_symbols: list[str]) -> float:
+    if not expected_sources and not expected_files and not expected_symbols:
+        return 1.0
+    if not items:
+        return 0.0
+    item = items[0]
+    return 1.0 if (
+        _matches_expectation(item, expected_sources)
+        or _matches_file_or_symbol(item, expected_files, expected_symbols)
+    ) else 0.0
+
+
+def _targeting_bool_score(actual: bool, expected: bool | None) -> float:
+    if expected is None:
+        return 1.0
+    return 1.0 if bool(actual) is bool(expected) else 0.0
+
+
 def _average_scores(values: list[float]) -> float:
     if not values:
         return 1.0
@@ -474,6 +492,20 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
     expected_no_answer = bool(case.get("expected_no_answer", False))
     expected_response_mode = str(case.get("expected_response_mode", "")).strip()
     expected_answer_terms = case.get("expected_answer_terms", [])
+    expected_exact_path_hit = case.get("expected_exact_path_hit")
+    expected_filename_hit = case.get("expected_filename_hit")
+    expected_symbol_hit = case.get("expected_symbol_hit")
+    expected_definition_boost = case.get("expected_definition_boost")
+    expected_central_file = case.get("expected_central_file")
+    expected_alias_resolution = case.get("expected_alias_resolution")
+    expected_numeric_values = case.get("expected_numeric_values", [])
+    expected_primary_files = case.get("expected_primary_files", [])
+    forbidden_primary_prefixes = case.get("forbidden_primary_prefixes", [])
+    forbidden_primary_files = case.get("forbidden_primary_files", [])
+    expected_answer_contains = case.get("expected_answer_contains", [])
+    expected_answer_not_contains = case.get("expected_answer_not_contains", [])
+    behavior_truth_source_priority = case.get("behavior_truth_source_priority", [])
+    
 
     import time
 
@@ -503,8 +535,38 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
     }
     expected_response_mode_score = 1.0
     expected_answer_term_score = 1.0
+    top1_expected_source_score = _first_source_match_score(shown_sources, expected_sources, expected_files, expected_symbols)
+    hit_at_5_expected_source_score = float(_hit_at_k(shown_sources, expected_sources, expected_files, expected_symbols, 5))
+    exact_path_hit_score = 1.0
+    filename_hit_score = 1.0
+    symbol_hit_score = 1.0
+    definition_rank_score = 1.0
+    central_file_hit_score = 1.0
+    alias_resolution_hit_score = 1.0
+    numeric_fidelity_score = 1.0
+    false_absence_score = 1.0
+    source_card_alignment_score = 1.0
+    primary_source_hit_at_1_score = 1.0
+    rendered_source_hit_at_3_score = 1.0
+    expected_primary_in_rendered_score = 1.0
+    forbidden_primary_violation_score = 1.0
+    answer_fact_correct_score = 1.0
+    behavior_grounding_correct_score = 1.0
+    wrong_evidence_guard_triggered_score = 1.0
+    claimed_primary_source_correct_score = 1.0
+    
 
-    if expected_response_mode or expected_answer_terms:
+    if (
+        expected_response_mode
+        or expected_answer_terms
+        or expected_exact_path_hit is not None
+        or expected_filename_hit is not None
+        or expected_symbol_hit is not None
+        or expected_definition_boost is not None
+        or expected_central_file is not None
+        or expected_alias_resolution is not None
+        or expected_numeric_values
+    ):
         answer, response_sources, _, meta = run_query(
             query,
             ConversationMemory(1),
@@ -523,6 +585,83 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
         expected_answer_term_score = _expected_answer_term_score(
             answer, expected_answer_terms
         )
+        retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
+        source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
+        validation = meta.get("validation") if isinstance(meta.get("validation"), dict) else {}
+        numeric_grounding = validation.get("numeric_grounding") if isinstance(validation.get("numeric_grounding"), dict) else {}
+        top1_expected_source_score = _first_source_match_score(response_sources, expected_sources, expected_files, expected_symbols)
+        hit_at_5_expected_source_score = float(_hit_at_k(response_sources, expected_sources, expected_files, expected_symbols, 5))
+        exact_path_hit_score = _targeting_bool_score(bool(retrieval_targeting.get("exact_path_hits")), expected_exact_path_hit)
+        filename_hit_score = _targeting_bool_score(bool(retrieval_targeting.get("filename_hits")), expected_filename_hit)
+        symbol_hit_score = _targeting_bool_score(bool(retrieval_targeting.get("symbol_hits")), expected_symbol_hit)
+        definition_rank_score = _targeting_bool_score(bool(retrieval_targeting.get("definition_boost_paths")), expected_definition_boost)
+        central_file_hit_score = _targeting_bool_score(bool(retrieval_targeting.get("central_file_paths")), expected_central_file)
+        alias_resolution_hit_score = _targeting_bool_score(bool(retrieval_targeting.get("alias_resolved_paths")), expected_alias_resolution)
+        if expected_numeric_values:
+            verified = {str(value) for value in (numeric_grounding.get("verified_values") or [])}
+            expected_set = {str(value) for value in expected_numeric_values}
+            numeric_fidelity_score = 1.0 if expected_set and expected_set.issubset(verified) else 0.0
+        false_absence_score = 0.0 if any(term in (answer or "").lower() for term in ("not present", "does not exist", "missing", "absent")) and not expected_no_answer else 1.0
+        source_card_alignment_score = 1.0 if bool(source_alignment.get("aligned", True)) else 0.0
+
+        final_source_selection = meta.get("final_source_selection") if isinstance(meta.get("final_source_selection"), dict) else {}
+        
+        # primary_source_hit_at_1
+        top1_primary = shown_sources[0].get("relative_path", "") if shown_sources else ""
+        if expected_primary_files:
+            primary_source_hit_at_1_score = 1.0 if any(str(p).lower() == top1_primary.lower() for p in expected_primary_files) else 0.0
+            
+            # expected_primary_in_rendered_sources
+            rendered_paths = [s.get("relative_path", "").lower() for s in shown_sources]
+            expected_primary_in_rendered_score = 1.0 if any(p.lower() in rendered_paths for p in expected_primary_files) else 0.0
+            
+            # rendered_source_hit_at_3
+            rendered_source_hit_at_3_score = 1.0 if any(p.lower() in rendered_paths[:3] for p in expected_primary_files) else 0.0
+            
+        # forbidden_primary_violation_rate
+        if forbidden_primary_prefixes or forbidden_primary_files:
+            violation = False
+            for s in [s for s in shown_sources if s.get("expansion_type") == "primary"]:
+                path = s.get("relative_path", "").lower()
+                if path in [p.lower() for p in forbidden_primary_files]:
+                    violation = True
+                if any(path.startswith(p.lower()) for p in forbidden_primary_prefixes):
+                    violation = True
+            forbidden_primary_violation_score = 0.0 if violation else 1.0
+            
+        # answer_fact_correct
+        if expected_answer_contains:
+            answer_fact_correct_score = 1.0 if all(term.lower() in (answer or "").lower() for term in expected_answer_contains) else 0.0
+        if expected_answer_not_contains:
+            if any(term.lower() in (answer or "").lower() for term in expected_answer_not_contains):
+                answer_fact_correct_score = 0.0
+                
+        # claimed_primary_source_correct
+        if response_mode == "source_location" and expected_primary_files:
+            # Check if answer mentions the primary file
+            claimed_primary_source_correct_score = 1.0 if any(p.lower() in (answer or "").lower() for p in expected_primary_files) else 0.0
+            
+        # wrong_evidence_guard_triggered
+        fw_routing = query_info.get("framework_routing", {}) if query_info else {}
+        if fw_routing.get("wrong_evidence_guard_applied"):
+            wrong_evidence_guard_triggered_score = 1.0
+        else:
+            wrong_evidence_guard_triggered_score = 0.0
+            
+        # behavior_grounding_correct
+        if behavior_truth_source_priority:
+            # simple check: if service behavior is expected, and frontend UI is the only thing cited
+            # we'll use answer_fact_correct as proxy, or if forbidden_primary is violated
+            behavior_grounding_correct_score = answer_fact_correct_score * forbidden_primary_violation_score
+
+    primary_source_hit_at_1_score = locals().get('primary_source_hit_at_1_score', 1.0)
+    rendered_source_hit_at_3_score = locals().get('rendered_source_hit_at_3_score', 1.0)
+    expected_primary_in_rendered_score = locals().get('expected_primary_in_rendered_score', 1.0)
+    forbidden_primary_violation_score = locals().get('forbidden_primary_violation_score', 1.0)
+    answer_fact_correct_score = locals().get('answer_fact_correct_score', 1.0)
+    behavior_grounding_correct_score = locals().get('behavior_grounding_correct_score', 1.0)
+    wrong_evidence_guard_triggered_score = locals().get('wrong_evidence_guard_triggered_score', 0.0)
+    claimed_primary_source_correct_score = locals().get('claimed_primary_source_correct_score', 1.0)
 
     return {
         "id": case.get("id", ""),
@@ -538,6 +677,17 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
         "expected_no_answer_score": _expected_no_answer_score(candidates, shown_sources, expected_no_answer),
         "expected_response_mode_score": expected_response_mode_score,
         "expected_answer_term_score": expected_answer_term_score,
+        "exact_path_hit_score": exact_path_hit_score,
+        "filename_hit_score": filename_hit_score,
+        "symbol_hit_score": symbol_hit_score,
+        "definition_rank_score": definition_rank_score,
+        "central_file_hit_score": central_file_hit_score,
+        "alias_resolution_hit_score": alias_resolution_hit_score,
+        "numeric_fidelity_score": numeric_fidelity_score,
+        "false_absence_score": false_absence_score,
+        "source_card_alignment_score": source_card_alignment_score,
+        "top1_expected_source_score": top1_expected_source_score,
+        "hit_at_5_expected_source_score": hit_at_5_expected_source_score,
         "followup_decision_score": 1.0,
         "topic_shift_score": 1.0,
         "history_injection_score": 1.0,
@@ -559,7 +709,16 @@ def evaluate_case(case: dict, k: int, provider_config: dict | None = None) -> di
         "backend_latency_ms": backend_latency_ms,
         "provider_latency_ms": provider_latency_ms,
         "stage_latency_ms": stage_latency_ms,
-    }
+
+        "primary_source_hit_at_1_score": primary_source_hit_at_1_score,
+        "rendered_source_hit_at_3_score": rendered_source_hit_at_3_score,
+        "expected_primary_in_rendered_score": expected_primary_in_rendered_score,
+        "forbidden_primary_violation_score": forbidden_primary_violation_score,
+        "answer_fact_correct_score": answer_fact_correct_score,
+        "behavior_grounding_correct_score": behavior_grounding_correct_score,
+        "wrong_evidence_guard_triggered_score": wrong_evidence_guard_triggered_score,
+        "claimed_primary_source_correct_score": claimed_primary_source_correct_score,
+        }
 
 
 def _p50(values: list[int]) -> int:
@@ -593,6 +752,15 @@ def main() -> None:
     provider_config = _resolve_provider_config(args)
     results = [evaluate_case(case, args.k, provider_config=provider_config) for case in cases]
 
+
+    avg_primary_hit_1 = sum(r.get("primary_source_hit_at_1_score", 1.0) for r in results) / len(results)
+    avg_rendered_hit_3 = sum(r.get("rendered_source_hit_at_3_score", 1.0) for r in results) / len(results)
+    avg_expected_primary = sum(r.get("expected_primary_in_rendered_score", 1.0) for r in results) / len(results)
+    avg_forbidden = sum(r.get("forbidden_primary_violation_score", 1.0) for r in results) / len(results)
+    avg_fact_correct = sum(r.get("answer_fact_correct_score", 1.0) for r in results) / len(results)
+    avg_behavior = sum(r.get("behavior_grounding_correct_score", 1.0) for r in results) / len(results)
+    avg_wrong_guard = sum(r.get("wrong_evidence_guard_triggered_score", 0.0) for r in results) / len(results)
+    avg_claimed = sum(r.get("claimed_primary_source_correct_score", 1.0) for r in results) / len(results)
     avg_hit = sum(r["hit_at_k"] for r in results) / len(results)
     avg_mrr = sum(r["mrr_at_k"] for r in results) / len(results)
     avg_cov = sum(r["citation_coverage"] for r in results) / len(results)
@@ -603,6 +771,18 @@ def main() -> None:
     avg_no_answer = sum(r["expected_no_answer_score"] for r in results) / len(results)
     avg_response_mode = sum(r["expected_response_mode_score"] for r in results) / len(results)
     avg_answer_terms = sum(r["expected_answer_term_score"] for r in results) / len(results)
+    avg_exact_path_hit = sum(r["exact_path_hit_score"] for r in results) / len(results)
+    avg_filename_hit = sum(r["filename_hit_score"] for r in results) / len(results)
+    avg_symbol_hit = sum(r["symbol_hit_score"] for r in results) / len(results)
+    avg_definition_rank = sum(r["definition_rank_score"] for r in results) / len(results)
+    avg_central_file = sum(r["central_file_hit_score"] for r in results) / len(results)
+    avg_alias_resolution = sum(r["alias_resolution_hit_score"] for r in results) / len(results)
+    avg_numeric_fidelity = sum(r["numeric_fidelity_score"] for r in results) / len(results)
+    avg_false_absence_score = sum(r["false_absence_score"] for r in results) / len(results)
+    false_absence_rate = 1.0 - avg_false_absence_score
+    avg_source_alignment = sum(r["source_card_alignment_score"] for r in results) / len(results)
+    avg_top1_expected_source = sum(r["top1_expected_source_score"] for r in results) / len(results)
+    avg_hit5_expected_source = sum(r["hit_at_5_expected_source_score"] for r in results) / len(results)
     avg_followup = sum(r["followup_decision_score"] for r in results) / len(results)
     avg_topic_shift = sum(r["topic_shift_score"] for r in results) / len(results)
     avg_history_injection = sum(r["history_injection_score"] for r in results) / len(results)
@@ -650,6 +830,15 @@ def main() -> None:
     print("Retrieval Eval Results")
     print("======================")
     print(f"Cases: {len(results)}")
+    print(f"primary_source_hit_at_1: {avg_primary_hit_1:.3f}")
+    print(f"rendered_source_hit_at_3: {avg_rendered_hit_3:.3f}")
+    print(f"expected_primary_in_rendered_sources: {avg_expected_primary:.3f}")
+    print(f"forbidden_primary_violation_score: {avg_forbidden:.3f}")
+    print(f"answer_fact_correct: {avg_fact_correct:.3f}")
+    print(f"behavior_grounding_correct: {avg_behavior:.3f}")
+    print(f"wrong_evidence_guard_triggered_rate: {avg_wrong_guard:.3f}")
+    print(f"claimed_primary_source_correct: {avg_claimed:.3f}")
+    
     print(f"hit@{args.k}: {avg_hit:.3f}")
     print(f"mrr@{args.k}: {avg_mrr:.3f}")
     print(f"citation_coverage: {avg_cov:.3f}")
@@ -660,6 +849,17 @@ def main() -> None:
     print(f"expected_no_answer_score: {avg_no_answer:.3f}")
     print(f"expected_response_mode_score: {avg_response_mode:.3f}")
     print(f"expected_answer_term_score: {avg_answer_terms:.3f}")
+    print(f"exact_path_hit_rate: {avg_exact_path_hit:.3f}")
+    print(f"filename_hit_rate: {avg_filename_hit:.3f}")
+    print(f"symbol_hit_rate: {avg_symbol_hit:.3f}")
+    print(f"definition_rank_score: {avg_definition_rank:.3f}")
+    print(f"central_file_hit_rate: {avg_central_file:.3f}")
+    print(f"alias_resolution_hit_rate: {avg_alias_resolution:.3f}")
+    print(f"numeric_fidelity_score: {avg_numeric_fidelity:.3f}")
+    print(f"false_absence_rate: {false_absence_rate:.3f}")
+    print(f"source_card_alignment_score: {avg_source_alignment:.3f}")
+    print(f"top1_expected_source_rate: {avg_top1_expected_source:.3f}")
+    print(f"hit_at_5_expected_source_rate: {avg_hit5_expected_source:.3f}")
     print(f"topic_shift_accuracy: {avg_topic_shift:.3f}")
     print(f"followup_precision: {avg_followup_precision:.3f}")
     print(f"followup_recall: {avg_followup_recall:.3f}")
@@ -713,6 +913,14 @@ def main() -> None:
             f"expected_no_answer={r['expected_no_answer_score']:.2f} "
             f"expected_response_mode={r['expected_response_mode_score']:.2f} "
             f"expected_answer_terms={r['expected_answer_term_score']:.2f} "
+            f"exact_path={r['exact_path_hit_score']:.2f} "
+            f"filename_hit={r['filename_hit_score']:.2f} "
+            f"symbol_hit={r['symbol_hit_score']:.2f} "
+            f"definition_rank={r['definition_rank_score']:.2f} "
+            f"central_file={r['central_file_hit_score']:.2f} "
+            f"alias_resolution={r['alias_resolution_hit_score']:.2f} "
+            f"numeric_fidelity={r['numeric_fidelity_score']:.2f} "
+            f"source_alignment={r['source_card_alignment_score']:.2f} "
             f"response_mode={r['response_mode'] or '-'} "
             f"latency_profile={r['latency_profile']} "
             f"backend_latency_ms={r['backend_latency_ms']} "

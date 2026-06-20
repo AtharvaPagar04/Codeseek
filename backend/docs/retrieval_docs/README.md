@@ -20,23 +20,10 @@ Current response-quality state:
 - phase-1 flow answer bodies avoid duplicated `Key evidence`/`Sources` sections and rely on returned API source cards
 - phase-1 flow context/source correctness is accepted for now; prose/presentation polish is deferred to the later LLM/rendering phase
 - next deterministic phase-2 target is imported-data-backed explanation beyond current frontend patterns
-- RAGAS validation now has a dedicated gold fixture, per-response runner, markdown/JSON report output, a threshold checker, per-family baseline snapshot/comparison support, a frontend scorecard modal, and a small human-reviewed benchmark set for release signoff
-- [RAGAS Human Review Benchmark](./ragas_human_review_benchmark_v1.json)
-- [RAGAS Family Baseline Snapshot](./ragas_family_baseline_latest.json)
-
 - [Current Retrieval Strategy](./current_retrieval_strategy.md)
-- [Response Quality Refinement Plan](./response_quality_refinement_plan.md)
-- [RAGAS Validation Design](./ragas_validation_design.md)
 - [Local LLM API Config Plan](./local_llm_api_config_plan.md)
 - [Manual Response-Review Checklist](./manual_response_review_checklist.md)
-- [Embedding Model Benchmark Results](./embedding_model_benchmark_results.md)
-- [Lexical Layer Benchmark Results](./lexical_layer_benchmark_results.md)
 - [Multi-Language Support Boundaries](./multi_language_support_boundaries.md)
-- [Lexical Retrieval Baseline Results](./eval_results_lexical_baseline.md)
-- [Latest Multi-Repo Eval Results](./eval_results_multi_repo_latest.json)
-- [CodeSeek Flow Phase 1/2 Eval](./eval_codeseek_flow_phase1.json)
-- [Multi-Repo Eval Suite](./eval_suite_multi_repo.json)
-- [Multi-Repo Eval Thresholds](./eval_thresholds_multi_repo.json)
-- [Retrieval Pipeline Docs](./retrieval_pipeline_docs.md)
-- [Retrieval Pipeline Architecture](./retrieval_pipeline_architecture.md)
-- [Architecture](./architecture.md)
+- [CodeSeek Flow Phase 1/2 Eval](../../evals/datasets/eval_codeseek_flow_phase1.json)
+- [Multi-Repo Eval Suite](../../evals/datasets/eval_suite_multi_repo.json)
+- [Framework-Aware App Routing Eval](../../evals/datasets/eval_framework_app_routing.json) (Added to validate generalized framework-aware source routing across typical full-stack repositories, preventing frontend/config noise from overriding canonical backend implementation files.)

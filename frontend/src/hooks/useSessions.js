@@ -27,10 +27,6 @@ export const normalizeSessionRecord = (sessionData, current = null, options = {}
     last_active: options.lastActive || current?.last_active || sessionData.updated_at || createdAt,
     threads: current?.threads || [],
     active_thread_id: current?.active_thread_id || current?.threads?.[0]?.id || null,
-    refine_labels_with_llm: sessionData.refine_labels_with_llm ?? current?.refine_labels_with_llm ?? false,
-    indexing_options: sessionData.indexing_options || current?.indexing_options || {
-      refine_labels_with_llm: sessionData.refine_labels_with_llm ?? current?.refine_labels_with_llm ?? false
-    },
     repo_status: sessionData.repo_status || current?.repo_status || null,
   };
 };

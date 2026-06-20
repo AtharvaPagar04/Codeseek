@@ -145,8 +145,8 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
-                "symbol_name": "retrieval_pipeline_docs_md",
+                "relative_path": "backend/docs/retrieval_docs/current_retrieval_strategy.md",
+                "symbol_name": "current_retrieval_strategy_md",
                 "chunk_type": "file_summary",
                 "start_line": 1,
                 "end_line": 120,
@@ -198,7 +198,7 @@ class SourceFilteringTests(unittest.TestCase):
         self.assertIn("backend/retrieval/main.py", paths)
         self.assertIn("backend/rag_ingestion/main.py", paths)
         self.assertIn("backend/evals/run_safe_evals.py", paths)
-        self.assertIn("backend/docs/retrieval_docs/retrieval_pipeline_docs.md", paths)
+        self.assertIn("backend/docs/retrieval_docs/current_retrieval_strategy.md", paths)
         self.assertNotIn("_resolve_query_info", symbols)
         self.assertNotIn("LlmProviderError", symbols)
         self.assertNotIn("_llm_classify_intent", symbols)

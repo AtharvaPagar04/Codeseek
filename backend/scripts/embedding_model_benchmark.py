@@ -57,7 +57,7 @@ except ImportError as exc:
 DEFAULT_ALTERNATIVE = "BAAI/bge-base-en-v1.5"
 ALTERNATIVE_DIM = 768
 CURRENT_DIM = 384
-SUITE_CONFIG_PATH = Path("docs/retrieval_docs/eval_suite_multi_repo.json")
+SUITE_CONFIG_PATH = Path("evals/datasets/eval_suite_multi_repo.json")
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -13,7 +13,7 @@ Measures:
 Usage:
     PYTHONPATH=. .venv/bin/python scripts/lexical_layer_benchmark.py
     PYTHONPATH=. .venv/bin/python scripts/lexical_layer_benchmark.py \\
-        --output docs/retrieval_docs/lexical_layer_benchmark_results.json
+        --output backend/evals/reports/lexical_layer_benchmark_results.json
 
 Decision gate printed at the end:
     ENABLE LEXICAL if mean latency delta < 150 ms AND hit@10 improves >= 0.02
@@ -484,8 +484,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lexical retrieval layer benchmark")
     parser.add_argument(
         "--output",
-        default="docs/retrieval_docs/lexical_layer_benchmark_results.json",
-        help="Path to write JSON results (default: docs/retrieval_docs/lexical_layer_benchmark_results.json)",
+        default="backend/evals/reports/lexical_layer_benchmark_results.json",
+        help="Path to write JSON results (default: backend/evals/reports/lexical_layer_benchmark_results.json)",
     )
     args = parser.parse_args()
     main(output_path=args.output)

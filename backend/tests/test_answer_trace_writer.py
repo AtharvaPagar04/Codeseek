@@ -54,9 +54,6 @@ class AnswerTraceWriterTests(unittest.TestCase):
         self.assertEqual(len(trace["retrieved_contexts"]), 1)
         self.assertEqual(trace["retrieved_contexts"][0]["chunk_id"], "fake-123")
         self.assertEqual(trace["retrieved_contexts"][0]["score"], 0.99)
-        self.assertEqual(trace["ragas"]["ready"], True)
-        self.assertEqual(len(trace["ragas"]["contexts"]), 1)
-        self.assertEqual(trace["ragas"]["contexts"][0], "def test_func():\n    pass")
 
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp) / "answer_traces.jsonl"

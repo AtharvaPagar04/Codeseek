@@ -5,7 +5,6 @@ import Sidebar from './components/Sidebar';
 import SessionView from './components/SessionView';
 import RepoPickerModal from './components/RepoPickerModal';
 import ApiTokensModal from './components/ApiTokensModal';
-import RagasValidationModal from './components/RagasValidationModal';
 import LiveBackground from './components/LiveBackground';
 import { useSessions } from './hooks/useSessions';
 import { useGitHub } from './hooks/useGitHub';
@@ -18,7 +17,6 @@ import {
   listSessions,
   listSessionThreads,
   retrySessionIndexing,
-  updateSessionIndexingOptions,
 } from './utils/api';
 
 const NORMAL_POLL_INTERVAL_MS = 60_000;
@@ -55,7 +53,6 @@ function Shell() {
   const [activeSessionId, setActiveSessionId] = useState(() => sessions[0]?.id ?? null);
   const [modalOpen, setModalOpen] = useState(false);
   const [apiModalOpen, setApiModalOpen] = useState(false);
-  const [ragasModalOpen, setRagasModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768);
   const [uiNotice, setUiNotice] = useState(null);
   const [pendingRepo, setPendingRepo] = useState(null);
@@ -213,6 +210,13 @@ function Shell() {
     }
   };
 
+  const handleCancelSession = (sessionId) => {
+    deleteSession(sessionId);
+    if (sessionId === activeSessionId) {
+      const remaining = sessions.filter((s) => s.id !== sessionId);
+      setActiveSessionId(remaining[0]?.id ?? null);
+    }
+  };
 
   const handleRetryIndexing = async (sessionId) => {
     try {
@@ -223,27 +227,6 @@ function Shell() {
     }
   };
 
-  const handleUpdateSessionIndexingOptions = async (sessionId, options) => {
-    try {
-      const updatedOptions = await updateSessionIndexingOptions(sessionId, options);
-      const session = sessions.find((s) => s.id === sessionId);
-      if (session) {
-        const updatedSession = {
-          ...session,
-          refine_labels_with_llm: updatedOptions.refine_labels_with_llm,
-          indexing_options: updatedOptions,
-        };
-        addSession(updatedSession);
-      }
-    } catch (err) {
-      console.warn('[sessions] update indexing options failed:', err.message);
-      setUiNotice({
-        tone: 'error',
-        message: 'Could not update label refinement setting.',
-      });
-      throw err;
-    }
-  };
 
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
@@ -258,7 +241,6 @@ function Shell() {
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           isMobile={isMobile}
           onOpenApiTokens={() => setApiModalOpen(true)}
-          onOpenRagasReport={() => setRagasModalOpen(true)}
           activeSession={activeSession}
           githubNotice={authStateMessage}
         />
@@ -309,7 +291,6 @@ function Shell() {
               }}
               onDeleteSession={handleDeleteSession}
               onNewSession={() => setModalOpen(true)}
-              onUpdateIndexingOptions={handleUpdateSessionIndexingOptions}
             />
           </div>
         </div>
@@ -330,8 +311,8 @@ function Shell() {
               session={activeSession}
               appendMessage={appendMessage}
               onRetryIndexing={handleRetryIndexing}
+              onCancelSession={handleCancelSession}
               updateSession={updateSession}
-              onUpdateIndexingOptions={handleUpdateSessionIndexingOptions}
               onClearMessages={async (sessionId) => {
                 try {
                   const activeThreadId = activeSession.active_thread_id;
@@ -408,10 +389,6 @@ function Shell() {
 
       {apiModalOpen && (
         <ApiTokensModal onClose={() => setApiModalOpen(false)} />
-      )}
-
-      {ragasModalOpen && (
-        <RagasValidationModal onClose={() => setRagasModalOpen(false)} />
       )}
     </div>
   );

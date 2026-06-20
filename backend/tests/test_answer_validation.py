@@ -119,6 +119,48 @@ class TestAnswerValidation(unittest.TestCase):
         self.assertFalse(validation["valid"])
         self.assertIn("```", validation["repaired_answer"])
 
+    def test_numeric_grounding_accepts_exact_value_from_sources(self) -> None:
+        source = {
+            "relative_path": "src/lib/data.ts",
+            "symbol_name": "personal",
+            "chunk_type": "file",
+            "content": 'export const personal = { cgpa: "7.75" }',
+            "start_line": 1,
+            "end_line": 1,
+        }
+        validation = validate_generated_answer(
+            answer="The CGPA is 7.75 from src/lib/data.ts.",
+            raw_query="what is the CGPA?",
+            response_mode="llm",
+            allowed_sources=[source],
+            final_sources=[source],
+        )
+        self.assertTrue(validation["valid"])
+        self.assertTrue(validation["numeric_grounding"]["enabled"])
+        self.assertEqual(validation["numeric_grounding"]["verified_values"], ["7.75"])
+        self.assertEqual(validation["numeric_grounding"]["failed_values"], [])
+
+    def test_numeric_grounding_rejects_unverified_exact_value(self) -> None:
+        source = {
+            "relative_path": "src/lib/data.ts",
+            "symbol_name": "personal",
+            "chunk_type": "file",
+            "content": 'export const personal = { cgpa: "7.75" }',
+            "start_line": 1,
+            "end_line": 1,
+        }
+        validation = validate_generated_answer(
+            answer="The CGPA is 7.71 from src/lib/data.ts.",
+            raw_query="what is the CGPA?",
+            response_mode="llm",
+            allowed_sources=[source],
+            final_sources=[source],
+        )
+        self.assertFalse(validation["valid"])
+        self.assertTrue(validation["numeric_grounding"]["numeric_grounding_failed"])
+        self.assertEqual(validation["numeric_grounding"]["failed_values"], ["7.71"])
+        self.assertIn("I could not verify that exact value", validation["repaired_answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

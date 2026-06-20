@@ -26,6 +26,13 @@ class Chunk:
     parameters: list[str] = field(default_factory=list)
     methods: list[str] = field(default_factory=list)
     file_symbols: list[str] = field(default_factory=list)
+    symbol_role: str = ""
+    defined_symbols: list[str] = field(default_factory=list)
+    used_symbols: list[str] = field(default_factory=list)
+    imported_symbols: list[str] = field(default_factory=list)
+    source_of_truth: bool = False
+    centrality_score: float = 0.0
+    exported_symbols: list[str] = field(default_factory=list)
     docstring: str = ""
     summary: str = ""
     description: str = ""
@@ -57,4 +64,3 @@ class Chunk:
     labels: list[str] = field(default_factory=list)
     label_confidences: dict[str, float] = field(default_factory=dict)
     code_intent: str = ""
-

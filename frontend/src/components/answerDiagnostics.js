@@ -53,19 +53,6 @@ function summarizeEvidenceConfidence(confidence) {
   return parts.join(' · ');
 }
 
-function summarizeValidation(validation) {
-  if (!validation || typeof validation !== 'object') return '';
-  const parts = [];
-  if (typeof validation.valid === 'boolean') {
-    parts.push(validation.valid ? 'valid' : 'repaired');
-  }
-  const reasons = Array.isArray(validation.reasons) ? validation.reasons.filter(Boolean) : [];
-  if (reasons.length > 0) {
-    parts.push(reasons.join(', '));
-  }
-  return parts.join(' · ');
-}
-
 function summarizeSourceFilter(sourceFilter) {
   if (!sourceFilter || typeof sourceFilter !== 'object') return '';
   const parts = [];
@@ -132,12 +119,10 @@ export function buildAnswerDiagnosticsRows(diagnostics) {
     false
   );
   addTextRow('Routing mode', diagnostics.routing_mode, 'Intent', true);
-  addTextRow('Context tokens', diagnostics.context_tokens, 'Model', true);
+
   addTextRow('Evidence confidence', summarizeEvidenceConfidence(diagnostics.evidence_confidence), 'Sources', false);
   addTextRow('Source filter', summarizeSourceFilter(diagnostics.source_filter), 'Sources', true);
-  addTextRow('Session status', diagnostics.session_status, 'Freshness', false);
-  addTextRow('Session error', diagnostics.session_error, 'Freshness', false);
-  addTextRow('Validation', summarizeValidation(diagnostics.validation), 'Validation', false);
+
   addListRow('Selected sources', diagnostics.selected_sources, 'Sources', true);
   addListRow('Reasoning sources', diagnostics.reasoning_sources, 'Sources', true);
   addListRow('Rendered sources', diagnostics.rendered_sources, 'Sources', true);
@@ -162,19 +147,6 @@ export function buildAnswerDiagnosticsRows(diagnostics) {
   addTextRow('Low-confidence gate', summarizeBoolean(diagnostics.retrieval?.low_confidence_gate), 'Sources', true);
   addListRow('Strong new entities', diagnostics.retrieval?.strong_new_entities, 'Sources', true);
 
-  if (diagnostics.freshness) {
-    const f = diagnostics.freshness;
-    addTextRow('Freshness status', f.status || f.freshness_status, 'Freshness', false);
-    addTextRow('Indexed branch', f.indexed_branch, 'Freshness', true);
-    addTextRow('Current branch', f.current_branch, 'Freshness', true);
-    addTextRow('Branch changed', f.branch_changed !== undefined ? (f.branch_changed ? 'Yes' : 'No') : '', 'Freshness', true);
-    addTextRow('Indexed commit', f.indexed_commit_sha, 'Freshness', true);
-    addTextRow('Current commit', f.current_commit_sha, 'Freshness', true);
-    addTextRow('Dirty worktree', f.dirty_worktree !== undefined ? (f.dirty_worktree ? 'Yes' : 'No') : '', 'Freshness', true);
-    if (f.checked_at || f.last_freshness_check_at) {
-      addTextRow('Last checked', f.checked_at || f.last_freshness_check_at, 'Freshness', true);
-    }
-  }
 
   return rows;
 }

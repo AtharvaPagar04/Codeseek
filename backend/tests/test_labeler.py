@@ -298,7 +298,7 @@ class TestDocumentationLabels(unittest.TestCase):
         """docs/product/*.md must receive product-doc + documentation + domain labels."""
         chunk = Chunk(
             chunk_type="file",
-            relative_path="docs/product/final_handoff.md",
+            relative_path="docs/product/repo_freshness.md",
             content="This document describes the product handoff checklist.",
         )
         label_chunk(chunk, repo_name="CodeSeek")

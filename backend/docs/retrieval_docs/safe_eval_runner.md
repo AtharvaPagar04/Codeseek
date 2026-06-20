@@ -1,6 +1,6 @@
 # Safe Evaluation Runner / CI Workflow
 
-The Safe Evaluation Runner (`evals/run_safe_evals.py`) orchestrates the execution of CodeSeek's evaluation pipeline in a safe, serial sequence. It isolates deterministic, lightweight retrieval tests from heavier LLM-based RAGAS steps, and produces a single unified summary report containing the gating status, return codes, and logs for all steps.
+The Safe Evaluation Runner (`evals/run_safe_evals.py`) orchestrates the execution of CodeSeek's evaluation pipeline in a safe, serial sequence. It runs the core deterministic retrieval and conversation checks and produces a single unified summary report containing the gating status, return codes, and logs for all steps.
 
 ---
 
@@ -38,9 +38,6 @@ The command generates the following files in the specified `--output-dir`:
 
 ### Optional Flags
 
-* **`--include-ragas`**: Run LLM-based RAGAS calibration evaluations (`ragas_calibration.py` and `ragas_judge_calibration.py`).
-* **`--include-evaluator-compare`**: Run evaluator comparison evaluations (`ragas_evaluator_compare.py`).
-* **`--include-faithfulness`**: Run `faithfulness` evaluations in addition to the default `answer_relevancy`.
 * **`--db-backend`**: Override the database backend (defaults to `sqlite` or `CODESEEK_DB_BACKEND` env).
 * **`--db-path`**: Override the SQLite database file path (defaults to `/tmp/codeseek.sqlite3` or `CODESEEK_DB_PATH` env).
 * **`--python-bin`**: The Python binary used to launch subprocesses (defaults to the active interpreter).
@@ -55,11 +52,8 @@ The runner maps and runs steps sequentially. It manages step dependencies, skipp
 
 ```mermaid
 graph TD
-    retrieval_eval[1. retrieval_eval] --> eval_policy_summary[6. eval_policy_summary]
+    retrieval_eval[1. retrieval_eval] --> eval_policy_summary[3. eval_policy_summary]
     conversation_eval[2. conversation_eval] --> eval_policy_summary
-    ragas_calibration[3. ragas_calibration] --> ragas_judge_calibration[4. ragas_judge_calibration]
-    ragas_judge_calibration --> eval_policy_summary
-    ragas_evaluator_compare[5. ragas_evaluator_compare] --> eval_policy_summary
 ```
 
 * **Required steps** (retrieval_eval, conversation_eval) must succeed (exit code 0) for the policy verification step (`eval_policy_summary`) to execute.

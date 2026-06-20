@@ -24,7 +24,7 @@ def list_thread_messages(thread_id: str) -> list[dict]:
     with db_cursor() as (_conn, cursor):
         rows = cursor.execute(
             """
-            SELECT id, role, content, sources_json, context_tokens, is_error, created_at
+            SELECT id, role, content, sources_json, context_tokens, is_error, created_at, diagnostics_json
             FROM chat_messages
             WHERE thread_id = ?
             ORDER BY created_at ASC
@@ -39,7 +39,7 @@ def latest_thread_assistant_message(thread_id: str) -> dict | None:
     with db_cursor() as (_conn, cursor):
         row = cursor.execute(
             """
-            SELECT id, role, content, sources_json, context_tokens, is_error, created_at
+            SELECT id, role, content, sources_json, context_tokens, is_error, created_at, diagnostics_json
             FROM chat_messages
             WHERE thread_id = ? AND role = 'assistant'
             ORDER BY created_at DESC
@@ -63,6 +63,7 @@ def append_message(
     context_tokens: int | None = None,
     *,
     is_error: bool = False,
+    diagnostics: dict | None = None,
 ) -> dict:
     thread = ensure_default_thread(session_id)
     return append_thread_message(
@@ -73,6 +74,7 @@ def append_message(
         sources=sources,
         context_tokens=context_tokens,
         is_error=is_error,
+        diagnostics=diagnostics,
     )
 
 
@@ -85,6 +87,7 @@ def append_thread_message(
     context_tokens: int | None = None,
     *,
     is_error: bool = False,
+    diagnostics: dict | None = None,
 ) -> dict:
     message = {
         "id": uuid.uuid4().hex,
@@ -96,13 +99,14 @@ def append_thread_message(
         "context_tokens": context_tokens,
         "error": is_error,
         "timestamp": _now(),
+        "diagnostics": diagnostics or {},
     }
     with db_cursor() as (_conn, cursor):
         cursor.execute(
             """
             INSERT INTO chat_messages (
-                id, session_id, thread_id, role, content, sources_json, context_tokens, is_error, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, session_id, thread_id, role, content, sources_json, context_tokens, is_error, created_at, diagnostics_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message["id"],
@@ -114,6 +118,7 @@ def append_thread_message(
                 context_tokens,
                 1 if is_error else 0,
                 message["timestamp"],
+                json.dumps(message["diagnostics"]),
             ),
         )
     return {
@@ -124,6 +129,7 @@ def append_thread_message(
         "context_tokens": context_tokens,
         "error": is_error,
         "timestamp": message["timestamp"],
+        "diagnostics": message["diagnostics"],
     }
 
 
@@ -174,6 +180,20 @@ def _row_to_message(row) -> dict:
             sources = []
     except Exception:
         sources = []
+    
+    # parse diagnostics
+    diagnostics_raw = "{}"
+    try:
+        diagnostics_raw = row["diagnostics_json"] or "{}"
+    except Exception:
+        pass
+    try:
+        diagnostics = json.loads(diagnostics_raw)
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+    except Exception:
+        diagnostics = {}
+
     return {
         "id": row["id"],
         "role": row["role"],
@@ -182,4 +202,5 @@ def _row_to_message(row) -> dict:
         "context_tokens": row["context_tokens"],
         "error": bool(row["is_error"]),
         "timestamp": row["created_at"],
+        "diagnostics": diagnostics,
     }

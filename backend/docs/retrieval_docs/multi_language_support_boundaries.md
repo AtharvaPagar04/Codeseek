@@ -67,7 +67,7 @@ When a user asks about a repository that contains significant amounts of unsuppo
 
 ## Quality Focus: Python and JS/TS First
 
-The current response-quality refinement pass (tracked in `response_quality_refinement_plan.md`) is **explicitly scoped to Python and JS/TS repositories**.
+The current response-quality refinement pass is **explicitly scoped to Python and JS/TS repositories**.
 
 All evaluation fixtures target:
 - `eval_codeseek_exact_wording.json` — Python backend (FastAPI, Qdrant, sentence-transformers)
@@ -87,7 +87,7 @@ New language expansion is **deferred** until:
 
 > **Do not add new language parsers until the Python/JS/TS quality gates above are met.**
 
-When a new language is proposed, open a task in `response_quality_refinement_plan.md` with:
+When a new language is proposed, add it to the active retrieval roadmap and eval checklist with:
 - The target language and its primary use case (e.g., "Go for backend service repos")
 - The tree-sitter package to use
 - At least 10 eval cases covering symbol lookup, dependency trace, and overview
@@ -103,4 +103,4 @@ When a new language is proposed, open a task in `response_quality_refinement_pla
 | AST parser dispatch | `rag_ingestion/stages/parser.py` | Tier-1 only: Python, JS, TS |
 | Structured file extraction | `rag_ingestion/stages/summary.py` | Tier-2 structured metadata |
 | Query routing by language | `retrieval/query_processor.py` | Intent/entity extraction works on all languages |
-| Eval fixtures | `docs/retrieval_docs/eval_codeseek_*.json` | Scoped to Python + JS/TS |
+| Eval fixtures | `evals/datasets/eval_codeseek_*.json` | Scoped to Python + JS/TS |

@@ -238,7 +238,7 @@ def _source_contract_score(raw_query: str, src: dict) -> int:
 
     if path_lower.startswith("backend/scratch/") or "/scratch/" in path_lower:
         score -= 1600
-    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("benchmark", "eval", "ragas")):
+    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("benchmark", "eval")):
         score -= 1200
     if is_test_source(src):
         score -= 1000
@@ -283,7 +283,7 @@ def _source_allowed_for_contract(raw_query: str, src: dict) -> bool:
     if source_intent in {"overview", "runtime_architecture", "frontend_backend_flow", "repository_analysis", "indexing_pipeline", "incremental_indexing", "failure_recovery"}:
         if is_test_source(src):
             return False
-        if relative_path.startswith("backend/scripts/") and any(term in relative_path for term in ("benchmark", "eval", "ragas")):
+        if relative_path.startswith("backend/scripts/") and any(term in relative_path for term in ("benchmark", "eval")):
             return False
     if source_intent == "ui_implementation":
         return (
@@ -540,6 +540,9 @@ def source_excluded_for_query(
     if is_docs and not (allow_docs or explicit_non_impl) and not _query_is_retrieval_pipeline_flow(raw_query):
         return True
 
+    if source.get("domain_boost_hit") or source.get("exact_retrieval_hit"):
+        return False
+
     if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
         "backend/retrieval/searcher.py",
         "backend/retrieval/source_filter.py",
@@ -592,7 +595,7 @@ def source_excluded_for_query(
         term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "answer generation", "context assembly")
     ):
         if path_lower.startswith("backend/scripts/") and any(
-            term in path_lower for term in ("benchmark", "ragas", "eval")
+            term in path_lower for term in ("benchmark", "eval")
         ):
             return True
 
@@ -727,7 +730,7 @@ def _find_better_source(path: str, pool: list[dict]) -> dict | None:
     return clean_candidates[0]
 
 
-def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: list[dict]) -> list[dict]:
+def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: list[dict], target_count: int = 6) -> list[dict]:
     q_lower = raw_query.lower()
     db_specific = any(k in q_lower for k in ("db", "database", "postgres", "sql", "storage", "qdrant"))
     
@@ -790,9 +793,9 @@ def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: 
         else:
             add_to_selected(src)
             
-    if len(new_selected) < 6:
+    if len(new_selected) < target_count:
         for src in pool:
-            if len(new_selected) >= 6:
+            if len(new_selected) >= target_count:
                 break
             path = src.get("relative_path", "")
             sym = str(src.get("symbol_name", "")).strip()
@@ -850,20 +853,20 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
     if _query_is_retrieval_pipeline_flow(raw_query):
         primary = [
             s for s in primary
-            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "eval")))
         ] or primary
         expanded = [
             s for s in expanded
-            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "ragas", "eval")))
+            if not (str(s.get("relative_path", "")).startswith("backend/scripts/") and any(term in str(s.get("relative_path", "")).lower() for term in ("benchmark", "eval")))
         ] or expanded
 
     def overlap(src: dict) -> int:
         return source_relevance_score(src, query_tokens)
 
-    primary.sort(key=overlap, reverse=True)
-    expanded.sort(key=overlap, reverse=True)
+    primary.sort(key=lambda s: (s.get("_final_priority", (10, 0)), -overlap(s)))
+    expanded.sort(key=lambda s: (s.get("_final_priority", (10, 0)), -overlap(s)))
 
-    if not wants_tests:
+    if not wants_tests and not wants_overview:
         primary_non_tests = [s for s in primary if not is_test_source(s)]
         expanded_non_tests = [s for s in expanded if not is_test_source(s)]
         if primary_non_tests:
@@ -916,7 +919,8 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         unique = _prepend_retrieval_anchors(raw_query, sources, unique)
     unique = _prepend_contract_anchors(raw_query, sources, unique)
     if wants_overview or wants_architecture:
-        unique = refine_overview_display_sources(raw_query, unique, sources)
+        cap = 8 if (wants_overview or wants_architecture) else 6
+        unique = refine_overview_display_sources(raw_query, unique, sources, target_count=cap)
     if suppress_overview_meta:
         filtered_unique = _filter_overview_noise(unique)
         unique = filtered_unique
@@ -1046,8 +1050,140 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
                 
         unique = new_unique
 
+    unique = sorted(
+        unique,
+        key=lambda src: (
+            -1 if src.get("exact_retrieval_hit") else 0,
+            -1 if src.get("domain_boost_hit") else 0
+        )
+    )
+
     return unique
 
+
+def apply_feature_location_gate(raw_query: str, sources: list[dict]) -> tuple[list[dict], dict]:
+    """Gate out frontend/evals/docs from primary sources if there's a strong backend implementation match."""
+    q = raw_query.lower()
+    
+    is_feature_loc = False
+    if "where" in q and any(w in q for w in ("done", "implemented", "handled", "assembled", "located", "defined", "audited")):
+        is_feature_loc = True
+    elif "how" in q and any(w in q for w in ("work", "protected", "validate", "targeting", "handle", "dropped")):
+        is_feature_loc = True
+        
+    if not is_feature_loc:
+        return sources, {"enabled": False, "reason": "not_feature_location_query"}
+        
+    stopwords = {"where", "how", "what", "is", "are", "does", "do", "from", "being", "for", "in", "the", "an", "a", "of", "to", "and"}
+    intentwords = {"done", "implemented", "handled", "assembled", "located", "defined", "work", "protected", "validate", "targeting", "handle", "dropped", "responses", "audited"}
+    
+    raw_tokens = set(re.findall(r"[a-z0-9_]{3,}", q))
+    terms = raw_tokens - stopwords - intentwords
+    
+    def get_feature_score(src: dict) -> int:
+        if src.get("exact_retrieval_hit"):
+            return 10
+        score = 0
+        if src.get("feature_recall_hit"):
+            score += 4
+        if src.get("domain_boost_hit"):
+            score += 2
+        rel_path = str(src.get("relative_path", "")).lower()
+        symbol = str(src.get("symbol_name", "")).lower()
+        summary = str(src.get("summary", "")).lower()
+        excerpt = str(src.get("content_excerpt", "")).lower()
+        basename = rel_path.rsplit("/", 1)[-1]
+        
+        for term in terms:
+            t = term
+            if len(t) > 4:
+                if t.endswith("ing"): t = t[:-3]
+                elif t.endswith("ed"): t = t[:-2]
+                elif t.endswith("s") and not t.endswith("ss"): t = t[:-1]
+            
+            if t in basename:
+                score += 3
+            if t in symbol:
+                score += 3
+            if t in summary:
+                score += 1
+            if t in excerpt:
+                score += 1
+        return score
+
+    def is_backend_implementation(src: dict) -> bool:
+        rel_path = str(src.get("relative_path", "")).lower()
+        if "test" in rel_path.split("/") or "tests" in rel_path.split("/") or "evals" in rel_path.split("/") or "eval" in rel_path.split("/") or "metrics.py" in rel_path:
+            return False
+        if rel_path.startswith("frontend/") or "/src/components/" in rel_path or "/src/pages/" in rel_path or "/ui/" in rel_path:
+            return False
+        if rel_path.startswith("docs/") or rel_path.endswith(".md") or "/report" in rel_path:
+            return False
+        if rel_path.startswith("backend/scripts/"):
+            return False
+        return True
+
+    strong_impl_candidates = []
+    for src in sources:
+        if is_backend_implementation(src):
+            score = get_feature_score(src)
+            if score >= 2:
+                strong_impl_candidates.append(src.get("relative_path"))
+
+    if not strong_impl_candidates:
+        return sources, {
+            "enabled": True, 
+            "query_type": "feature_location",
+            "strong_implementation_candidates": [],
+            "demoted_paths": [],
+            "primary_gate_applied": False
+        }
+
+    exceptions = []
+    if re.search(r"\b(frontend|ui|display|displayed|rendered|react)\b", q):
+        exceptions.append("frontend")
+    if re.search(r"\b(test|tests|eval|evals|audit|audited|metric|metrics|report|reports)\b", q):
+        exceptions.append("evals")
+    if re.search(r"\b(doc|docs|documentation|plan|plans)\b", q):
+        exceptions.append("docs")
+        
+    demoted_paths = []
+    demotion_reasons = {}
+    
+    for src in sources:
+        if src.get("exact_retrieval_hit"):
+            continue
+            
+        rel_path = str(src.get("relative_path", "")).lower()
+        
+        is_frontend = rel_path.startswith("frontend/") or "/src/components/" in rel_path or "/src/pages/" in rel_path or "/ui/" in rel_path
+        is_eval = "test" in rel_path.split("/") or "tests" in rel_path.split("/") or "evals" in rel_path.split("/") or "eval" in rel_path.split("/") or "metrics.py" in rel_path or "/report" in rel_path
+        is_doc = rel_path.startswith("docs/") or rel_path.endswith(".md")
+        
+        reason = None
+        if is_frontend and "frontend" not in exceptions:
+            reason = "frontend_demoted_for_backend_implementation_query"
+        elif is_eval and "evals" not in exceptions:
+            reason = "eval_demoted_for_backend_implementation_query"
+        elif is_doc and "docs" not in exceptions:
+            reason = "doc_demoted_for_backend_implementation_query"
+            
+        if reason:
+            src["expansion_type"] = "secondary"
+            demoted_paths.append(src.get("relative_path"))
+            demotion_reasons[src.get("relative_path")] = reason
+
+    diag = {
+        "enabled": True,
+        "query_type": "feature_location",
+        "strong_implementation_candidates": strong_impl_candidates,
+        "demoted_paths": demoted_paths,
+        "demotion_reasons": demotion_reasons,
+        "exceptions": exceptions,
+        "primary_gate_applied": bool(demoted_paths)
+    }
+    
+    return sources, diag
 
 def split_sources_two_layer(
     raw_query: str,
@@ -1075,7 +1211,8 @@ def split_sources_two_layer(
     if suppress_overview_meta:
         filtered_display = _filter_overview_noise(display)
         display = filtered_display
-    display = display[:DISPLAY_SOURCES_CAP]
+    cap = 8 if (wants_overview or query_is_architecture_summary(raw_query)) else DISPLAY_SOURCES_CAP
+    display = display[:cap]
 
     if not enabled:
         return display, list(display)
@@ -1481,6 +1618,13 @@ def score_evidence_confidence(
             "count": count,
         }
 
+    if any(s.get("exact_retrieval_hit") for s in display_sources):
+        return {
+            "level": "strong",
+            "reason": "exact explicit file/symbol hit",
+            "count": count,
+        }
+
     # Overriding override for strong source-location evidence
     if has_strong_source_location_evidence(raw_query, display_sources, query_info):
         return {
@@ -1711,8 +1855,7 @@ def _phase1_flow_anchors(raw_query: str) -> list[str]:
         return []
     if any(term in q for term in ("retrieval", "pipeline", "searcher", "rerank", "reranking", "context assembly", "answer generation")):
         return [
-            "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
-            "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+            "backend/docs/retrieval_docs/current_retrieval_strategy.md",
             "process_query",
             "search",
             "_merge_results",
@@ -1866,7 +2009,6 @@ def _frontend_ui_source_score(src: dict) -> int:
             "screen",
             "panel",
             "evaluationpanel",
-            "ragasvalidationmodal",
             "api.js",
         )
     ):
@@ -1890,7 +2032,7 @@ def _source_allowed_for_reasoning(raw_query: str, src: dict) -> bool:
         if relative_path.startswith("frontend/"):
             return False
         if relative_path.startswith("backend/scripts/") and any(
-            term in relative_path for term in ("benchmark", "ragas", "eval")
+            term in relative_path for term in ("benchmark", "eval")
         ):
             return False
         if "/reports/" in relative_path or relative_path.endswith("evals/reports/latest.json"):
@@ -1901,7 +2043,7 @@ def _source_allowed_for_reasoning(raw_query: str, src: dict) -> bool:
         if relative_path.startswith("frontend/"):
             return False
         if relative_path.startswith("backend/scripts/") and any(
-            term in relative_path for term in ("benchmark", "ragas", "eval")
+            term in relative_path for term in ("benchmark", "eval")
         ):
             return False
         if "/reports/" in relative_path or relative_path.endswith("evals/reports/latest.json"):
@@ -1992,7 +2134,7 @@ def query_mentions_tests(raw_query: str) -> bool:
     q = raw_query.lower()
     return any(term in q for term in (
         "test", "tests", "spec", "validation", "unit test",
-        "pytest", "eval", "evaluation", "ragas", "benchmark",
+        "pytest", "eval", "evaluation", "benchmark",
         "regression", "report",
     ))
 
@@ -2002,7 +2144,7 @@ def query_is_eval_or_report(raw_query: str) -> bool:
     q = raw_query.lower()
     return any(term in q for term in (
         "test", "tests", "pytest", "spec",
-        "eval", "evaluation", "ragas", "benchmark",
+        "eval", "evaluation", "benchmark",
         "regression", "report", "validation",
     ))
 
@@ -2269,9 +2411,9 @@ def _overview_anchor_score(src: dict) -> int:
         return 100
     if relative_path == "readme.md":
         return 96
-    if relative_path == "docs/product/final_handoff.md":
+    if relative_path == "docs/product/repo_freshness.md":
         return 94
-    if relative_path == "docs/product/release_readiness_checklist.md":
+    if relative_path == "docs/product/manual_regression.md":
         return 92
     if relative_path == "docs/product/index_latest.md":
         return 88
@@ -2310,9 +2452,9 @@ def _architecture_anchor_score(src: dict) -> int:
         return 96
     if relative_path == "readme.md":
         return 95
-    if relative_path == "docs/product/final_handoff.md":
+    if relative_path == "docs/product/repo_freshness.md":
         return 94
-    if relative_path == "docs/product/release_readiness_checklist.md":
+    if relative_path == "docs/product/manual_regression.md":
         return 92
     if relative_path == "docs/product/index_latest.md":
         return 88
@@ -2369,3 +2511,253 @@ def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
         return True
 
     return False
+
+def prune_exact_file_context(raw_query: str, query_info: dict, expanded: list[dict]) -> tuple[list[dict], dict]:
+    tier0 = query_info.get("tier0_exact_lookup", {})
+    comp = query_info.get("component_targeting", {})
+    
+    exact_match_forced = tier0.get("exact_match_forced", False)
+    target_paths = set(tier0.get("forced_primary_paths", []))
+    
+    comp_forced = comp.get("enabled", False)
+    if comp_forced:
+        target_paths.update(comp.get("target_paths", []))
+        
+    target_paths = list(target_paths)
+    
+    if not target_paths or (not exact_match_forced and not comp_forced):
+        return expanded, {"enabled": False}
+        
+    q_lower = raw_query.lower()
+    
+    try:
+        from retrieval.code_answers import is_architecture_request, is_overview_request, is_flow_explanation_request
+        if is_architecture_request(raw_query) or is_overview_request(raw_query) or is_flow_explanation_request(raw_query):
+            return expanded, {"enabled": False}
+    except Exception:
+        pass
+        
+    wants_usage = any(w in q_lower for w in ["use", "used", "mount", "mounted", "render", "rendered", "composition", "where", "homepage", "layout", "route", "structure"])
+    wants_data = any(w in q_lower for w in ["data", "state", "props", "import", "fetch", "render", "rendered"])
+    
+    kept = []
+    dropped = []
+    allowed_supporting = []
+    
+    for c in expanded:
+        rel_path = c.get("relative_path", "")
+        if not rel_path:
+            continue
+            
+        if rel_path in target_paths:
+            kept.append(c)
+            continue
+            
+        filename = rel_path.split("/")[-1].lower()
+        if wants_usage and (filename in ("page.tsx", "layout.tsx", "page.ts", "layout.ts", "app.tsx", "index.tsx") or "page" in filename or "layout" in filename):
+            allowed_supporting.append(rel_path)
+            kept.append(c)
+            continue
+            
+        if wants_data and (filename in ("data.ts", "store.ts", "constants.ts") or "data" in filename):
+            allowed_supporting.append(rel_path)
+            kept.append(c)
+            continue
+            
+        if "projects.tsx" in [p.split("/")[-1].lower() for p in target_paths] and filename == "data.ts":
+            allowed_supporting.append(rel_path)
+            kept.append(c)
+            continue
+            
+        if c.get("expansion_type") == "supporting_import" and wants_data:
+            allowed_supporting.append(rel_path)
+            kept.append(c)
+            continue
+            
+        dropped.append(rel_path)
+        
+    if not kept:
+        return expanded, {"enabled": False}
+        
+    diag = {
+        "enabled": True,
+        "target_paths": list(set(target_paths)),
+        "kept_paths": list(set(c.get("relative_path") for c in kept)),
+        "allowed_supporting_paths": list(set(allowed_supporting)),
+        "dropped_paths": list(set(dropped)),
+        "prune_reason": "component_symbol_target" if comp_forced else "strict_exact_file_match"
+    }
+    return kept, diag
+
+
+def apply_wrong_evidence_guard(raw_query: str, sources: list[dict], query_info: dict) -> tuple[list[dict], dict]:
+    """Check if we retrieved only frontend/docs/config for a backend behavior question."""
+    diag = {
+        "enabled": True,
+        "guard_applied": False,
+        "reason": None,
+    }
+    
+    fw_diag = query_info.get("framework_routing", {})
+    source_intent = fw_diag.get("query_type", "general")
+    
+    # Are we asking for backend behavior or implementation?
+    backend_intents = {
+        "backend_entrypoint_location",
+        "global_middleware_location",
+        "route_registration_location",
+        "auth_implementation",
+        "jwt_implementation",
+        "rbac_implementation",
+        "ownership_implementation",
+        "service_behavior",
+        "api_error_handling",
+        "swagger_configuration"
+    }
+    
+    if source_intent not in backend_intents:
+        return sources, diag
+        
+    primary_sources = [s for s in sources if s.get("expansion_type") == "primary"]
+    if not primary_sources:
+        return sources, diag
+        
+    def is_weak_evidence(src: dict) -> bool:
+        path = str(src.get("relative_path", "")).lower()
+        if "frontend/" in path or "/src/components/" in path or "/src/pages/" in path or path.endswith((".jsx", ".tsx")):
+            return True
+        if path.startswith("docs/") or path.endswith(".md"):
+            return True
+        if "config/" in path or path.endswith((".env", "dockerfile", ".yml", ".yaml")):
+            return True
+        if source_intent == "service_behavior" and "/migrations/" in path:
+            # Migrations cannot prove runtime behavior, only schemas
+            return True
+        return False
+        
+    all_weak = all(is_weak_evidence(s) for s in primary_sources)
+    if all_weak:
+        diag["guard_applied"] = True
+        diag["reason"] = "all_primary_sources_weak_for_backend_intent"
+        # We can either drop them or flag for low confidence.
+        # Dropping primary sources causes it to be weak confidence.
+        # Let's drop the weak frontend sources so that it becomes weak and triggers fallback.
+        repaired_sources = [s for s in sources if not (s.get("expansion_type") == "primary" and is_weak_evidence(s))]
+        return repaired_sources, diag
+        
+    return sources, diag
+
+
+def prioritize_final_sources(raw_query: str, sources: list[dict], query_info: dict) -> list[dict]:
+    """Phase 2: Add final-source priority contract."""
+    fw_diag = query_info.get("framework_routing", {})
+    source_intent = fw_diag.get("query_type", "general")
+    preferred_roles = set(fw_diag.get("preferred_source_roles", []))
+    
+    q_lower = raw_query.lower()
+    explicit_frontend = "frontend" in q_lower or "ui" in q_lower or "dashboard" in q_lower or "react" in q_lower or "component" in q_lower
+    explicit_tests = "test" in q_lower or "tests" in q_lower or "verify" in q_lower
+    explicit_docs = "doc" in q_lower or "docs" in q_lower or "readme" in q_lower
+    explicit_config = "config" in q_lower or "env" in q_lower or "docker" in q_lower or "deploy" in q_lower
+    
+    def get_priority(src: dict) -> tuple:
+        if src.get("exact_retrieval_hit") or src.get("tier0_exact_lookup_hit"):
+            return (1, 0)
+            
+        role = str(src.get("framework_source_role", ""))
+        rel_path = str(src.get("relative_path", "")).lower()
+        
+        is_frontend = rel_path.startswith("frontend/") or "/src/components/" in rel_path or "/src/pages/" in rel_path or rel_path.endswith((".jsx", ".tsx"))
+        is_test = "test" in rel_path.split("/") or "tests" in rel_path.split("/") or "evals" in rel_path.split("/") or "eval" in rel_path.split("/")
+        is_doc = rel_path.startswith("docs/") or rel_path.endswith(".md")
+        is_config = "config" in rel_path or rel_path.endswith((".env", ".yml", "dockerfile", ".yaml", "package.json"))
+        is_migration = "/migrations/" in rel_path or "migration" in rel_path
+        
+        # 8. forbidden/irrelevant primary families
+        # If not explicitly requested, these are forbidden for backend behavioral questions.
+        backend_intents = {
+            "backend_entrypoint_location",
+            "global_middleware_location",
+            "route_registration_location",
+            "auth_implementation",
+            "jwt_implementation",
+            "rbac_implementation",
+            "ownership_implementation",
+            "service_behavior",
+            "api_error_handling"
+        }
+        
+        is_forbidden = False
+        if source_intent in backend_intents:
+            if is_frontend and not explicit_frontend:
+                is_forbidden = True
+            elif is_test and not explicit_tests:
+                is_forbidden = True
+            elif is_doc and not explicit_docs:
+                is_forbidden = True
+            elif is_config and not explicit_config:
+                is_forbidden = True
+            elif is_migration and source_intent == "service_behavior":
+                is_forbidden = True
+                
+        if src.get("expansion_type") == "secondary":
+            is_forbidden = True
+            
+        if is_forbidden:
+            return (8, -src.get("fusion_score", 0))
+
+        # 2. framework_routing_hit with preferred source role
+        if src.get("framework_routing_hit") and role in preferred_roles:
+            return (2, -src.get("fusion_score", 0))
+            
+        # 3. feature_recall_hit with backend implementation role
+        if src.get("feature_recall_hit") and not (is_frontend or is_test or is_doc or is_config):
+            return (3, -src.get("fusion_score", 0))
+            
+        # 4. domain_boost_hit with implementation/source-code role
+        if src.get("domain_boost_hit") and not (is_frontend or is_test or is_doc or is_config):
+            return (4, -src.get("fusion_score", 0))
+            
+        # 5. behavior-grounding source role match
+        if source_intent in ["service_behavior", "auth_implementation", "jwt_implementation", "rbac_implementation", "ownership_implementation"]:
+            if role in ["service", "repository", "middleware", "utility"]:
+                return (5, -src.get("fusion_score", 0))
+                
+        # 7. weak support files
+        # Things that aren't explicitly forbidden but are still weak for the query
+        if is_frontend and not explicit_frontend:
+            return (7, -src.get("fusion_score", 0))
+            
+        # 6. normal dense/BM25 candidates
+        return (6, -src.get("fusion_score", 0))
+
+    # We need to preserve original order for things with same priority
+    sorted_sources = sorted(sources, key=get_priority)
+    
+    # Fill diagnostics
+    diag = query_info.get("final_source_selection", {
+        "enabled": True,
+        "query_type": source_intent,
+        "top_raw_candidates": [],
+        "framework_boosted_paths": fw_diag.get("boosted_paths", []),
+        "selected_primary_paths": [],
+        "rendered_source_paths": [],
+        "answer_claimed_primary_path": None,
+        "forbidden_primary_paths": [],
+        "demoted_paths": [],
+        "drop_reasons": {}
+    })
+    
+    # top_raw_candidates is already filled in searcher? We don't have it yet, 
+    # we can populate what we have
+    for src in sorted_sources:
+        p = get_priority(src)
+        src['_final_priority'] = p
+        if p[0] == 8:
+            diag["forbidden_primary_paths"].append(src.get("relative_path"))
+        if src.get("expansion_type") == "primary" and p[0] <= 6:
+            diag["selected_primary_paths"].append(src.get("relative_path"))
+
+    query_info["final_source_selection"] = diag
+    
+    return sorted_sources

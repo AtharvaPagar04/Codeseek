@@ -21,8 +21,7 @@
   expected_intent: "technical_explanation"
   expected_reranker_intent: "ARCHITECTURE"
   expected_files:
-    - "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md"
-    - "backend/docs/retrieval_docs/retrieval_pipeline_docs.md"
+    - "backend/docs/retrieval_docs/current_retrieval_strategy.md"
     - "backend/retrieval/query_processor.py"
     - "backend/retrieval/searcher.py"
     - "backend/retrieval/code_answers.py"

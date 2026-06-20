@@ -40,6 +40,32 @@ def test_build_query_diagnostics_compacts_safe_fields():
         },
         "evidence_confidence": {"level": "strong", "reason": "matched route", "count": 2},
         "source_filter": {"selected_primary": 1, "selected_expanded": 0, "display_count": 1, "reasoning_count": 2},
+        "retrieval_targeting": {
+            "exact_path_hits": ["backend/evals/run_safe_evals.py"],
+            "filename_hits": [],
+            "symbol_hits": ["main"],
+            "definition_boost_paths": ["backend/evals/run_safe_evals.py"],
+            "usage_demoted_paths": ["backend/retrieval/db.py"],
+            "structural_hint_ids": ["repo_overview"],
+            "structural_hint_paths": [],
+            "central_file_paths": ["backend/evals/run_safe_evals.py"],
+            "alias_resolved_paths": [],
+            "selected_primary_paths": ["backend/evals/run_safe_evals.py"],
+            "selected_expanded_paths": [],
+            "reasoning_paths": ["backend/evals/run_safe_evals.py"],
+            "rendered_paths": ["backend/evals/run_safe_evals.py"],
+            "dropped_paths": ["backend/retrieval/db.py"],
+            "drop_reasons": {"backend/retrieval/db.py": "display_source_filter"},
+        },
+        "source_alignment": {
+            "context_paths": ["backend/evals/run_safe_evals.py"],
+            "source_card_paths": ["backend/evals/run_safe_evals.py"],
+            "rendered_paths": ["backend/evals/run_safe_evals.py"],
+            "missing_source_cards": [],
+            "stale_source_cards": [],
+            "missing_rendered_cards": [],
+            "aligned": True,
+        },
         "display_sources": [
             {
                 "relative_path": "backend/evals/run_safe_evals.py",
@@ -58,7 +84,18 @@ def test_build_query_diagnostics_compacts_safe_fields():
                 "raw_prompt": "hidden",
             }
         ],
-        "validation": {"valid": False, "reasons": ["rebuilt_code_snippet"], "repaired_answer": "kept"},
+        "validation": {
+            "valid": False,
+            "reasons": ["rebuilt_code_snippet"],
+            "repaired_answer": "kept",
+            "numeric_grounding": {
+                "enabled": True,
+                "claims": ["7.75"],
+                "verified_values": ["7.75"],
+                "failed_values": [],
+                "numeric_grounding_failed": False,
+            },
+        },
     }
 
     diagnostics = _build_query_diagnostics(
@@ -97,8 +134,14 @@ def test_build_query_diagnostics_compacts_safe_fields():
         "start_line": 10,
         "end_line": 48,
     }
+    assert diagnostics["retrieval_targeting"]["exact_path_hits"] == ["backend/evals/run_safe_evals.py"]
+    assert diagnostics["retrieval_targeting"]["structural_hint_ids"] == ["repo_overview"]
+    assert diagnostics["retrieval_targeting"]["central_file_paths"] == ["backend/evals/run_safe_evals.py"]
+    assert diagnostics["source_alignment"]["aligned"] is True
+    assert diagnostics["retrieval_targeting"]["drop_reasons"]["backend/retrieval/db.py"] == "display_source_filter"
     assert diagnostics["selected_sources"][0]["relative_path"] == "backend/evals/run_safe_evals.py"
     assert "api_key" not in diagnostics["selected_sources"][0]
     assert diagnostics["reasoning_sources"][0]["symbol_name"] == "get_tail"
     assert diagnostics["validation"]["repaired"] is True
     assert diagnostics["validation"]["reasons"] == ["rebuilt_code_snippet"]
+    assert diagnostics["numeric_grounding"]["verified_values"] == ["7.75"]

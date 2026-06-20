@@ -18,7 +18,7 @@ def _src(path: str, symbol: str = "<file>", *, content: str = "CodeSeek") -> dic
 def test_overview_answer_is_detailed_and_not_helper_metadata() -> None:
     sources = [
         _src("README.md"),
-        _src("docs/product/final_handoff.md"),
+        _src("docs/product/repo_freshness.md"),
         _src("backend/rag_ingestion/main.py", "run_pipeline"),
         _src("backend/retrieval/api_service.py", "_query_impl"),
     ]
@@ -75,7 +75,7 @@ def test_duplicate_sources_footer_is_removed() -> None:
 def test_runtime_components_answer_does_not_present_helpers_as_components() -> None:
     sources = [
         _src("README.md"),
-        _src("docs/product/final_handoff.md"),
+        _src("docs/product/repo_freshness.md"),
         _src("backend/retrieval/api_service.py", "app"),
         _src("backend/retrieval/session_indexer.py", "_index_job"),
         _src("backend/rag_ingestion/main.py", "run_pipeline"),

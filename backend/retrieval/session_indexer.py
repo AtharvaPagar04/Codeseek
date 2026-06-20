@@ -133,7 +133,7 @@ def _load_state() -> dict:
                 id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                 chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
-                refine_labels_with_llm, current_commit_sha, current_branch, indexed_branch, repo_dirty,
+                current_commit_sha, current_branch, indexed_branch, repo_dirty,
                 repo_status_checked_at, files_indexed
             FROM repo_sessions
             ORDER BY created_at ASC
@@ -154,9 +154,9 @@ def _save_state(state: dict) -> None:
                     id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                     created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                     chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
-                    refine_labels_with_llm, current_commit_sha, current_branch, indexed_branch, repo_dirty,
+                    current_commit_sha, current_branch, indexed_branch, repo_dirty,
                     repo_status_checked_at, files_indexed
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _session_insert_values(session),
             )
@@ -175,7 +175,7 @@ def get_session(session_id: str) -> dict | None:
     return None
 
 
-def delete_session(session_id: str) -> dict:
+def delete_session(session_id: str, force: bool = False) -> dict:
     """Delete a session and clean up all associated state.
 
     Returns a dict:
@@ -198,7 +198,7 @@ def delete_session(session_id: str) -> dict:
             raise ValueError(f"Session '{session_id}' not found.")
 
         # Block deletion when a live indexing job is running
-        if session_to_delete.get("status") == "indexing":
+        if not force and session_to_delete.get("status") == "indexing":
             job_thread = _jobs.get(session_id)
             if job_thread and job_thread.is_alive():
                 raise RuntimeError(
@@ -491,7 +491,7 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     status = ?, error = ?, created_at = ?, updated_at = ?, job_started_at = ?,
                     job_finished_at = ?, last_indexed_commit = ?, chunks_generated = ?,
                     embeddings_stored = ?, idempotent_reuse = ?, enable_chunk_descriptions = ?,
-                    refine_labels_with_llm = ?, current_commit_sha = ?, current_branch = ?,
+                    current_commit_sha = ?, current_branch = ?,
                     indexed_branch = ?, repo_dirty = ?, repo_status_checked_at = ?, files_indexed = ?
                 WHERE id = ?
                 """,
@@ -513,7 +513,6 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     int(session["embeddings_stored"]),
                     1 if session["idempotent_reuse"] else 0,
                     1 if session.get("enable_chunk_descriptions") else 0,
-                    1 if session.get("refine_labels_with_llm") else 0,
                     session.get("current_commit_sha", ""),
                     session.get("current_branch", ""),
                     session.get("indexed_branch", ""),
@@ -537,6 +536,14 @@ def _record_indexing_failure(
     files_indexed: int | None = None,
     last_indexed_commit: str | None = None,
 ) -> dict | None:
+    session = get_session(session_id)
+    if session and not session.get("last_indexed_commit"):
+        try:
+            delete_session(session_id, force=True)
+            return None
+        except Exception:
+            pass
+
     updates: dict[str, object] = {
         "status": "failed",
         "error": str(exc),
@@ -585,63 +592,9 @@ def _run_git(args: list[str], cwd: Path | None = None, github_token: str = "") -
     return proc.stdout.strip()
 
 
-def _sync_local_workspace(src: Path, dest: Path) -> None:
-    import shutil
-    src = src.resolve()
-    dest = dest.resolve()
-    dest.mkdir(parents=True, exist_ok=True)
-    
-    ignore_dirs = {".venv", "node_modules", "__pycache__", ".pytest_cache", ".git"}
-    
-    # 1. Copy files/directories from src to dest
-    for item in os.listdir(src):
-        if item in ignore_dirs:
-            continue
-        src_item = src / item
-        dest_item = dest / item
-        try:
-            if src_item.is_dir():
-                if dest_item.exists():
-                    shutil.rmtree(dest_item)
-                shutil.copytree(
-                    src_item,
-                    dest_item,
-                    ignore=shutil.ignore_patterns(".venv", "node_modules", "__pycache__", ".pytest_cache", "*.pyc", "*.pyo")
-                )
-            else:
-                shutil.copy2(src_item, dest_item)
-        except Exception as e:
-            print(f"Warning: failed to sync {src_item} to {dest_item}: {e}")
-
-    # 2. Copy the .git directory specially to make sure it's valid
-    src_git = src / ".git"
-    dest_git = dest / ".git"
-    if src_git.exists():
-        try:
-            if dest_git.exists():
-                shutil.rmtree(dest_git)
-            shutil.copytree(src_git, dest_git)
-        except Exception as e:
-            print(f"Warning: failed to copy .git from {src_git} to {dest_git}: {e}")
-
-
 def _clone_or_pull(repo_url: str, repo_root: Path, github_token: str = "") -> str:
     repo_root.parent.mkdir(parents=True, exist_ok=True)
     
-    # Check if we should sync from local workspace instead of cloning
-    try:
-        root_path = repo_root.resolve()
-        tenant_id = root_path.parent.name
-        repo_slug = root_path.name
-        is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
-    except Exception:
-        is_local_repo = False
-
-    if is_local_repo:
-        local_src = Path(__file__).resolve().parent.parent.parent
-        _sync_local_workspace(local_src, repo_root)
-        return _run_git(["rev-parse", "HEAD"], cwd=repo_root)
-
     auth_url = _inject_token_url(repo_url, github_token)
     if not (repo_root / ".git").exists():
         _run_git(["clone", auth_url, str(repo_root)], github_token=github_token)
@@ -762,7 +715,7 @@ def _index_job(session_id: str) -> None:
                 raise CancellationError("Indexing cancelled by user request.")
 
         provider_config = _session_provider_configs.get(session_id)
-        if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
+        if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
                 from retrieval.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
@@ -782,7 +735,6 @@ def _index_job(session_id: str) -> None:
             str(repo_root),
             collection_name=session["collection"],
             enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
-            enable_llm_label_refinement=bool(session.get("refine_labels_with_llm", False)),
             provider_config=provider_config,
             event_callback=_emit,
             session_id=session_id,
@@ -822,16 +774,31 @@ def _index_job(session_id: str) -> None:
         cancel_msg = str(exc)
         try:
             emit_indexing_event(session_id, "cancelled", cancel_msg, level="warning")
+            emit_indexing_event(session_id, "cleanup", "Clearing cache and stored data...", level="info")
         except Exception:
             pass
-        _record_indexing_failure(
-            session_id,
-            exc,
-            job_finished_at=_now(),
-            chunks_generated=int(getattr(counters, "chunks_generated", 0)) if counters is not None else 0,
-            embeddings_stored=int(getattr(counters, "embeddings_stored", 0)) if counters is not None else 0,
-            files_indexed=int(getattr(counters, "files_parsed_ok", 0)) if counters is not None else 0,
-        )
+        
+        try:
+            import shutil
+            if repo_root.exists():
+                shutil.rmtree(repo_root, ignore_errors=True)
+            
+            from retrieval.searcher import _get_client
+            client = _get_client()
+            if client:
+                try:
+                    client.delete_collection(collection_name=session["collection"])
+                except Exception:
+                    pass
+            emit_indexing_event(session_id, "cleanup_done", "Deleted local cache and vector storage. No traces left.", level="success")
+        except Exception:
+            pass
+
+        try:
+            # Completely wipe the session from the backend database since it was cancelled.
+            delete_session(session_id, force=True)
+        except Exception:
+            pass
         mark_indexing_job_cancelled(job_id, cancel_msg)
     except Exception as exc:
         try:
@@ -865,11 +832,6 @@ def _row_to_session(row) -> dict:
     except (KeyError, IndexError, TypeError):
         enable_desc = False
 
-    try:
-        refine_labels = bool(row["refine_labels_with_llm"])
-    except (KeyError, IndexError, TypeError):
-        refine_labels = False
-
     def _get_val(k, default):
         try:
             return row[k]
@@ -895,10 +857,7 @@ def _row_to_session(row) -> dict:
         "embeddings_stored": int(row["embeddings_stored"] or 0),
         "idempotent_reuse": bool(row["idempotent_reuse"]),
         "enable_chunk_descriptions": enable_desc,
-        "refine_labels_with_llm": refine_labels,
-        "indexing_options": {
-            "refine_labels_with_llm": refine_labels,
-        },
+        "indexing_options": {},
         "current_commit_sha": _get_val("current_commit_sha", ""),
         "current_branch": _get_val("current_branch", ""),
         "indexed_branch": _get_val("indexed_branch", ""),
@@ -929,7 +888,6 @@ def _session_insert_values(session: dict) -> tuple:
         int(session["embeddings_stored"]),
         1 if session["idempotent_reuse"] else 0,
         1 if session.get("enable_chunk_descriptions") else 0,
-        1 if session.get("refine_labels_with_llm") else 0,
         session.get("current_commit_sha", ""),
         session.get("current_branch", ""),
         session.get("indexed_branch", ""),
@@ -939,33 +897,7 @@ def _session_insert_values(session: dict) -> tuple:
     )
 
 
-def get_session_indexing_options(session_id: str, user_id: str) -> dict:
-    session = get_session(session_id)
-    if not session:
-        raise ValueError("Session not found")
-    if session.get("user_id", "") != user_id:
-        raise PermissionError("Access denied")
-    return {
-        "refine_labels_with_llm": bool(session.get("refine_labels_with_llm", False))
-    }
 
-
-def update_session_indexing_options(
-    session_id: str,
-    user_id: str,
-    *,
-    refine_labels_with_llm: bool,
-) -> dict:
-    with _lock:
-        session = get_session(session_id)
-        if not session:
-            raise ValueError("Session not found")
-        if session.get("user_id", "") != user_id:
-            raise PermissionError("Access denied")
-        _update_session(session_id, refine_labels_with_llm=refine_labels_with_llm)
-        return {
-            "refine_labels_with_llm": refine_labels_with_llm
-        }
 
 
 def _run_git_command(repo_root: str, args: list[str], *, timeout: int = 20, github_token: str = "") -> str:
@@ -1032,19 +964,6 @@ def _refresh_remote_state(repo_root: str, github_token: str = "") -> None:
 
 
 def _pull_latest(repo_root: str, github_token: str = "") -> dict:
-    try:
-        root_path = Path(repo_root).resolve()
-        tenant_id = root_path.parent.name
-        repo_slug = root_path.name
-        is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
-    except Exception:
-        is_local_repo = False
-
-    if is_local_repo:
-        local_src = Path(__file__).resolve().parent.parent.parent
-        _sync_local_workspace(local_src, Path(repo_root))
-        return _get_local_git_status(repo_root, github_token=github_token)
-
     _run_git_command(repo_root, ["fetch", "--all", "--prune"], github_token=github_token)
     try:
         _run_git_command(repo_root, ["pull", "--ff-only"], github_token=github_token)
@@ -1348,15 +1267,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
         except ValueError:
             pass
 
-        try:
-            root_path = repo_root.resolve()
-            tenant_id = root_path.parent.name
-            repo_slug = root_path.name
-            is_local_repo = (tenant_id == "local" and repo_slug == "atharvapagar04_codeseek")
-        except Exception:
-            is_local_repo = False
-
-        if local_status["dirty_worktree"] and is_github_cloned and not is_local_repo:
+        if local_status["dirty_worktree"] and is_github_cloned:
             raise RuntimeError(
                 "The repository workspace has uncommitted/dirty changes and cannot be pulled safely. "
                 "Please recreate or clean the repository workspace."
@@ -1411,7 +1322,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
                     raise CancellationError("Indexing cancelled by user request.")
 
         provider_config = _session_provider_configs.get(session_id)
-        if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
+        if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
                 from retrieval.provider_health import require_llm_ready_for_user
                 if user_id:
@@ -1423,7 +1334,6 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
             str(repo_root),
             collection_name=session["collection"],
             enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
-            enable_llm_label_refinement=bool(session.get("refine_labels_with_llm", False)),
             provider_config=provider_config,
             event_callback=_emit,
             recreate_collection=True,
@@ -2361,7 +2271,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
                 raise CancellationError("Incremental indexing cancelled by user request.")
 
         provider_config = _session_provider_configs.get(session_id)
-        if not provider_config and (bool(session.get("enable_chunk_descriptions")) or bool(session.get("refine_labels_with_llm"))):
+        if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
                 from retrieval.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
@@ -2375,7 +2285,6 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
             str(repo_root),
             collection_name=session["collection"],
             enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
-            enable_llm_label_refinement=bool(session.get("refine_labels_with_llm", False)),
             provider_config=provider_config,
             event_callback=_emit,
             session_id=session_id,

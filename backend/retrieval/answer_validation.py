@@ -29,6 +29,31 @@ _INTERNAL_PHRASES = (
 )
 
 _FILE_RE = re.compile(r"`?([A-Za-z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md))`?")
+_NUMERIC_RE = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|sec|seconds|minutes|hrs|hours|%)?\b", re.I)
+_VALUE_QUERY_TERMS = (
+    "version",
+    "port",
+    "timeout",
+    "delay",
+    "config value",
+    "percentage",
+    "email",
+    "phone",
+    "date",
+    "duration",
+    "cgpa",
+    "gpa",
+    "grade",
+    "marks",
+    "score",
+    "count",
+    "how many",
+    "number",
+    "typewriter",
+    "timing",
+    "timings",
+    "personal",
+)
 
 
 def _explicit_docs_request(raw_query: str) -> bool:
@@ -89,41 +114,6 @@ def validate_generated_answer(
     if response_mode not in {"code_snippet", "source_location"}:
         cleaned_answer = _strip_manual_sources_footer(cleaned_answer)
 
-    module_tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
-    wants_backend_modules = (
-        "backend" in module_tokens
-        and (
-            "module" in module_tokens
-            or "modules" in module_tokens
-            or "subsystem" in module_tokens
-            or "subsystems" in module_tokens
-        )
-    )
-    if wants_backend_modules:
-        bad_patterns = [
-            r"(?i)Function:\s*main",
-            r"(?i)Function:\s*run_query",
-            r"(?i)The implementation is in",
-            r"(?i)symbol/function",
-        ]
-        if any(re.search(pat, cleaned_answer) for pat in bad_patterns):
-            from retrieval.code_answers import DETERMINISTIC_BACKEND_MODULES_SUMMARY
-            from retrieval.source_filter import _OVERVIEW_NOISE_SYMBOLS
-            lines = [DETERMINISTIC_BACKEND_MODULES_SUMMARY]
-            repaired_answer = "\n".join(lines).strip()
-            repaired_sources = _prune_sources_to_allowed(final_sources or allowed_sources, _source_paths(final_sources or allowed_sources))
-            bad_symbols = _OVERVIEW_NOISE_SYMBOLS | {"main", "run_query", "_query_impl"}
-            repaired_sources = [
-                src for src in repaired_sources
-                if str(src.get("symbol_name", "")).strip().lower() not in bad_symbols
-            ]
-            return {
-                "valid": False,
-                "repaired_answer": repaired_answer,
-                "repaired_sources": repaired_sources,
-                "reasons": cleaned_reasons + ["rebuilt_backend_modules"],
-            }
-
     if response_mode == "code_snippet":
         return _validate_code_snippet(
             cleaned_answer=cleaned_answer,
@@ -156,28 +146,118 @@ def validate_generated_answer(
             final_sources=final_sources,
             reasons=cleaned_reasons,
         )
-    if _is_failure_recovery_query(raw_query, query_info):
-        speculative = (
-            "could potentially",
-            "would likely",
-            "probably",
-            "might recover",
-            "could recover",
-            "inferred",
-        )
-        if any(term in cleaned_answer.lower() for term in speculative):
+
+    # Phase 5: Wrong-evidence answer validation
+    if query_info and "framework_routing" in query_info:
+        source_intent = query_info["framework_routing"].get("query_type", "general")
+        backend_intents = {
+            "backend_entrypoint_location",
+            "global_middleware_location",
+            "route_registration_location",
+            "auth_implementation",
+            "jwt_implementation",
+            "rbac_implementation",
+            "ownership_implementation",
+            "service_behavior",
+            "api_error_handling",
+            "swagger_configuration"
+        }
+        if source_intent in backend_intents and response_mode != "source_location":
+            # If all primary final sources are weak (frontend, config, docs, migration)
+            primary_sources = [s for s in (final_sources or []) if s.get("expansion_type") == "primary"]
+            if primary_sources:
+                all_weak = True
+                for s in primary_sources:
+                    path = str(s.get("relative_path", "")).lower()
+                    if not (
+                        "frontend/" in path or "/src/components/" in path or "/src/pages/" in path or 
+                        path.endswith((".jsx", ".tsx", ".md", ".env", "dockerfile", ".yml", ".yaml", "package.json")) or
+                        "config" in path or "/migrations/" in path or "migration" in path
+                    ):
+                        all_weak = False
+                        break
+                        
+                if all_weak:
+                    return {
+                        "valid": False,
+                        "repaired_answer": "I found only weak/non-runtime evidence for this backend behavior, so I cannot determine the implementation from the selected sources.",
+                        "repaired_sources": [],
+                        "reasons": cleaned_reasons + ["wrong_evidence_guard_triggered"],
+                        "numeric_grounding": {
+                            "enabled": False,
+                            "claims": [],
+                            "verified_values": [],
+                            "failed_values": [],
+                            "numeric_grounding_failed": False,
+                        }
+                    }
+
+    if "```" in cleaned_answer:
+        has_exact = any(src.get("exact_retrieval_hit") for src in (final_sources or allowed_sources))
+        from retrieval.query_intent import is_code_request_query
+        asked_for_code = is_code_request_query(raw_query)
+        
+        has_unsupported_code = False
+        if not asked_for_code and not has_exact:
+            haystack = _source_texts(final_sources or allowed_sources)
+            for match in re.finditer(r"```[^\n]*\n(.*?)```", cleaned_answer, re.DOTALL):
+                snippet = match.group(1).strip()
+                if snippet and len(snippet) > 15:
+                    check_slice = snippet[:40]
+                    if check_slice not in haystack:
+                        has_unsupported_code = True
+                        break
+
+        if has_unsupported_code:
+            q_lower = raw_query.lower()
+            if "qdrant" in q_lower or "storage" in q_lower:
+                topic_str = "Qdrant-related storage"
+            elif "auth" in q_lower or "login" in q_lower:
+                topic_str = "auth/login"
+            else:
+                topic_str = "the requested topic"
+                
             repaired = (
-                "The retrieved evidence is incomplete for a full recovery walkthrough. "
-                "The available sources should be limited to the actual failure-handling paths, "
-                "such as session status updates, indexing job records, ingestion failure handling, "
-                "and troubleshooting documentation. I will not infer unimplemented recovery behavior from weak evidence."
+                f"I found weak evidence for {topic_str}, but the selected sources "
+                f"did not include the actual implementation. Try asking for the specific "
+                f"file or re-run indexing/validation."
             )
             return {
                 "valid": False,
                 "repaired_answer": repaired,
-                "repaired_sources": _prune_sources_to_allowed(final_sources or allowed_sources, visible_paths),
-                "reasons": cleaned_reasons + ["unsupported_failure_recovery_speculation"],
+                "repaired_sources": [],
+                "reasons": cleaned_reasons + ["ungrounded_code_block"],
+                "numeric_grounding": {
+                    "enabled": False,
+                    "claims": [],
+                    "verified_values": [],
+                    "failed_values": [],
+                    "numeric_grounding_failed": False,
+                }
             }
+
+    numeric_grounding = _validate_numeric_grounding(
+        raw_query=raw_query,
+        response_mode=response_mode,
+        answer=cleaned_answer,
+        allowed_sources=allowed_sources,
+        final_sources=final_sources or allowed_sources,
+    )
+    if numeric_grounding["numeric_grounding_failed"]:
+        top_source = next(
+            (str(src.get("relative_path", "")).strip() for src in (final_sources or allowed_sources) if str(src.get("relative_path", "")).strip()),
+            "",
+        )
+        repaired = "I could not verify that exact value from the retrieved source context."
+        if top_source:
+            repaired += f"\nThe closest relevant source is {top_source}."
+        return {
+            "valid": False,
+            "repaired_answer": repaired,
+            "repaired_sources": _prune_sources_to_allowed(final_sources or allowed_sources, visible_paths),
+            "reasons": cleaned_reasons + ["numeric_grounding_failed"],
+            "numeric_grounding": numeric_grounding,
+        }
 
     repaired_sources = _prune_sources_to_allowed(final_sources, allowed_paths or final_paths)
     return {
@@ -185,6 +265,7 @@ def validate_generated_answer(
         "repaired_answer": _strip_manual_sources_footer(cleaned_answer).strip(),
         "repaired_sources": repaired_sources,
         "reasons": cleaned_reasons,
+        "numeric_grounding": numeric_grounding,
     }
 
 
@@ -208,11 +289,78 @@ def _strip_manual_sources_footer(text: str) -> str:
     return text or ""
 
 
-def _is_failure_recovery_query(raw_query: str, query_info: dict | None) -> bool:
-    if isinstance(query_info, dict) and query_info.get("source_intent") == "failure_recovery":
-        return True
+def _is_exact_value_query(raw_query: str, response_mode: str) -> bool:
     q = (raw_query or "").lower()
-    return any(term in q for term in ("recover from", "failed incremental", "indexing fails", "fails midway", "failure recovery"))
+    response_mode = (response_mode or "").lower()
+    if response_mode in {"code_snippet", "source_location", "flow_summary", "architecture_summary"}:
+        return False
+    if not any(term in q for term in _VALUE_QUERY_TERMS):
+        return False
+    return any(term in q for term in ("what is", "what are", "exact", "value", "how much", "which", "show"))
+
+
+def _extract_numeric_claims(answer: str) -> list[str]:
+    claims: list[str] = []
+    for match in _NUMERIC_RE.finditer(answer or ""):
+        value = match.group(0).strip()
+        if value and value not in claims:
+            claims.append(value)
+    return claims
+
+
+def _source_texts(sources: list[dict]) -> str:
+    parts: list[str] = []
+    for src in sources or []:
+        for key in ("content", "content_excerpt", "summary", "docstring", "signature"):
+            value = src.get(key)
+            if value:
+                parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _validate_numeric_grounding(
+    *,
+    raw_query: str,
+    response_mode: str,
+    answer: str,
+    allowed_sources: list[dict],
+    final_sources: list[dict],
+) -> dict[str, object]:
+    enabled = _is_exact_value_query(raw_query, response_mode)
+    if not enabled:
+        return {
+            "enabled": False,
+            "claims": [],
+            "verified_values": [],
+            "failed_values": [],
+            "numeric_grounding_failed": False,
+        }
+
+    claims = _extract_numeric_claims(answer)
+    if not claims:
+        return {
+            "enabled": True,
+            "claims": [],
+            "verified_values": [],
+            "failed_values": [],
+            "numeric_grounding_failed": False,
+        }
+
+    haystack = _source_texts(final_sources or allowed_sources)
+    verified: list[str] = []
+    failed: list[str] = []
+    for claim in claims:
+        if claim in haystack:
+            verified.append(claim)
+        else:
+            failed.append(claim)
+    return {
+        "enabled": True,
+        "claims": claims,
+        "verified_values": verified,
+        "failed_values": failed,
+        "numeric_grounding_failed": bool(failed),
+    }
 
 
 def _validate_docs_summary(

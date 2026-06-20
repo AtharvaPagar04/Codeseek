@@ -261,7 +261,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run multi-repo retrieval eval suite.")
     parser.add_argument(
         "--suite-file",
-        default="docs/retrieval_docs/eval_suite_multi_repo.json",
+        default="evals/datasets/eval_suite_multi_repo.json",
         help="Suite JSON with datasets list",
     )
     parser.add_argument(

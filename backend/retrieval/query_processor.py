@@ -3,6 +3,7 @@
 import re
 
 from retrieval.config import ENABLE_SCORED_INTENT
+from retrieval.path_utils import extract_file_reference_tokens
 
 DEPENDENCY_PATTERNS = [
     r"\bcalls\b",
@@ -53,10 +54,15 @@ WORD_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
 
 # Known config/settings files that should be injected as file hints when CONFIG
 # intent fires and env-key or config-key entities are present in the query.
-CONFIG_FILES = [
-    "retrieval/config.py",
-    "rag_ingestion/config.py",
-    ".env.example",
+GENERIC_ARCHITECTURE_FILES = [
+    "README.md",
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "Cargo.toml",
+    "docker-compose.yml",
+    "Dockerfile",
 ]
 
 # ---------------------------------------------------------------------------
@@ -68,7 +74,7 @@ CONFIG_FILES = [
 #   (a) an eval case fails with hit@k=0 or wrong response_mode, AND
 #   (b) the failure cannot be fixed by improving entity extraction alone.
 #
-# If both conditions hold, open a new task in the response_quality_refinement_plan
+# If both conditions hold, open a new task in the active retrieval roadmap/docs
 # before adding code here.
 # ---------------------------------------------------------------------------
 HEURISTIC_COVERAGE_COMPLETE = True  # sentinel — do not remove
@@ -166,84 +172,6 @@ LOOKUP_PHRASES = (
     "locate ",
 )
 
-FLOW_SYMBOLS = {
-    "retrieval_pipeline": [
-        "process_query",
-        "classify_query_intent",
-        "search",
-        "assemble",
-        "assemble_for_reasoning",
-        "build_flow_answer",
-        "generate_answer",
-        "validate_generated_answer",
-    ],
-    "orchestration": ["_query_impl", "run_query"],
-    "auth_session": [
-        "auth_github",
-        "auth_github_callback",
-        "auth_github_token",
-        "auth_logout",
-        "create_auth_session",
-        "delete_auth_session",
-        "get_user_for_session_token",
-        "_current_auth_user",
-        "_require_auth_user",
-    ],
-    "indexing_session": ["create_session", "_index_job", "run_pipeline"],
-    "deployment_config": [],
-    "provider_credentials": [
-        "list_provider_credentials_v1",
-        "create_provider_credential_v1",
-        "activate_provider_credential_v1",
-        "delete_provider_credential_v1",
-        "list_provider_credentials",
-        "create_provider_credential",
-        "set_active_provider_credential",
-        "delete_provider_credential",
-        "get_active_provider_credential",
-    ],
-}
-
-FLOW_FILES = {
-    "retrieval_pipeline": [
-        "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
-        "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
-        "backend/retrieval/query_processor.py",
-        "backend/retrieval/searcher.py",
-        "backend/retrieval/main.py",
-        "backend/retrieval/code_answers.py",
-        "backend/retrieval/llm.py",
-        "backend/retrieval/answer_validation.py",
-    ],
-    "deployment_config": [
-        "docker-compose.yml",
-        "Dockerfile",
-        ".env.example",
-        "docs/deployment_runbook.md",
-        "scripts/run_local_backend.sh",
-    ],
-}
-
-ARCHITECTURE_FILES = [
-    "README.md",
-    "backend/README.md",
-    "docs/architecture.md",
-    "docs/overview.md",
-    "docker-compose.yml",
-    "backend/docker-compose.yml",
-    "Dockerfile",
-    ".env.example",
-    "package.json",
-    "pyproject.toml",
-    "requirements.txt",
-    "go.mod",
-    "Cargo.toml",
-    "retrieval/api_service.py",
-    "backend/retrieval/api_service.py",
-    "backend/retrieval/main.py",
-    "backend/rag_ingestion/main.py",
-    "backend/retrieval/db.py",
-]
 
 
 def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
@@ -295,20 +223,23 @@ def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
     return result
 
 
-def process_query(raw_query: str) -> dict:
+def process_query(raw_query: str, active_index_paths: set[str] | None = None) -> dict:
     """Classify intent and extract symbols/file hints from query text."""
     import time
+    import os
     from retrieval.config import (
         ENABLE_LLM_QUERY_CLASSIFIER,
         QUERY_CLASSIFIER_MAX_TOKENS,
         QUERY_CLASSIFIER_TIMEOUT_MS,
     )
+
     
     query = raw_query.strip()
     lower = query.lower()
 
     symbols = _extract_symbols(query)
-    extracted_files = _extract_files(query)
+    extracted_file_tokens = _extract_files(query)
+    extracted_files = [item["normalized_path"] or item["raw"] for item in extracted_file_tokens]
 
     intent = "SEMANTIC"
     if any(re.search(pattern, lower) for pattern in DEPENDENCY_PATTERNS):
@@ -319,10 +250,16 @@ def process_query(raw_query: str) -> dict:
     entities = {
         "symbols": symbols,
         "files": sorted(set(extracted_files)),
+        "file_lookup": {
+            "raw_tokens": [item["raw"] for item in extracted_file_tokens],
+            "normalized_paths": [item["normalized_path"] for item in extracted_file_tokens if item["normalized_path"]],
+            "filename_tokens": sorted({item["filename"] for item in extracted_file_tokens if item["filename"]}),
+        },
     }
     _inject_flow_symbols(query, entities)
-    _inject_architecture_files(query, entities)
-    _inject_source_contract_files(query, entities)
+    _inject_domain_boosts(query, entities)
+    _inject_architecture_files(query, entities, active_index_paths)
+    _inject_source_contract_files(query, entities, active_index_paths)
 
     if ENABLE_SCORED_INTENT:
         entities.update(_extract_scored_entities(query))
@@ -331,7 +268,7 @@ def process_query(raw_query: str) -> dict:
         entities.update(_empty_scored_entities())
         intent_scores = _legacy_intent_scores(intent)
 
-    _inject_config_files(query, entities)
+    _inject_config_files(query, entities, active_index_paths)
 
     classifier_mode = "deterministic"
     classifier_latency_ms = 0.0
@@ -361,7 +298,8 @@ def process_query(raw_query: str) -> dict:
     confidence = float(intent_scores.get(primary_intent, 0.0))
     response_mode = classify_response_mode(query)
     source_intent = classify_source_intent(query)
-    return {
+    
+    result = {
         "raw_query": query,
         "intent": intent,
         "primary_intent": primary_intent,
@@ -376,30 +314,63 @@ def process_query(raw_query: str) -> dict:
         "classifier_latency_ms": round(classifier_latency_ms, 2),
         "classifier_fallback_used": classifier_fallback_used,
     }
+    
+    if os.getenv("DEBUG_QUERY_PROCESSOR") == "1":
+        print(f"DEBUG: process_query({raw_query!r})")
+        print(f"DEBUG: intent={intent}, primary={primary_intent}, source={source_intent}")
+        for k, v in entities.items():
+            print(f"DEBUG: entities[{k}]={v}")
+            
+    return result
 
 
 def _inject_flow_symbols(query: str, entities: dict) -> None:
     flow_kind = _flow_kind(query)
     if not flow_kind:
         return
-    symbols = list(entities.get("symbols") or [])
-    symbols.extend(FLOW_SYMBOLS[flow_kind])
-    entities["symbols"] = sorted(set(symbols))
-    files = list(entities.get("files") or [])
-    files.extend(FLOW_FILES.get(flow_kind, []))
-    entities["files"] = sorted(set(files))
+    flow_domain_map = {
+        "auth_session": "domain:auth",
+        "indexing_session": "domain:ingestion",
+        "provider_credentials": "domain:provider-management",
+        "retrieval_pipeline": "domain:retrieval",
+        "orchestration": "domain:retrieval",
+        "deployment_config": "domain:devops",
+    }
+    label = flow_domain_map.get(flow_kind)
+    if label:
+        boosts = list(entities.get("boost_labels") or [])
+        if label not in boosts:
+            boosts.append(label)
+        entities["boost_labels"] = boosts
 
 
-def _inject_architecture_files(query: str, entities: dict) -> None:
+def _inject_domain_boosts(query: str, entities: dict) -> None:
+    from retrieval.query_intent import extract_domain_hints
+    hints = extract_domain_hints(query)
+    if hints:
+        boosts = list(entities.get("boost_labels") or [])
+        for hint in hints:
+            if hint not in boosts:
+                boosts.append(hint)
+        entities["boost_labels"] = boosts
+
+
+def _inject_architecture_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:
     lower = query.lower()
     if not _has_architecture_markers(lower):
         return
+    if not active_index_paths:
+        return
     files = list(entities.get("files") or [])
-    files.extend(ARCHITECTURE_FILES)
+    for arc_file in GENERIC_ARCHITECTURE_FILES:
+        if arc_file in active_index_paths and arc_file not in files:
+            files.append(arc_file)
     entities["files"] = sorted(set(files))
 
 
-def _inject_source_contract_files(query: str, entities: dict) -> None:
+def _inject_source_contract_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:
+    if active_index_paths is None:
+        return
     from retrieval.query_intent import classify_source_intent, preferred_source_paths_for_intent
 
     source_intent = classify_source_intent(query)
@@ -410,39 +381,53 @@ def _inject_source_contract_files(query: str, entities: dict) -> None:
         return
     files = list(entities.get("files") or [])
     for file_path in preferred_files:
+        if file_path not in active_index_paths:
+            continue
         if file_path not in files:
             files.append(file_path)
     entities["files"] = sorted(set(files))
 
 
-def _inject_config_files(query: str, entities: dict) -> None:
+def _inject_config_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:
     """When a CONFIG-intent query mentions env-keys, config-keys, or a dependency
     with the word 'configured', inject the known config file hints so the metadata
     searcher can hard-scroll them.
-
-    This fixes hit@k=0 for queries like:
-      'Where is RETRIEVAL_ENABLE_LEXICAL configured?'
-      'Where is BAAI/bge-small-en-v1.5 configured?'
-      'what is the purpose of CODESEEK_APP_ENCRYPTION_KEY?'
     """
     has_env_keys = bool(entities.get("env_keys"))
     has_config_keys = bool(entities.get("config_keys"))
     lower = query.lower()
     has_config_word = any(w in lower for w in ("configured", "configuration", "config key", "setting"))
     has_dependency_with_config = has_config_word and bool(entities.get("dependencies"))
-    if not (has_env_keys or has_config_keys or has_dependency_with_config):
+    is_plain_config_query = any(w in lower for w in ("config", "settings", "configuration"))
+    if not (has_env_keys or has_config_keys or has_dependency_with_config or is_plain_config_query):
         return
+    if not active_index_paths:
+        return
+        
     files = list(entities.get("files") or [])
-    for f in CONFIG_FILES:
-        if f not in files:
-            files.append(f)
+    for path in active_index_paths:
+        lower_path = path.lower()
+        if (
+            path.startswith(".env")
+            or "config.py" in lower_path
+            or "config.ts" in lower_path
+            or ".config.js" in lower_path
+            or ".config.ts" in lower_path
+            or "settings." in lower_path
+            or "next.config." in lower_path
+            or "vite.config." in lower_path
+            or "tailwind.config." in lower_path
+            or "tsconfig.json" in lower_path
+        ):
+            if path not in files:
+                files.append(path)
     entities["files"] = sorted(set(files))
 
 
 
 def _flow_kind(query: str) -> str:
     lower = query.lower()
-    if any(
+    if (any(
         term in lower
         for term in (
             "retrieval pipeline",
@@ -455,7 +440,7 @@ def _flow_kind(query: str) -> str:
             "reranking",
             "hybrid retrieval",
         )
-    ) or ("retrieval" in lower and "pipeline" in lower):
+    ) or ("retrieval" in lower and "pipeline" in lower)) and not any(term in lower for term in ("indexing", "ingestion", "storage", "qdrant", "vector")):
         return "retrieval_pipeline"
     if not any(
         marker in lower
@@ -490,13 +475,15 @@ def _flow_kind(query: str) -> str:
     return ""
 
 
-def _extract_files(query: str) -> list[str]:
-    extracted_files = []
-    for token in query.split():
-        token = token.strip(".,()[]{}\"'`")
-        if FILE_RE.fullmatch(token):
-            extracted_files.append(token)
-    return sorted(set(extracted_files))
+def _extract_files(query: str) -> list[dict[str, str]]:
+    from retrieval.config import get_repo_root
+
+    repo_root = None
+    try:
+        repo_root = get_repo_root()
+    except Exception:
+        repo_root = None
+    return extract_file_reference_tokens(query, repo_root=repo_root)
 
 
 def _extract_scored_entities(query: str) -> dict[str, list[str]]:

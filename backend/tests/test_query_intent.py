@@ -50,3 +50,48 @@ def test_source_intent_injects_preferred_files_into_query_info() -> None:
     assert info["source_intent"] == "api_endpoint"
     assert preferred_source_paths_for_intent("api_endpoint") == ()
     assert not any(path.endswith("api_service.py") for path in info["entities"]["files"])
+
+
+def test_inject_source_contract_files_none_paths() -> None:
+    # 1. Test _inject_source_contract_files returns immediately if active_index_paths is None
+    from unittest.mock import patch
+    from retrieval.query_intent import SOURCE_INTENT_CONTRACTS
+    mock_contracts = {"api_endpoint": ("backend/retrieval/api_service.py",)}
+    with patch.dict(SOURCE_INTENT_CONTRACTS, mock_contracts):
+        # When active_index_paths is None
+        info_none = process_query("Which endpoint handles chat query requests?", active_index_paths=None)
+        assert "backend/retrieval/api_service.py" not in info_none["entities"]["files"]
+
+        # When active_index_paths is a set containing the file
+        info_set = process_query("Which endpoint handles chat query requests?", active_index_paths={"backend/retrieval/api_service.py"})
+        assert "backend/retrieval/api_service.py" in info_set["entities"]["files"]
+
+
+def test_domain_boosts_auth_storage_config() -> None:
+    # 2. Add domain:auth for login/auth/authentication/oauth/session/security queries
+    for q in ["login endpoints", "auth flow", "authentication logic", "oauth setup", "session details", "security policies"]:
+        info = process_query(q)
+        assert "domain:auth" in info["entities"]["boost_labels"]
+
+    # 3. Add domain:storage or domain:ingestion for qdrant/upsert/vector/chunk storage queries
+    for q in ["qdrant db", "upsert vectors", "vector search", "chunk storage", "storage logic"]:
+        info = process_query(q)
+        assert "domain:storage" in info["entities"]["boost_labels"]
+        assert "domain:ingestion" in info["entities"]["boost_labels"]
+
+    # 4. Add domain:configuration for config/settings/configuration queries
+    for q in ["show config", "custom settings", "system configuration"]:
+        info = process_query(q)
+        assert "domain:configuration" in info["entities"]["boost_labels"]
+
+
+def test_config_injector_for_plain_config_queries() -> None:
+    # 5. Let config injector include active-index-matched config files for plain config queries
+    active_paths = {"backend/retrieval/config.py", "frontend/tsconfig.json", "other_file.py"}
+    
+    # Plain config query
+    info = process_query("show settings", active_index_paths=active_paths)
+    assert "backend/retrieval/config.py" in info["entities"]["files"]
+    assert "frontend/tsconfig.json" in info["entities"]["files"]
+    assert "other_file.py" not in info["entities"]["files"]
+

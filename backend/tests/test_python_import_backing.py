@@ -18,6 +18,7 @@ from retrieval.code_answers import (
     find_supporting_import_exports,
     _find_python_block_end,
 )
+from retrieval.searcher import _inject_import_backing_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +139,54 @@ class TestResolveImportPathPython:
 
             assert resolved is not None
             assert resolved.name == "app.json"
+
+    def test_resolves_tsconfig_alias_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "app" / "config").mkdir(parents=True)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "tsconfig.json").write_text(textwrap.dedent("""\
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@config/*": ["app/config/*"]
+                    }
+                  }
+                }
+            """))
+            (repo_root / "app" / "config" / "app.json").write_text('{"featureFlag": true}\n')
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                resolved = _resolve_import_path("src/components/App.tsx", "@config/app.json")
+
+            assert resolved is not None
+            assert resolved.name == "app.json"
+            assert "app/config/app.json" in str(resolved)
+
+    def test_resolves_jsconfig_baseurl_alias_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "client" / "lib").mkdir(parents=True)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "jsconfig.json").write_text(textwrap.dedent("""\
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "~/*": ["client/*"]
+                    }
+                  }
+                }
+            """))
+            (repo_root / "client" / "lib" / "data.ts").write_text("export const skillCategories = [];\n")
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                resolved = _resolve_import_path("src/components/App.tsx", "~/lib/data")
+
+            assert resolved is not None
+            assert resolved.name == "data.ts"
+            assert "client/lib/data.ts" in str(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -512,3 +561,44 @@ class TestPythonImportSupportIntegration:
         assert result["symbol_name"] == "appConfig"
         assert result["relative_path"] == "src/config/app.json"
         assert "```json" in result["formatted"]
+
+    def test_import_backing_records_alias_resolved_paths_for_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "src" / "components").mkdir(parents=True)
+            (repo_root / "src" / "lib").mkdir(parents=True)
+            (repo_root / "tsconfig.json").write_text(textwrap.dedent("""\
+                {
+                  "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                      "@/*": ["src/*"]
+                    }
+                  }
+                }
+            """))
+            (repo_root / "src" / "components" / "Skills.tsx").write_text(
+                'import { skillCategories } from "@/lib/data";\n'
+                'export default function Skills() { return null; }\n'
+            )
+            (repo_root / "src" / "lib" / "data.ts").write_text(
+                "export const skillCategories = [{ title: 'Programming' }];\n"
+            )
+
+            selected = [
+                {
+                    "chunk_id": "skills-1",
+                    "relative_path": "src/components/Skills.tsx",
+                    "symbol_name": "Skills",
+                    "start_line": 2,
+                    "end_line": 2,
+                    "imports": ['import { skillCategories } from "@/lib/data";'],
+                }
+            ]
+            query_info = {"alias_resolved_paths": []}
+
+            with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
+                expanded = _inject_import_backing_candidates("what skill categories are listed", selected, query_info)
+
+            assert any(item.get("relative_path") == "src/lib/data.ts" for item in expanded)
+            assert query_info["alias_resolved_paths"] == ["src/lib/data.ts"]

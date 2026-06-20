@@ -39,64 +39,50 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         orchestration = query_processor.process_query("walk me through backend request orchestration flow")
         auth = query_processor.process_query("explain the auth session lifecycle flow")
         indexing = query_processor.process_query("trace the indexing session creation flow")
-
-        self.assertIn("_query_impl", orchestration["entities"]["symbols"])
-        self.assertIn("run_query", orchestration["entities"]["symbols"])
-        self.assertIn("create_auth_session", auth["entities"]["symbols"])
-        self.assertIn("get_user_for_session_token", auth["entities"]["symbols"])
-        self.assertIn("delete_auth_session", auth["entities"]["symbols"])
-        self.assertIn("create_session", indexing["entities"]["symbols"])
-        self.assertIn("_index_job", indexing["entities"]["symbols"])
+    
+        self.assertIn("domain:retrieval", orchestration["entities"]["boost_labels"])
+        self.assertIn("domain:auth", auth["entities"]["boost_labels"])
+        self.assertIn("domain:ingestion", indexing["entities"]["boost_labels"])
 
     def test_injects_deployment_config_files_for_metadata_search(self) -> None:
-        result = query_processor.process_query("how does deployment configuration work")
-
-        self.assertIn("docker-compose.yml", result["entities"]["files"])
-        self.assertIn("Dockerfile", result["entities"]["files"])
+        active_paths = {"docker-compose.yml", "Dockerfile", ".env.example", "backend/config.py"}
+        result = query_processor.process_query("how does deployment configuration work", active_index_paths=active_paths)
+    
+        self.assertIn("domain:devops", result["entities"]["boost_labels"])
+        self.assertIn("backend/config.py", result["entities"]["files"])
         self.assertIn(".env.example", result["entities"]["files"])
 
     def test_injects_provider_credential_symbols_for_metadata_search(self) -> None:
         result = query_processor.process_query("explain provider credential lifecycle")
-
-        self.assertIn("create_provider_credential_v1", result["entities"]["symbols"])
-        self.assertIn("create_provider_credential", result["entities"]["symbols"])
-        self.assertIn("get_active_provider_credential", result["entities"]["symbols"])
+    
+        self.assertIn("domain:provider-management", result["entities"]["boost_labels"])
 
     def test_injects_architecture_files_for_metadata_search(self) -> None:
-        result = query_processor.process_query("architecture overview")
-
+        active_paths = {"README.md", "docker-compose.yml", "backend/retrieval/api_service.py"}
+        result = query_processor.process_query("architecture overview", active_index_paths=active_paths)
+    
         self.assertIn("README.md", result["entities"]["files"])
-        self.assertIn("backend/README.md", result["entities"]["files"])
         self.assertIn("docker-compose.yml", result["entities"]["files"])
-        self.assertIn("retrieval/api_service.py", result["entities"]["files"])
-        self.assertIn("backend/retrieval/api_service.py", result["entities"]["files"])
-        self.assertIn("backend/retrieval/main.py", result["entities"]["files"])
-        self.assertIn("backend/rag_ingestion/main.py", result["entities"]["files"])
 
     def test_injects_architecture_files_for_module_structure_prompt(self) -> None:
-        result = query_processor.process_query("What are the main modules and what does each one do?")
-
-        self.assertIn("backend/retrieval/api_service.py", result["entities"]["files"])
-        self.assertIn("backend/retrieval/main.py", result["entities"]["files"])
-        self.assertIn("backend/rag_ingestion/main.py", result["entities"]["files"])
-        self.assertIn("backend/docker-compose.yml", result["entities"]["files"])
-        self.assertIn("backend/retrieval/db.py", result["entities"]["files"])
+        active_paths = {"README.md", "package.json"}
+        result = query_processor.process_query("What are the main modules and what does each one do?", active_index_paths=active_paths)
+    
+        self.assertIn("README.md", result["entities"]["files"])
+        self.assertIn("package.json", result["entities"]["files"])
         self.assertEqual(result["primary_intent"], "ARCHITECTURE")
 
     def test_prefers_architecture_intent_for_codebase_structure_prompt(self) -> None:
         result = query_processor.process_query("How is this codebase structured?")
-
+    
         self.assertEqual(result["primary_intent"], "ARCHITECTURE")
         self.assertGreaterEqual(result["intent_scores"]["ARCHITECTURE"], 0.85)
         self.assertLess(result["intent_scores"]["FILE"], result["intent_scores"]["ARCHITECTURE"])
 
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")
-
-        self.assertIn("auth_github", result["entities"]["symbols"])
-        self.assertIn("create_auth_session", result["entities"]["symbols"])
-        self.assertIn("get_user_for_session_token", result["entities"]["symbols"])
-        self.assertIn("auth_logout", result["entities"]["symbols"])
+    
+        self.assertIn("domain:auth", result["entities"]["boost_labels"])
 
     def test_scored_intent_flag_still_emits_contract_in_legacy_mode(self) -> None:
         with patch("retrieval.query_processor.ENABLE_SCORED_INTENT", False):

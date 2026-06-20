@@ -80,10 +80,13 @@ def _mock_client():
 
 
 REQUIRED_PAYLOAD_KEYS = [
-    "chunk_id", "file_path", "relative_path", "language", "chunk_type",
+    "chunk_id", "file_path", "relative_path", "normalized_path", "filename",
+    "basename", "extension", "language", "chunk_type",
     "symbol_name", "qualified_symbol", "parent_symbol", "signature",
     "start_line", "end_line", "chunk_part", "total_parts", "token_count",
     "imports", "calls", "parameters", "methods", "file_symbols",
+    "symbol_role", "defined_symbols", "used_symbols", "imported_symbols",
+    "source_of_truth", "centrality_score", "exported_symbols",
     "docstring", "summary", "description", "file_type", "summary_facts",
     "detected_frameworks", "dependencies", "dev_dependencies", "scripts",
     "services", "ports", "env_keys", "entrypoints", "config_tools",
@@ -145,6 +148,8 @@ class PayloadShapeTests(unittest.TestCase):
         self.assertEqual(self.payload["dependencies"], ["fastapi"])
         self.assertEqual(self.payload["scripts"], {"dev": "uvicorn main:app"})
         self.assertEqual(self.payload["service_dependencies"], {"api": ["db"]})
+        self.assertFalse(self.payload["source_of_truth"])
+        self.assertEqual(self.payload["centrality_score"], 0.0)
 
 
 class StoreChunksTests(unittest.TestCase):

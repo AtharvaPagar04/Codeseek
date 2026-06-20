@@ -33,6 +33,7 @@ from retrieval.code_answers import (
 from retrieval.answer_validation import validate_generated_answer
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
+    DISPLAY_SOURCES_CAP,
     ENABLE_TWO_LAYER_SOURCES,
     HISTORY_DEFAULT_ENABLED,
     HISTORY_INJECT_THRESHOLD,
@@ -56,14 +57,19 @@ from retrieval.observability import StageMetrics, log_event, new_request_id
 from retrieval.query_processor import process_query
 from retrieval.isolation import validate_collection_binding
 from retrieval.query_intent import is_source_location_query
-from retrieval.searcher import search
-from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
+from retrieval.searcher import (
+    _content_looks_like_symbol_definition,
+    _content_looks_like_symbol_usage_only,
+    query_explicitly_requests_non_implementation_artifacts,
+    search,
+)
 from retrieval.source_filter import (
     explain_source_filter_decision,
     score_evidence_confidence,
     has_strong_source_location_evidence,
     select_sources_for_display,
     split_sources_two_layer,
+    apply_feature_location_gate,
 )
 
 
@@ -197,6 +203,180 @@ def _candidate_reason(item: dict) -> str:
     if source:
         return source.replace("_", " ")
     return "closest retrieved candidate"
+
+
+def _candidate_key(item: dict) -> tuple[str, str, int, int]:
+    return (
+        str(item.get("relative_path", "")).strip(),
+        str(item.get("symbol_name", "")).strip(),
+        int(item.get("start_line", 0) or 0),
+        int(item.get("end_line", 0) or 0),
+    )
+
+
+def _unique_paths(items: list[object]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            path = str(item.get("relative_path", "")).strip()
+        else:
+            path = str(item or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        ordered.append(path)
+    return ordered
+
+
+def _collect_retrieval_targeting_diagnostics(
+    *,
+    query_info: dict,
+    candidates: list[dict],
+    expanded: list[dict],
+    assembled_sources: list[dict],
+    display_sources: list[dict],
+    reasoning_sources: list[dict],
+) -> dict[str, object]:
+    tier0 = query_info.get("tier0_exact_lookup") if isinstance(query_info.get("tier0_exact_lookup"), dict) else {}
+    symbol_lookup = query_info.get("symbol_lookup") if isinstance(query_info.get("symbol_lookup"), dict) else {}
+    definition_ranking = query_info.get("definition_ranking") if isinstance(query_info.get("definition_ranking"), dict) else {}
+    structural_hints = query_info.get("structural_hints") if isinstance(query_info.get("structural_hints"), dict) else {}
+    central_file_ranking = query_info.get("central_file_ranking") if isinstance(query_info.get("central_file_ranking"), dict) else {}
+
+    expanded_keys = {_candidate_key(item): item for item in expanded}
+    assembled_keys = {_candidate_key(item): item for item in assembled_sources}
+    display_keys = {_candidate_key(item): item for item in display_sources}
+    reasoning_keys = {_candidate_key(item): item for item in reasoning_sources}
+
+    dropped_paths: list[str] = []
+    drop_reasons: dict[str, str] = {}
+    usage_demoted_paths: list[str] = []
+
+    for key, item in expanded_keys.items():
+        path = str(item.get("relative_path", "")).strip()
+        if not path:
+            continue
+        if key not in assembled_keys:
+            if path not in dropped_paths:
+                dropped_paths.append(path)
+            drop_reasons.setdefault(path, "context_budget_or_source_cap")
+            continue
+        if key not in reasoning_keys:
+            if path not in dropped_paths:
+                dropped_paths.append(path)
+            drop_reasons.setdefault(path, "reasoning_source_filter")
+        elif key not in display_keys:
+            if path not in dropped_paths:
+                dropped_paths.append(path)
+            drop_reasons.setdefault(path, "display_source_filter")
+
+        if item.get("usage_demoted"):
+            if path not in usage_demoted_paths:
+                usage_demoted_paths.append(path)
+            continue
+        if item.get("support_kind") not in {"symbol_definition_lookup", "tier0_exact_lookup"}:
+            content = str(item.get("content") or item.get("content_excerpt") or item.get("summary") or "")
+            for symbol in list((query_info.get("entities") or {}).get("symbols", []) or []):
+                if _content_looks_like_symbol_usage_only(content, str(symbol)) and not _content_looks_like_symbol_definition(content, str(symbol)):
+                    if path not in usage_demoted_paths:
+                        usage_demoted_paths.append(path)
+                    break
+
+    return {
+        "tier0_exact_lookup_enabled": bool(tier0.get("tier0_exact_lookup_enabled", False)),
+        "explicit_paths": list(tier0.get("normalized_paths") or []),
+        "explicit_filenames": list(tier0.get("filename_tokens") or []),
+        "exact_path_hits": list(tier0.get("exact_path_hit_paths") or []),
+        "normalized_path_hits": list(tier0.get("normalized_path_hit_paths") or []),
+        "filename_hits": list(tier0.get("filename_hit_paths") or []),
+        "filename_ambiguous": bool(tier0.get("filename_ambiguous", False)),
+        "exact_match_forced": bool(tier0.get("exact_match_forced", False)),
+        "forced_primary_paths": list(tier0.get("forced_primary_paths") or []),
+        "selected_primary_paths": _unique_paths([src for src in display_sources if src.get("expansion_type") == "primary"]),
+        "source_card_paths": _unique_paths(display_sources),
+        "dropped_exact_paths": [p for p in dropped_paths if p in (tier0.get("forced_primary_paths") or [])],
+        "drop_reasons": drop_reasons,
+        "symbol_hits": list(symbol_lookup.get("symbols_detected") or []),
+        "definition_boost_paths": _unique_paths(
+            list(symbol_lookup.get("definition_paths") or []) + list(definition_ranking.get("definition_boost_paths") or [])
+        ),
+        "usage_demoted_paths": usage_demoted_paths,
+        "structural_hint_ids": list(structural_hints.get("hint_ids") or []),
+        "structural_hint_paths": list(structural_hints.get("paths") or []),
+        "central_file_paths": list(central_file_ranking.get("boosted_paths") or []),
+        "alias_resolved_paths": list(query_info.get("alias_resolved_paths") or []),
+        "selected_expanded_paths": _unique_paths([src for src in display_sources if src.get("expansion_type") != "primary"]),
+        "reasoning_paths": _unique_paths(reasoning_sources),
+        "rendered_paths": _unique_paths(display_sources),
+        "dropped_paths": dropped_paths,
+    }
+
+
+def _collect_source_alignment_diagnostics(
+    *,
+    display_sources: list[dict],
+    reasoning_sources: list[dict],
+    rendered_sources: list[dict],
+) -> dict[str, object]:
+    context_paths = _unique_paths(reasoning_sources)
+    source_card_paths = _unique_paths(display_sources)
+    rendered_paths = _unique_paths(rendered_sources)
+    missing_source_cards = [path for path in context_paths if path not in source_card_paths]
+    stale_source_cards = [path for path in source_card_paths if path not in context_paths]
+    missing_rendered_cards = [path for path in source_card_paths if path not in rendered_paths]
+    return {
+        "context_paths": context_paths,
+        "source_card_paths": source_card_paths,
+        "rendered_paths": rendered_paths,
+        "missing_source_cards": missing_source_cards,
+        "stale_source_cards": stale_source_cards,
+        "missing_rendered_cards": missing_rendered_cards,
+        "aligned": not missing_source_cards and not stale_source_cards and not missing_rendered_cards,
+    }
+
+
+def _align_display_sources_with_reasoning(
+    display_sources: list[dict],
+    reasoning_sources: list[dict],
+    display_cap: int = DISPLAY_SOURCES_CAP,
+) -> list[dict]:
+    display = list(display_sources or [])
+    seen = {
+        (
+            str(item.get("relative_path", "")).strip(),
+            str(item.get("symbol_name", "")).strip(),
+            int(item.get("start_line", 0) or 0),
+            int(item.get("end_line", 0) or 0),
+            str(item.get("expansion_type", "primary")).strip(),
+        )
+        for item in display
+    }
+    required: list[dict] = []
+    for item in reasoning_sources or []:
+        key = (
+            str(item.get("relative_path", "")).strip(),
+            str(item.get("symbol_name", "")).strip(),
+            int(item.get("start_line", 0) or 0),
+            int(item.get("end_line", 0) or 0),
+            str(item.get("expansion_type", "primary")).strip(),
+        )
+        if key in seen:
+            continue
+        support_kind = str(item.get("support_kind", "")).strip()
+        if (
+            item.get("expansion_type") == "primary"
+            or support_kind in {"tier0_exact_lookup", "symbol_definition_lookup", "structural_hint"}
+        ):
+            required.append(item)
+            seen.add(key)
+    if not required:
+        return display
+
+    aligned = display + required
+    if len(aligned) <= display_cap:
+        return aligned
+    return aligned[:display_cap]
 
 
 def build_low_confidence_response(raw_query: str, candidates: list[dict], shown_sources: list[dict]) -> str:
@@ -921,7 +1101,14 @@ def _run_query_impl(
     started = time.perf_counter()
     # WS7: load recent cited entities and pass them into query resolution.
     recent_turns = memory.recent_turn_entities(max_turns=8) if hasattr(memory, "recent_turn_entities") else []
-    query_info = _resolve_query_info(raw_query, memory, recent_turns=recent_turns)
+    active_index_paths = None
+    try:
+        from retrieval.searcher import _get_lexical_index
+        idx = _get_lexical_index(get_collection_name())
+        active_index_paths = {doc.payload.get("relative_path") for doc in idx.documents if doc.payload.get("relative_path")}
+    except Exception:
+        pass
+    query_info = _resolve_query_info(raw_query, memory, recent_turns=recent_turns, active_index_paths=active_index_paths)
     metrics.add_stage("query_processor", started)
     # Resolve intent early so the history cap can be applied before assembly.
     primary_intent = query_info.get("primary_intent") or query_info.get("intent")
@@ -951,6 +1138,29 @@ def _run_query_impl(
     started = time.perf_counter()
     candidates = search(query_info)
     metrics.add_stage("search", started)
+    
+    # Phase 1: Capture top 20 raw candidates
+    top_raw = []
+    for c in candidates[:20]:
+        top_raw.append({
+            "path": c.get("relative_path"),
+            "role": c.get("framework_source_role"),
+            "score": c.get("fusion_score") or c.get("retrieval_score"),
+            "signals": [k for k in c.keys() if "hit" in k or "routing" in k]
+        })
+    query_info.setdefault("final_source_selection", {
+        "enabled": True,
+        "query_type": query_info.get("framework_routing", {}).get("query_type", "general"),
+        "top_raw_candidates": top_raw,
+        "framework_boosted_paths": query_info.get("framework_routing", {}).get("boosted_paths", []),
+        "selected_primary_paths": [],
+        "rendered_source_paths": [],
+        "answer_claimed_primary_path": None,
+        "forbidden_primary_paths": [],
+        "demoted_paths": [],
+        "drop_reasons": {}
+    })
+    
     # Count how many candidates came from previous-turn injection
     _prev_injected_count = sum(
         1 for c in candidates
@@ -974,6 +1184,11 @@ def _run_query_impl(
             c for c in expanded
             if "query_intent.py" not in (c.get("relative_path") or "")
         ]
+
+    from retrieval.source_filter import prune_exact_file_context
+    expanded, pruning_diag = prune_exact_file_context(raw_query, query_info, expanded)
+    meta["exact_file_context_pruning"] = pruning_diag
+
     metrics.add_stage("expand", started)
     started = time.perf_counter()
     assemble_result = assemble(
@@ -998,9 +1213,31 @@ def _run_query_impl(
         evaluation["assembled_sources"] = list(sources)
         evaluation["deterministic_context_token_count"] = int(token_count)
     meta["source_filter"] = explain_source_filter_decision(raw_query, sources)
+    sources, gate_diagnostics = apply_feature_location_gate(raw_query, sources)
+    if gate_diagnostics["enabled"]:
+        meta["feature_source_gate"] = gate_diagnostics
+        
+    from retrieval.source_filter import apply_wrong_evidence_guard, prioritize_final_sources
+    sources, guard_diag = apply_wrong_evidence_guard(raw_query, sources, query_info)
+    if "framework_routing" in query_info:
+        query_info["framework_routing"]["wrong_evidence_guard_applied"] = guard_diag.get("guard_applied", False)
+        if guard_diag.get("guard_applied"):
+            query_info["framework_routing"]["wrong_evidence_guard_reason"] = guard_diag.get("reason")
+
+    # Apply priority contract
+    sources = prioritize_final_sources(raw_query, sources, query_info)
+
     # Two-layer source gating: display_sources for citations, reasoning_sources for context.
     display_sources, reasoning_sources = split_sources_two_layer(
         raw_query, sources, enabled=ENABLE_TWO_LAYER_SOURCES
+    )
+    
+    query_info["final_source_selection"]["rendered_source_paths"] = [s.get("relative_path") for s in display_sources]
+
+    display_sources = _align_display_sources_with_reasoning(
+        display_sources,
+        reasoning_sources,
+        display_cap=8 if (is_overview_request(raw_query) or is_architecture_request(raw_query)) else DISPLAY_SOURCES_CAP
     )
     shown_sources = display_sources
     follow_up_anchor_paths = {
@@ -1026,6 +1263,58 @@ def _run_query_impl(
     retrieval_diag["candidate_count"] = len(candidates)
     retrieval_diag["previous_candidate_injection_reason"] = str(
         query_info.get("previous_candidate_injection_reason") or ""
+    )
+    if isinstance(query_info.get("tier0_exact_lookup"), dict):
+        retrieval_diag["tier0_exact_lookup"] = dict(query_info["tier0_exact_lookup"])
+    if isinstance(query_info.get("symbol_lookup"), dict):
+        retrieval_diag["symbol_lookup"] = dict(query_info["symbol_lookup"])
+    meta["retrieval_targeting"] = _collect_retrieval_targeting_diagnostics(
+        query_info=query_info,
+        candidates=candidates,
+        expanded=expanded,
+        assembled_sources=sources,
+        display_sources=display_sources,
+        reasoning_sources=reasoning_sources,
+    )
+    if "component_targeting" in query_info:
+        meta["component_targeting"] = query_info["component_targeting"]
+    if "exact_value_grounding" in query_info:
+        meta["exact_value_grounding"] = query_info["exact_value_grounding"]
+    if "feature_recall_discovery" in query_info:
+        meta["feature_recall_discovery"] = query_info["feature_recall_discovery"]
+    if "final_source_selection" in query_info:
+        meta["final_source_selection"] = query_info["final_source_selection"]
+    if "framework_routing" in query_info:
+        meta["framework_routing"] = query_info["framework_routing"]
+    if "domain_boost_retrieval" in query_info:
+        db_diag = query_info["domain_boost_retrieval"]
+        db_diag["selected_primary_paths"] = _unique_paths([
+            src for src in display_sources if src.get("domain_boost_hit") and src.get("expansion_type") == "primary"
+        ])
+        db_diag["rendered_source_paths"] = _unique_paths([
+            src for src in shown_sources if src.get("domain_boost_hit")
+        ])
+        db_diag["dropped_paths"] = [p for p in db_diag.get("candidate_paths", []) if p not in db_diag.get("rendered_source_paths", [])]
+        meta["domain_boost_retrieval"] = db_diag
+    if "feature_routing" in query_info:
+        feature_diag = query_info["feature_routing"]
+        feature_diag["selected_primary_paths"] = _unique_paths([
+            src for src in display_sources if src.get("feature_routing_hit") and src.get("expansion_type") == "primary"
+        ])
+        feature_diag["rendered_source_paths"] = _unique_paths([
+            src for src in shown_sources if src.get("feature_routing_hit")
+        ])
+        dropped_reasons = {}
+        rendered = set(feature_diag.get("rendered_source_paths", []))
+        for p in feature_diag.get("candidate_paths", []):
+            if p not in rendered:
+                dropped_reasons[p] = "dropped_by_source_filter_or_cap"
+        feature_diag["drop_reasons"] = dropped_reasons
+        meta["feature_routing"] = feature_diag
+    meta["source_alignment"] = _collect_source_alignment_diagnostics(
+        display_sources=display_sources,
+        reasoning_sources=reasoning_sources,
+        rendered_sources=shown_sources,
     )
     retrieval_diag["exact_hit"] = any(
         c.get("exact_retrieval_hit") or c.get("retrieval_source") in {"exact_entity", "local_content"}
@@ -1312,7 +1601,69 @@ def _run_query_impl(
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     meta["display_sources"] = list(display_sources)
     meta["reasoning_sources"] = list(reasoning_sources)
-    if is_code_request(raw_query):
+    from retrieval.code_answers import is_file_summary_request, build_file_summary_answer
+    if is_file_summary_request(raw_query):
+        started = time.perf_counter()
+        answer = build_file_summary_answer(raw_query, shown_sources, expanded)
+        response_mode = "file_summary"
+        metrics.add_stage("file_summary_answer", started)
+        cited_entities = extract_cited_entities(shown_sources)
+        memory.add(
+            raw_query, answer,
+            resolved_query=_resolved_query_text(query_info, raw_query),
+            entities=cited_entities,
+            primary_intent=primary_intent,
+        )
+        meta["validation"] = getattr(memory, "last_validation", None)
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "backend_latency_ms": metrics.total_ms(),
+                "provider_latency_ms": 0,
+                "errors": metrics.errors,
+                "response_mode": "file_summary",
+                "evidence_confidence": evidence_confidence,
+            }
+        )
+        if evaluation is not None:
+            evaluation["response_mode"] = "file_summary"
+            evaluation["answer_context"] = context
+            evaluation["answer_context_blocks"] = list(context_blocks)
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(shown_sources),
+            source_filter=meta["source_filter"],
+            response_mode="file_summary",
+            evidence_confidence=evidence_confidence["level"],
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
+        )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
+        if return_meta:
+            return answer, shown_sources, token_count, meta
+        return answer, shown_sources, token_count
+    elif is_code_request(raw_query):
         started = time.perf_counter()
         from retrieval.searcher import match_code_topic_route
         matched_code_topic_route = match_code_topic_route(raw_query, primary_intent)
@@ -2007,6 +2358,20 @@ def _run_query_impl(
     llm_backend_started_ms = metrics.total_ms()
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
+    
+    from retrieval.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
+    exact_val = query_info.get("exact_value_grounding")
+    is_exact_val = bool(exact_val and exact_val.get("enabled"))
+    if is_exact_val:
+        exact_val["raw_source_preferred"] = True
+        exact_val["summary_values_ignored"] = True
+        
+        exact_val["source_values"] = extract_source_values(
+            exact_val["query_type"], 
+            exact_val["value_terms"], 
+            reasoning_context
+        )
+
     if stream_handler:
         stream_handler.on_status("Generating answer...")
         conf_level = evidence_confidence["level"]
@@ -2029,7 +2394,8 @@ def _run_query_impl(
         ):
             if abort_event and abort_event.is_set():
                 break
-            stream_handler.on_delta(chunk)
+            if not is_exact_val:
+                stream_handler.on_delta(chunk)
             answer_chunks.append(chunk)
         answer = "".join(answer_chunks)
     else:
@@ -2044,6 +2410,29 @@ def _run_query_impl(
             evidence_confidence=evidence_confidence,
             selection_meta=llm_selection,
         )
+
+    if is_exact_val:
+        verify_res = verify_exact_value_claims(answer, exact_val["source_values"], query_info)
+        exact_val["verified"] = verify_res["verified"]
+        exact_val["failed_values"] = verify_res["failed_values"]
+        exact_val["answer_claims"] = verify_res["answer_claims"]
+        
+        if not verify_res["verified"]:
+            exact_val["repair_attempted"] = True
+            repair_text = attempt_repair(exact_val["source_values"], raw_query)
+            if repair_text:
+                answer = repair_text
+                exact_val["final_answer_repaired"] = True
+            else:
+                exact_val["final_answer_repaired"] = False
+        else:
+            exact_val["repair_attempted"] = False
+            exact_val["final_answer_repaired"] = False
+            
+        if is_exact_val and stream_handler:
+            # We buffer the whole answer if is_exact_val, so now we must send it out
+            stream_handler.on_delta(answer)
+
     token_count = reasoning_token_count
     metrics.add_stage("llm", started)
     answer, response_sources = post_process_answer_and_sources(
@@ -2123,6 +2512,7 @@ def _resolve_query_info(
     raw_query: str,
     memory: ConversationMemory,
     recent_turns: list[dict] | None = None,
+    active_index_paths: set[str] | None = None,
 ) -> dict:
     """Classify and potentially rewrite the query using recent entity context.
 
@@ -2130,7 +2520,7 @@ def _resolve_query_info(
     detects topic shifts, and produces a resolved query that replaces vague
     pronoun references with concrete entity names before retrieval.
     """
-    query_info = process_query(raw_query)
+    query_info = process_query(raw_query, active_index_paths=active_index_paths)
     recent_turns = recent_turns or []
 
     # --- Topic-shift detection (WS7) ---

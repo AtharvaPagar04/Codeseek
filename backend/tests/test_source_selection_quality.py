@@ -241,7 +241,7 @@ from retrieval.source_filter import source_excluded_for_query
 def test_eval_report_json_demoted_for_normal_query() -> None:
     """evals/reports/*.json should be demoted for a normal (non-eval) query."""
     eval_src = {
-        "relative_path": "evals/reports/ragas_calibration_clean_summary.json",
+        "relative_path": "evals/reports/eval_policy_summary_latest.json",
         "symbol_name": "",
         "start_line": 1,
         "end_line": 153,
@@ -282,16 +282,16 @@ def test_tests_allowed_for_test_query() -> None:
 
 
 def test_eval_report_allowed_for_eval_query() -> None:
-    """evals/reports/*.json should NOT be excluded when query asks about evals/RAGAS."""
+    """evals/reports/*.json should NOT be excluded when query asks about evals/reports."""
     eval_src = {
-        "relative_path": "evals/reports/ragas_calibration_clean_summary.json",
+        "relative_path": "evals/reports/eval_policy_summary_latest.json",
         "symbol_name": "",
         "start_line": 1,
         "end_line": 153,
         "expansion_type": "primary",
         "retrieval_score": 0.85,
     }
-    eval_query = "What does the RAGAS evaluation report say about context precision?"
+    eval_query = "What does the evaluation policy report say about warnings?"
     assert source_excluded_for_query(eval_src, eval_query) is False
 
 
@@ -323,4 +323,3 @@ def test_test_query_allows_test_file_in_results() -> None:
     )
     paths = [s["relative_path"] for s in selected]
     assert "backend/tests/test_freshness.py" in paths
-

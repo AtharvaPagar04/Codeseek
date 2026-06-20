@@ -567,16 +567,16 @@ CodeSeek/
 |---|---|
 | Deployment runbook (env vars, rollback, backups, failure modes) | [`backend/docs/deployment_runbook.md`](backend/docs/deployment_runbook.md) |
 | Current retrieval strategy (detailed, code-accurate) | [`backend/docs/retrieval_docs/current_retrieval_strategy.md`](backend/docs/retrieval_docs/current_retrieval_strategy.md) |
-| Retrieval pipeline architecture | [`backend/docs/retrieval_docs/retrieval_pipeline_architecture.md`](backend/docs/retrieval_docs/retrieval_pipeline_architecture.md) |
-| Ingestion pipeline architecture | [`backend/docs/ingestion_docs/architecture.md`](backend/docs/ingestion_docs/architecture.md) |
-| Response quality improvement plan | [`backend/docs/retrieval_docs/response_quality_refinement_plan.md`](backend/docs/retrieval_docs/response_quality_refinement_plan.md) |
+| Retrieval implementation roadmap | [`backend/docs/retrieval_docs/current_retrieval_strategy.md`](backend/docs/retrieval_docs/current_retrieval_strategy.md) |
+| Ingestion implementation roadmap | [`backend/docs/ingestion_docs/current_ingestion_strategy.md`](backend/docs/ingestion_docs/current_ingestion_strategy.md) |
+| Retrieval quality boundaries | [`backend/docs/retrieval_docs/multi_language_support_boundaries.md`](backend/docs/retrieval_docs/multi_language_support_boundaries.md) |
 | E2E test suite | [`tests/e2e/README.md`](tests/e2e/README.md) |
 | Backend README (quick-start, API reference) | [`backend/README.md`](backend/README.md) |
 | Deployment checklist | [`DEPLOYMENT_TODO.md`](DEPLOYMENT_TODO.md) |
 | Known improvements (Gemini free-tier + RAG analysis) | [`Imporvement.md`](Imporvement.md) |
 | Performance baseline (metrics, benchmark runner, rules) | [`docs/product/performance_baseline.md`](docs/product/performance_baseline.md) |
-| Release readiness checklist (final validations, limitations) | [`docs/product/release_readiness_checklist.md`](docs/product/release_readiness_checklist.md) |
-| Final project handoff pack (summary, roadmap, feature flags) | [`docs/product/final_handoff.md`](docs/product/final_handoff.md) |
+| Indexing validation guide | [`docs/product/index_latest.md`](docs/product/index_latest.md) |
+| Repository freshness guide | [`docs/product/repo_freshness.md`](docs/product/repo_freshness.md) |
 
 ---
 
@@ -622,4 +622,4 @@ To demonstrate CodeSeek's full capabilities, walk through this sequence:
 ### 14.6 Development Validation Policy
 To keep CI and development loops fast:
 - **No full pytest by default:** Target specific files and modules.
-- **No safe eval by default:** Do not run full RAGAS judge calibration runs unless explicitly requested.
+- **No safe eval by default:** Do not run heavyweight or non-core evaluation workflows unless explicitly requested.

@@ -8,6 +8,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from retrieval.path_utils import normalize_repo_path
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -125,6 +127,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     context_tokens INTEGER,
     is_error INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    diagnostics_json TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY(session_id) REFERENCES repo_sessions(id) ON DELETE CASCADE,
     FOREIGN KEY(thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
 );
@@ -342,6 +345,10 @@ def _init_sqlite(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE chat_messages ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''"
             )
+        if "diagnostics_json" not in message_columns:
+            conn.execute(
+                "ALTER TABLE chat_messages ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '{}'"
+            )
         job_columns = {
             row[1]
             for row in conn.execute("PRAGMA table_info(indexing_jobs)").fetchall()
@@ -399,6 +406,10 @@ def _init_postgres(database_url: str) -> None:
             if not _postgres_has_column(cursor, "chat_messages", "thread_id"):
                 cursor.execute(
                     "ALTER TABLE chat_messages ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "chat_messages", "diagnostics_json"):
+                cursor.execute(
+                    "ALTER TABLE chat_messages ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '{}'"
                 )
         conn.commit()
 
@@ -531,6 +542,7 @@ def upsert_session_file(
     import uuid
     from datetime import datetime, timezone
     now_str = datetime.now(timezone.utc).isoformat()
+    repo_path = normalize_repo_path(repo_path)
 
     def _run(cur):
         row = cur.execute(

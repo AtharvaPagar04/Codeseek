@@ -8,8 +8,9 @@ const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
  * Props:
  *   session         — the session being indexed
  *   onRetryIndexing — function callback to trigger indexing retry
+ *   onCancelIndexing — function callback to trigger indexing cancellation
  */
-export default function IndexingLiveLog({ session, onRetryIndexing }) {
+export default function IndexingLiveLog({ session, onRetryIndexing, onCancelIndexing }) {
   const sessionId = session?.id;
   const isIndexing = session?.status === 'indexing';
   const [events, setEvents] = useState([]);
@@ -192,12 +193,22 @@ export default function IndexingLiveLog({ session, onRetryIndexing }) {
 
       {/* Inline status message notice */}
       {session?.status === 'indexing' && (
-        <div className="border-t border-border/30 bg-warning/5 px-3.5 py-1.5 text-[10px] text-warning font-sans flex items-center gap-1.5">
-          <svg className="w-3 h-3 shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span>Indexing in progress. Chat will enable once complete.</span>
+        <div className="border-t border-border/30 bg-warning/5 px-3.5 py-1.5 text-[10px] text-warning font-sans flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <svg className="w-3 h-3 shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span>Indexing in progress. Chat will enable once complete.</span>
+          </div>
+          {onCancelIndexing && (
+            <button
+              onClick={() => onCancelIndexing(session.id)}
+              className="shrink-0 px-2 py-0.5 rounded bg-warning/80 hover:bg-warning text-surface-1 font-semibold text-[9px] transition-colors"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       )}
 

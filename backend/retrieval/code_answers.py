@@ -11,6 +11,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from retrieval.config import QDRANT_HOST, QDRANT_PORT, get_collection_name, get_repo_root
+from retrieval.import_resolution import resolve_import_target
 
 _DIRECT_CODE_PHRASES = (
     "show code",
@@ -153,8 +154,7 @@ FLOW_EVIDENCE_MODEL = {
             {
                 "name": "Pipeline documentation",
                 "paths": {
-                    "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
-                    "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
+                    "backend/docs/retrieval_docs/current_retrieval_strategy.md",
                 },
                 "step": "The retrieval pipeline documentation explains the end-to-end query flow, the retrieval stages, and how context and validation are layered on top of the indexed repository.",
                 "required": False,
@@ -360,6 +360,10 @@ FLOW_EVIDENCE_MODEL = {
         ],
     },
 }
+def is_file_summary_request(raw_query: str) -> bool:
+    import re
+    q = raw_query.lower()
+    return bool(re.search(r"what does .* do\??|explain .*\.(?:py|js|ts|jsx|tsx|md|json|yml|yaml)|summarize .*", q))
 
 
 def is_code_request(raw_query: str) -> bool:
@@ -729,6 +733,8 @@ def build_flow_answer(
 
     if flow_kind == "retrieval_pipeline":
         lines = ["The retrieval pipeline appears to be:", ""]
+    elif flow_kind == "indexing_session":
+        lines = ["The indexing pipeline appears to be:", ""]
     else:
         lines = ["The flow appears to be:", ""]
 
@@ -797,6 +803,40 @@ def build_flow_answer(
         limit = 10 if flow_kind == "retrieval_pipeline" else 7
         return answer, selected_sources[:limit]
     return answer
+def build_file_summary_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
+    if not sources:
+        return "No exact file found for summary."
+    
+    # Try to find the exact file hit or the top file
+    primary = next((s for s in sources if s.get("exact_retrieval_hit")), sources[0])
+    path = primary.get("relative_path", "")
+    
+    # Extract file-level summary or code intent
+    summary_text = ""
+    if primary.get("summary"):
+        summary_text = primary["summary"]
+    elif primary.get("code_intents"):
+        summary_text = ", ".join(primary["code_intents"])
+    elif primary.get("code_intent"):
+        summary_text = primary["code_intent"]
+    else:
+        summary_text = "Provides implementation for " + path
+
+    # Top responsibilities / major symbols
+    symbols = []
+    if "defined_symbols" in primary and isinstance(primary["defined_symbols"], list):
+        symbols = [s for s in primary["defined_symbols"] if not s.startswith("_")][:10]
+        if not symbols:
+            symbols = [s for s in primary["defined_symbols"]][:5]
+    
+    ans = f"`{path}` is an implementation file.\n\nIt is responsible for:\n- {summary_text}\n"
+    
+    if symbols:
+        ans += "\nImportant functions/classes include:\n"
+        for s in symbols:
+            ans += f"- `{s}`\n"
+            
+    return ans
 
 
 def build_code_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
@@ -935,6 +975,7 @@ def _get_user_facing_why(relative_path: str, default_why: str) -> str:
     cleaned_why = default_why
     cleaned_why = re.sub(r"Direct injected file candidate\s*", "", cleaned_why)
     cleaned_why = re.sub(r"direct injected candidate\s*", "", cleaned_why, flags=re.IGNORECASE)
+    cleaned_why = re.sub(r"^(Function:|Method:|Class:|Interface:)\s*", "", cleaned_why)
     return cleaned_why
 
 
@@ -1701,193 +1742,29 @@ def filesystem_exact_symbol_sources_for_query(
     return results
 
 
-DETERMINISTIC_BACKEND_MODULES_SUMMARY = (
-    "The main backend modules are top-level backend subsystems, not individual functions/files:\n\n"
-    "* backend/retrieval\n"
-    "  * API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.\n"
-    "* backend/rag_ingestion\n"
-    "  * repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.\n"
-    "* backend/evals\n"
-    "  * safe eval runner, retrieval/conversation evals, evaluation reports.\n"
-    "* backend/tests\n"
-    "  * focused regression and behavior tests.\n"
-    "* backend/docs\n"
-    "  * retrieval docs, evaluation policy, pipeline docs, design/runbooks.\n"
-    "* backend/scripts\n"
-    "  * developer utilities/benchmarks, not core runtime."
-)
-
-
 def build_overview_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
     selected_sources = _preferred_overview_sources(raw_query, sources)
-    module_tokens = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", raw_query.lower()))
-    wants_backend_modules = (
-        "backend" in module_tokens
-        and (
-            "module" in module_tokens
-            or "modules" in module_tokens
-            or "subsystem" in module_tokens
-            or "subsystems" in module_tokens
-        )
-    )
-    if wants_backend_modules:
-        lines = [
-            DETERMINISTIC_BACKEND_MODULES_SUMMARY,
-            "",
-            "Sources:"
-        ]
-        lines.extend(_source_reference_lines(selected_sources[:5]))
-        return "\n".join(lines).strip()
-    
-    is_structured_test = False
-    for item in list(sources) + list(chunks):
-        content = str(
-            item.get("content")
-            or item.get("content_excerpt")
-            or item.get("summary")
-            or ""
-        ).lower()
-        if "indexes repositories and answers questions with cited evidence" in content:
-            is_structured_test = True
-            break
-
-    has_codeseek = False
-    if not is_structured_test:
-        for item in list(sources) + list(chunks):
-            path = str(item.get("relative_path", "")).lower()
-            content = str(
-                item.get("content")
-                or item.get("content_excerpt")
-                or item.get("summary")
-                or ""
-            ).lower()
-            if "codeseek" in path or "codeseek" in content:
-                has_codeseek = True
-                break
-
-    if has_codeseek:
-        if wants_backend_modules:
-            lines = [
-                "The main backend modules are:",
-                "",
-            ]
-        else:
-            lines = [
-                "CodeSeek is a local-first repository RAG assistant for understanding codebases with grounded answers. It indexes a repository into searchable chunks, stores vector evidence in Qdrant, tracks repository/session metadata locally, and uses retrieved source context to answer questions about implementation, architecture, indexing, retrieval, and operational workflows.",
-                "",
-                "Repository Intelligence",
-                "",
-                "The backend owns most of the intelligence. Repository sessions point CodeSeek at a local checkout or cloned repository, then the ingestion pipeline discovers files, filters unsupported or ignored paths, parses supported source files, creates metadata-rich chunks, generates embeddings, and stores those vectors. That indexed evidence becomes the basis for later answers, source cards, diagnostics, and freshness checks.",
-                "",
-                "Answering And Source Grounding",
-                "",
-                "When a user asks a question, the retrieval layer classifies the query, searches the indexed repository, expands context when useful, filters display sources, and builds an answer from the selected evidence. The system is designed to cite real repository files instead of producing ungrounded summaries. For broad questions it should synthesize README, product docs, ingestion entrypoints, retrieval entrypoints, and session/indexing code rather than exposing internal helper functions.",
-                "",
-                "Developer Workflow",
-                "",
-                "The frontend is the developer-facing workspace. It shows repository sessions, chat responses, source cards, diagnostics, freshness state, indexing controls, and job status. Product workflows include Index latest, Index changed files, cancellation, job history, local model/provider configuration, and offline-oriented operation. In short, this repo is building a private codebase explainer that combines local indexing, retrieval, answer generation, and UI diagnostics."
-            ]
-        key_areas = []
-        seen_paths = set()
-        for src in selected_sources:
-            path = src.get("relative_path", "")
-            if path and path not in seen_paths:
-                seen_paths.add(path)
-                default_role = src.get("summary") or "Contains implementation details matching the query."
-                role = _get_user_facing_why(path, default_role)
-                role = role.split(".")[0].strip() + "."
-                key_areas.append(f"* `{path}`: {role}")
-        if key_areas:
-            if wants_backend_modules:
-                lines.extend(key_areas[:5])
-            else:
-                lines.append("Key areas from the retrieved sources:")
-                lines.append("")
-                lines.extend(key_areas[:4])
-        lines.append("")
-        lines.append("Sources:")
-        if wants_backend_modules:
-            source_ref_sources: list[dict] = []
-            seen_paths: set[str] = set()
-            from retrieval.source_filter import refine_overview_display_sources
-            refined_sources = refine_overview_display_sources(raw_query, list(sources) + list(chunks), list(sources) + list(chunks))
-            for src in refined_sources:
-                path = str(src.get("relative_path", "")).strip()
-                if not path or path in seen_paths:
-                    continue
-                seen_paths.add(path)
-                source_ref_sources.append(src)
-            for src in source_ref_sources[:5]:
-                path = str(src.get("relative_path", "")).strip()
-                symbol = str(src.get("symbol_name", "")).strip() or "<file>"
-                start_line = int(src.get("start_line", 0) or 0)
-                end_line = int(src.get("end_line", 0) or 0)
-                lines.append(f"- `{path}` :: {symbol} (lines {start_line}-{end_line})")
-        else:
-            lines.extend(_source_reference_lines(selected_sources[:5]))
-        return "\n".join(lines).strip()
     
     # General repository overview summary
     direct = _project_summary(sources, chunks)
+    
+    is_backend_modules = "backend" in raw_query.lower() and ("module" in raw_query.lower() or "subsystem" in raw_query.lower())
+    intro = "The main backend modules are top-level backend subsystems, not individual functions/files:" if is_backend_modules else "At a high level:"
+    
     lines = [
         direct,
         "",
-        "At a high level:"
+        intro
     ]
     
     bullets = []
     technologies = _extract_tech_stack(selected_sources)
-    architecture = _overview_architecture_points(selected_sources)
+    architecture = _overview_architecture_points(selected_sources, is_backend_modules=is_backend_modules)
     subsystem_points = _overview_subsystem_points(selected_sources)
-    if wants_backend_modules:
-        module_bullets: list[str] = []
-        evidence_sources = list(sources) + list(chunks)
-        has_retrieval = any(str(src.get("relative_path", "")).lower().startswith("backend/retrieval/") for src in evidence_sources)
-        has_ingestion = any(str(src.get("relative_path", "")).lower().startswith("backend/rag_ingestion/") for src in evidence_sources)
-        has_evals = any(str(src.get("relative_path", "")).lower().startswith("backend/evals/") for src in evidence_sources)
-        has_tests = any(str(src.get("relative_path", "")).lower().startswith("backend/tests/") for src in evidence_sources)
-        has_docs = any(str(src.get("relative_path", "")).lower().startswith("backend/docs/") for src in evidence_sources)
-        if has_retrieval:
-            module_bullets.append("backend/retrieval handles query processing, search, answer generation, sessions, and diagnostics.")
-        if has_ingestion:
-            module_bullets.append("backend/rag_ingestion handles repository parsing, chunking, embedding, and Qdrant storage.")
-        if has_evals:
-            module_bullets.append("backend/evals handles safe eval execution, retrieval/conversation evals, and report generation.")
-        if has_tests:
-            module_bullets.append("backend/tests contains regression and behavior tests.")
-        if has_docs:
-            module_bullets.append("backend/docs contains design docs and retrieval documentation.")
-        if not module_bullets:
-            module_bullets = subsystem_points[:5] or architecture[:4]
-        if not module_bullets:
-            module_bullets = ["Retrieved overview evidence describes the general repository files and structure."]
-        lines = ["The main backend modules are:", ""]
-        for idx, bullet in enumerate(module_bullets, 1):
-            lines.append(f"{idx}. {bullet}")
-        lines.append("")
-        key_areas = []
-        seen_paths = set()
-        for src in selected_sources:
-            path = src.get("relative_path", "")
-            if path and path not in seen_paths:
-                seen_paths.add(path)
-                if path.startswith("__"):
-                    continue
-                default_role = src.get("summary") or "Contains implementation details matching the query."
-                role = _get_user_facing_why(path, default_role)
-                role = role.split(".")[0].strip() + "."
-                key_areas.append(f"* `{path}`: {role}")
-        if key_areas:
-            lines.append("Key areas from the retrieved sources:")
-            lines.append("")
-            lines.extend(key_areas[:5])
-        lines.append("")
-        lines.append("Sources:")
-        lines.extend(_source_reference_lines(selected_sources[:5]))
-        return "\n".join(lines).strip()
+
     if technologies:
         bullets.append(f"Tech stack: {', '.join(technologies[:8])}.")
-    bullets.extend(subsystem_points[:9])
+    bullets.extend(subsystem_points[:12])
     bullets.extend(architecture[:4])
     if not bullets:
         bullets.append("Retrieved overview evidence describes the general repository files and structure.")
@@ -1994,8 +1871,6 @@ def preferred_docs_summary_sources(sources: list[dict]) -> list[dict]:
             score -= 40
         if "evaluation_policy" in path:
             score -= 30
-        if "ragas_validation_design" in path:
-            score -= 28
         if "evaluation_report" in path:
             score -= 24
         if "readme" in path:
@@ -2076,34 +1951,13 @@ def build_docs_summary_answer(raw_query: str, sources: list[dict], chunks: list[
 
     def _doc_title(path: str) -> str:
         lower = path.lower()
-        if "safe_eval_runner" in lower:
-            return "Safe Evaluation Runner"
-        if "evaluation_policy" in lower:
-            return "Evaluation Policy"
-        if "ragas_validation_design" in lower:
-            return "RAGAS Validation Design"
-        if "evaluation_report" in lower:
-            return "Evaluation Report API"
-        if "repo_freshness" in lower:
-            return "Repo Freshness"
         if lower.endswith("readme.md") or lower.endswith("readme"):
             return "README"
         stem = Path(path).stem.replace("_", " ").strip()
         return stem.title() if stem else "Documentation"
 
     def _doc_summary(src: dict) -> str:
-        path = str(src.get("relative_path", "")).lower()
         summary = str(src.get("summary") or src.get("content_excerpt") or "").strip()
-        if "safe_eval_runner" in path:
-            return "It explains how the runner executes CodeSeek's evaluation pipeline, runs retrieval and conversation evals, applies policy gates, writes summary reports, and records diagnostics."
-        if "evaluation_policy" in path:
-            return "It documents the evaluation policy, the gates used to judge answers, and how failures or low-confidence results should be handled."
-        if "ragas_validation_design" in path:
-            return "It covers the RAGAS validation design, including metrics, validation flow, and how evaluation outputs are interpreted."
-        if "evaluation_report" in path:
-            return "It documents how the latest evaluation report is loaded, shaped, and returned by the API."
-        if "repo_freshness" in path:
-            return "It documents repository freshness checks, indexing status, and operational reporting."
         if summary:
             return summary.splitlines()[0].rstrip(".") + "."
         return "It documents the requested feature and related behavior."
@@ -2203,7 +2057,9 @@ def _build_indexing_explanation_answer(raw_query: str, sources: list[dict], chun
         return ""
 
     lines = [
-        "Indexing in CodeSeek starts from a repository session. A session identifies the repository path or cloned checkout, the Qdrant collection used for that repository, and the metadata the app needs to report whether the index is current. When indexing starts, the backend moves the session into an indexing state and records progress so the UI can show job status instead of treating indexing as an invisible background task.",
+        "Indexing Pipeline & Ingestion",
+        "",
+        "Indexing starts from a repository session. A session identifies the repository path or cloned checkout, the vector collection used for that repository, and the metadata the app needs to report whether the index is current. When indexing starts, the backend moves the session into an indexing state and records progress so the UI can show job status instead of treating indexing as an invisible background task.",
         "",
         "Pipeline Stages",
         "",
@@ -2211,7 +2067,7 @@ def _build_indexing_explanation_answer(raw_query: str, sources: list[dict], chun
         "",
         "Embeddings And Storage",
         "",
-        "After chunking, CodeSeek generates embeddings for the chunks and stores them in Qdrant. Qdrant is the vector-search layer used during question answering. Local database metadata tracks sessions, file state, indexing jobs, and file-to-vector relationships. That metadata is important because it lets CodeSeek know which vectors belong to which files and which session/collection they belong to.",
+        "After chunking, the system generates embeddings for the chunks and stores them. The vector-search layer is used during question answering. Local database metadata tracks sessions, file state, indexing jobs, and file-to-vector relationships. That metadata is important because it tracks which vectors belong to which files and which session/collection they belong to.",
         "",
         "Reindexing Paths",
         "",
@@ -2527,7 +2383,7 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
         ):
             score += 12
         if flow_kind == "retrieval_pipeline":
-            if path.endswith(("retrieval_pipeline_docs.md", "retrieval_pipeline_architecture.md")):
+            if path.endswith("current_retrieval_strategy.md"):
                 score += 20
             if path.endswith("query_processor.py"):
                 score += 18
@@ -2545,7 +2401,7 @@ def _preferred_flow_sources(raw_query: str, sources: list[dict]) -> list[dict]:
                 score += 10
             if symbol in {"process_query", "search", "_merge_results", "_rerank_with_query_tokens", "assemble", "assemble_for_reasoning", "build_flow_answer", "generate_answer", "validate_generated_answer"}:
                 score += 20
-            if "/scripts/" in path or "benchmark" in path or "ragas" in path:
+            if "/scripts/" in path or "benchmark" in path:
                 score -= 90
         if score > 0:
             scored.append((score, source))
@@ -2581,9 +2437,9 @@ def _preferred_overview_sources(raw_query: str, sources: list[dict]) -> list[dic
             item.get("relative_path", ""),
             int(item.get("start_line", 0)),
         ),
-    )[:5]
+    )[:8]
     from retrieval.source_filter import refine_overview_display_sources
-    return refine_overview_display_sources(raw_query, selected, sources)
+    return refine_overview_display_sources(raw_query, selected, sources, target_count=8)
 
 
 def _preferred_architecture_sources(raw_query: str, sources: list[dict], chunks: list[dict]) -> list[dict]:
@@ -2662,7 +2518,7 @@ def _preferred_architecture_sources(raw_query: str, sources: list[dict], chunks:
         if relative_path:
             selected_paths.add(relative_path)
     from retrieval.source_filter import refine_overview_display_sources
-    return refine_overview_display_sources(raw_query, selected, candidates)[:6]
+    return refine_overview_display_sources(raw_query, selected, candidates, target_count=8)
 
 
 _architecture_qdrant_client: QdrantClient | None = None
@@ -3490,47 +3346,12 @@ def _split_identifier(identifier: str) -> list[str]:
 
 
 def _resolve_import_path(source_relative_path: str, module_path: str) -> Path | None:
-    """Resolve an import module path to an absolute filesystem Path.
-
-    Handles:
-    - JS/TS alias:     @/lib/data  → <repo>/src/lib/data.{ts,tsx,js,jsx}
-    - JS/TS relative:  ./utils     → relative to source file
-    - Python dotted:   retrieval.config → <repo>/retrieval/config.py
-    - Python relative: .helpers    → relative package (limited support)
-    """
-    repo_root = Path(get_repo_root())
-    source_path = repo_root / source_relative_path
-
-    if module_path.startswith("@/"):
-        base = repo_root / "src" / module_path[2:]
-    elif module_path.startswith("./") or module_path.startswith("../"):
-        base = (source_path.parent / module_path).resolve()
-    elif re.match(r'^[A-Za-z_][A-Za-z0-9_.]*$', module_path):
-        # Python dotted module path: convert dots to path separators
-        rel_path = module_path.replace(".", "/")
-        # Try as a plain file first, then as a package (directory with __init__.py)
-        base = repo_root / rel_path
-    else:
-        return None
-
-    candidates = [
-        base.with_suffix(".ts"),
-        base.with_suffix(".tsx"),
-        base.with_suffix(".js"),
-        base.with_suffix(".jsx"),
-        base.with_suffix(".py"),
-        base.with_suffix(".json"),
-        base / "index.ts",
-        base / "index.tsx",
-        base / "index.js",
-        base / "index.jsx",
-        base / "__init__.py",
-        base,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    resolved, _info = resolve_import_target(
+        source_relative_path,
+        module_path,
+        repo_root=get_repo_root(),
+    )
+    return resolved
 
 
 def _extract_export_block(
@@ -3801,29 +3622,6 @@ def _project_summary(sources: list[dict], chunks: list[dict]) -> str:
             is_structured_test = True
             break
 
-    has_codeseek = False
-    if not is_structured_test:
-        for item in list(sources) + list(chunks):
-            path = str(item.get("relative_path", "")).lower()
-            content = str(
-                item.get("content")
-                or item.get("content_excerpt")
-                or item.get("summary")
-                or ""
-            ).lower()
-            if "codeseek" in path or "codeseek" in content:
-                has_codeseek = True
-                break
-
-    if has_codeseek:
-        return (
-            "CodeSeek is a repository-aware code retrieval and question-answering system.\n\n"
-            "At a high level:\n"
-            "1. It indexes repository files into chunks and embeddings.\n"
-            "2. It stores/searches those chunks for code-aware retrieval.\n"
-            "3. It uses retrieved evidence to answer questions about code locations, configuration, architecture, and flows."
-        )
-
     for source in sources:
         if _is_repo_summary_source(source):
             purpose = str(source.get("purpose", "")).strip()
@@ -3879,7 +3677,7 @@ def _readme_summary(text: str) -> str:
     return ""
 
 
-def _overview_architecture_points(sources: list[dict]) -> list[str]:
+def _overview_architecture_points(sources: list[dict], is_backend_modules: bool = False) -> list[str]:
     points: list[str] = []
     for source in sources:
         relative_path = str(source.get("relative_path", "")).strip()
@@ -3925,7 +3723,8 @@ def _overview_architecture_points(sources: list[dict]) -> list[str]:
         elif any(part in lower for part in ("config", ".env", "docker", "vite", "tailwind")):
             points.append(f"Deployment or build configuration is visible in {relative_path}.")
         if summary and not lower.startswith(("readme", "src/")):
-            points.append(summary.rstrip(".") + ".")
+            if not is_backend_modules or not summary.startswith(("Function:", "Method:", "Class:", "Interface:")):
+                points.append(summary.rstrip(".") + ".")
     return _dedupe(points)
 
 
@@ -3936,19 +3735,19 @@ def _overview_subsystem_points(sources: list[dict]) -> list[str]:
         relative_path = str(source.get("relative_path", "")).strip()
         lower = relative_path.lower()
         if lower.startswith("backend/retrieval/") and "retrieval" not in seen_labels:
-            points.append("backend/retrieval handles query processing, search, answer generation, sessions, and diagnostics.")
+            points.append("backend/retrieval handles API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.")
             seen_labels.add("retrieval")
         if lower.startswith("backend/rag_ingestion/") and "ingestion" not in seen_labels:
-            points.append("backend/rag_ingestion handles repository parsing, chunking, embedding, and Qdrant storage.")
+            points.append("backend/rag_ingestion handles repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.")
             seen_labels.add("ingestion")
         if lower.startswith("backend/evals/") and "evals" not in seen_labels:
-            points.append("backend/evals handles safe eval execution, retrieval/conversation evals, and report generation.")
+            points.append("backend/evals handles safe eval runner, retrieval/conversation evals, evaluation reports.")
             seen_labels.add("evals")
         if lower.startswith("backend/tests/") and "tests" not in seen_labels:
-            points.append("backend/tests contains regression and behavior tests.")
+            points.append("backend/tests contains focused regression and behavior tests.")
             seen_labels.add("tests")
         if lower.startswith("backend/docs/") and "docs" not in seen_labels:
-            points.append("backend/docs contains design docs and retrieval documentation.")
+            points.append("backend/docs contains retrieval docs, evaluation policy, pipeline docs, design/runbooks.")
             seen_labels.add("docs")
         if lower.startswith("frontend/") and "frontend" not in seen_labels:
             points.append("frontend contains the UI and session views.")
@@ -4117,7 +3916,7 @@ def _extract_tech_stack(sources: list[dict]) -> list[str]:
 
 def _flow_kind(raw_query: str) -> str:
     tokens = _query_tokens(raw_query)
-    if any(
+    if (any(
         term in raw_query.lower()
         for term in (
             "retrieval pipeline",
@@ -4130,7 +3929,7 @@ def _flow_kind(raw_query: str) -> str:
             "reranking",
             "hybrid retrieval",
         )
-    ) or ("retrieval" in raw_query.lower() and "pipeline" in raw_query.lower()):
+    ) or ("retrieval" in raw_query.lower() and "pipeline" in raw_query.lower())) and not any(term in raw_query.lower() for term in ("indexing", "ingestion", "storage", "qdrant", "vector")):
         return "retrieval_pipeline"
     scores = {
         kind: len(tokens & terms)

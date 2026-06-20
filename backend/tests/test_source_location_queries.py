@@ -301,15 +301,6 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "labels": ["question_use:repo-overview"],
             "content": "Evaluation policy docs describe gating rules and confidence handling.",
         }
-        ragas_source = {
-            "relative_path": "backend/docs/retrieval_docs/ragas_validation_design.md",
-            "symbol_name": "ragas_validation_design_md",
-            "start_line": 1,
-            "end_line": 40,
-            "expansion_type": "primary",
-            "labels": ["question_use:repo-overview"],
-            "content": "RAGAS validation design docs describe validation flow and metrics.",
-        }
         impl_source = {
             "relative_path": "backend/evals/run_safe_evals.py",
             "symbol_name": "main",
@@ -426,10 +417,10 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 },
             ), patch(
                 "retrieval.main.search",
-                return_value=[docs_source, policy_source, ragas_source, impl_source, report_api_source, report_loader_source],
+                return_value=[docs_source, policy_source, impl_source, report_api_source, report_loader_source],
             ), patch(
                 "retrieval.main.expand",
-                return_value=[docs_source, policy_source, ragas_source, impl_source, report_api_source, report_loader_source]
+                return_value=[docs_source, policy_source, impl_source, report_api_source, report_loader_source]
             ), patch(
                 "retrieval.main.assemble", side_effect=record_assemble
             ), patch(
@@ -437,7 +428,6 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 return_value=[
                     docs_source,
                     policy_source,
-                    ragas_source,
                     impl_source,
                     report_api_source,
                     report_loader_source,
@@ -461,9 +451,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertEqual("backend/retrieval/eval_reports.py", report_sources[1]["relative_path"])
         self.assertEqual("backend/docs/retrieval_docs/safe_eval_runner.md", sources[0]["relative_path"])
         self.assertIn("safe eval docs", answer.lower())
-        self.assertIn("The safe eval docs describe the Safe Evaluation Runner.", answer)
+        self.assertIn("The safe eval docs describe the Safe Eval Runner.", answer)
         self.assertIn("evaluation_policy.md", answer)
-        self.assertIn("ragas_validation_design.md", answer)
         self.assertNotIn("The implementation is in", answer)
         self.assertNotIn("symbol/function", answer)
         self.assertNotIn("implemented in", answer)
@@ -533,11 +522,11 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 self.assertGreaterEqual(len(selected), 1)
                 self.assertEqual(expected_primary, selected[0]["relative_path"])
 
-    def test_evaluation_report_api_location_prefers_implementation_family_over_ragas_eval(self) -> None:
+    def test_evaluation_report_api_location_prefers_implementation_family_over_eval_scripts(self) -> None:
         source_candidates = [
             {
-                "relative_path": "backend/scripts/ragas_eval.py",
-                "symbol_name": "run_ragas_eval",
+                "relative_path": "backend/scripts/retrieval_eval.py",
+                "symbol_name": "main",
                 "start_line": 1,
                 "end_line": 40,
                 "expansion_type": "primary",
@@ -597,7 +586,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
 
         self.assertIn("backend/retrieval/api_service.py", answer)
         self.assertIn("backend/retrieval/eval_reports.py", answer)
-        self.assertNotIn("backend/scripts/ragas_eval.py", answer)
+        self.assertNotIn("backend/scripts/retrieval_eval.py", answer)
         self.assertEqual("backend/retrieval/api_service.py", sources[0]["relative_path"])
         self.assertEqual("backend/retrieval/eval_reports.py", sources[1]["relative_path"])
         generate_answer.assert_not_called()
@@ -607,8 +596,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
         mock_read.side_effect = lambda src: src.get("content", "")
 
         docs_source = {
-            "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_docs.md",
-            "symbol_name": "retrieval_pipeline_docs_md",
+            "relative_path": "backend/docs/retrieval_docs/current_retrieval_strategy.md",
+            "symbol_name": "current_retrieval_strategy_md",
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
@@ -616,13 +605,13 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "The retrieval pipeline docs describe query processing, search, context assembly, answer generation, and validation.",
         }
         architecture_source = {
-            "relative_path": "backend/docs/retrieval_docs/retrieval_pipeline_architecture.md",
-            "symbol_name": "retrieval_pipeline_architecture_md",
+            "relative_path": "backend/docs/retrieval_docs/current_retrieval_strategy.md",
+            "symbol_name": "current_retrieval_strategy_architecture_md",
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
             "labels": ["question_use:repo-overview"],
-            "content": "The retrieval pipeline architecture docs describe the module layout and pipeline flow.",
+            "content": "The current retrieval strategy describes the module layout and pipeline flow.",
         }
         query_processor_source = {
             "relative_path": "backend/retrieval/query_processor.py",
@@ -760,7 +749,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertIn("Answer generation", answer)
         self.assertIn("Validation and repair", answer)
         self.assertIn("Pipeline documentation", answer)
-        self.assertTrue(any(src["relative_path"] == "backend/docs/retrieval_docs/retrieval_pipeline_docs.md" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "backend/docs/retrieval_docs/current_retrieval_strategy.md" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/query_processor.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/searcher.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" for src in sources))
@@ -843,7 +832,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 clear=False,
             ), patch(
                 "retrieval.main.process_query",
-                side_effect=lambda query: {
+                side_effect=lambda query, **_kwargs: {
                     "raw_query": query,
                     "intent": "FILE",
                     "primary_intent": "FILE",

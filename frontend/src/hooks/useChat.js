@@ -112,6 +112,8 @@ export function useChat({ appendMessage }) {
       let answerDiagnostics = null;
       let contextTokens = null;
 
+      let finalMessageId = loadingId;
+
       try {
         await querySessionStream({
           question: trimmed,
@@ -142,8 +144,11 @@ export function useChat({ appendMessage }) {
               error: false,
             });
           },
-          onDone: () => {
+          onDone: (event) => {
             console.log('[useChat] Stream done.');
+            if (event && event.message_id) {
+              finalMessageId = event.message_id;
+            }
           },
           onError: (errMsg) => {
             throw new Error(errMsg);
@@ -158,7 +163,7 @@ export function useChat({ appendMessage }) {
         }
 
         const assistantMessage = {
-          id: loadingId,
+          id: finalMessageId,
           role: 'assistant',
           content: accumulatedAnswer || '(no answer returned)',
           sources: answerSources,

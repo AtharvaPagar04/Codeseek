@@ -67,7 +67,6 @@ from retrieval.provider_health import (
     ProviderNotReadyError,
     require_llm_ready_for_user,
 )
-from retrieval.ragas_reports import load_ragas_validation_bundle
 from retrieval.searcher import dependency_health
 from retrieval.session_indexer import (
     create_session,
@@ -306,9 +305,6 @@ class SessionCreateRequest(BaseModel):
     enable_chunk_descriptions: bool = False
 
 
-class SessionIndexingOptionsUpdateRequest(BaseModel):
-    refine_labels_with_llm: bool
-
 
 class GithubAuthCodeRequest(BaseModel):
     code: str
@@ -323,14 +319,6 @@ class SubmissionPublicKeyResponse(BaseModel):
     key_id: str
     algorithm: str
     public_key_pem: str
-
-
-class RagasValidationArtifactResponse(BaseModel):
-    artifacts: dict
-    report: dict | None = None
-    family_baseline: dict | None = None
-    family_baseline_trend: dict | None = None
-    human_review_benchmark: dict | None = None
 
 
 def _ready_sessions() -> list[dict]:
@@ -687,6 +675,8 @@ def _build_query_diagnostics(
     evidence_confidence = meta.get("evidence_confidence") if isinstance(meta.get("evidence_confidence"), dict) else {}
     source_filter = meta.get("source_filter") if isinstance(meta.get("source_filter"), dict) else {}
     memory_diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
+    retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
+    source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -706,6 +696,8 @@ def _build_query_diagnostics(
         "context_tokens": token_count,
         "evidence_confidence": evidence_confidence,
         "source_filter": source_filter,
+        "retrieval_targeting": retrieval_targeting,
+        "source_alignment": source_alignment,
         "session_status": str((session or {}).get("status") or "").strip(),
         "session_error": str((session or {}).get("error") or "").strip(),
         "selected_source_count": len(meta.get("display_sources") or []),
@@ -728,6 +720,8 @@ def _build_query_diagnostics(
             "reasons": list(validation.get("reasons") or []),
             "repaired": bool(validation.get("repaired_answer") or validation.get("repaired_sources")),
         }
+        if isinstance(validation.get("numeric_grounding"), dict):
+            diagnostics["numeric_grounding"] = dict(validation["numeric_grounding"])
 
     if session and "repo_status" in session:
         diagnostics["freshness"] = session["repo_status"]
@@ -845,6 +839,15 @@ def _query_impl(
                 provider_config=provider_config,
             )
         if session:
+            diagnostics_data = None
+            if ENABLE_DEBUG_DIAGNOSTICS:
+                diagnostics_data = _build_query_diagnostics(
+                    meta=meta,
+                    sources=sources,
+                    token_count=token_count,
+                    session=session,
+                    provider_config=provider_config,
+                )
             if thread:
                 append_thread_message(thread["id"], session["id"], "user", query_text)
                 append_thread_message(
@@ -854,6 +857,7 @@ def _query_impl(
                     answer,
                     sources=sources,
                     context_tokens=token_count,
+                    diagnostics=diagnostics_data,
                 )
             else:
                 append_message(session["id"], "user", query_text)
@@ -863,6 +867,7 @@ def _query_impl(
                     answer,
                     sources=sources,
                     context_tokens=token_count,
+                    diagnostics=diagnostics_data,
                 )
         total_ms = int((time.perf_counter() - started) * 1000)
         log_event(
@@ -956,16 +961,6 @@ def submission_public_key_v1() -> SubmissionPublicKeyResponse:
 def metrics_v1() -> Response:
     body, content_type = render_prometheus_metrics()
     return Response(content=body, media_type=content_type)
-
-
-@v1.get("/ragas/latest", response_model=RagasValidationArtifactResponse)
-def ragas_latest_v1(
-    authorization: str | None = Header(default=None),
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> RagasValidationArtifactResponse:
-    _require_auth(authorization)
-    _require_auth_user(session_token)
-    return RagasValidationArtifactResponse(**load_ragas_validation_bundle())
 
 
 @v1.post("/query")
@@ -1127,27 +1122,31 @@ async def query_stream_v1(
 
             # Save the message to DB/history if session exists and not aborted
             if not abort_event.is_set() and session:
+                diagnostics_data = sources_event.get("diagnostics")
                 if thread:
                     append_thread_message(thread["id"], session["id"], "user", query_text)
-                    append_thread_message(
+                    msg = append_thread_message(
                         thread["id"],
                         session["id"],
                         "assistant",
                         answer,
                         sources=sources,
                         context_tokens=token_count,
+                        diagnostics=diagnostics_data,
                     )
                 else:
                     append_message(session["id"], "user", query_text)
-                    append_message(
+                    msg = append_message(
                         session["id"],
                         "assistant",
                         answer,
                         sources=sources,
                         context_tokens=token_count,
+                        diagnostics=diagnostics_data,
                     )
-            
-            event_queue.put({"type": "done"})
+                event_queue.put({"type": "done", "message_id": msg["id"]})
+            else:
+                event_queue.put({"type": "done"})
         except Exception as exc:
             event_queue.put({"type": "error", "message": str(exc)})
 
@@ -1376,41 +1375,6 @@ def get_session_v1(
     return {"session": session}
 
 
-@v1.get("/sessions/{session_id}/indexing-options")
-def get_session_indexing_options_v1(
-    session_id: str,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> dict:
-    auth_user = _require_auth_user(session_token)
-    try:
-        from retrieval.session_indexer import get_session_indexing_options
-        options = get_session_indexing_options(session_id, auth_user["id"])
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    return {"session_id": session_id, "indexing_options": options}
-
-
-@v1.patch("/sessions/{session_id}/indexing-options")
-def patch_session_indexing_options_v1(
-    session_id: str,
-    body: SessionIndexingOptionsUpdateRequest,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> dict:
-    auth_user = _require_auth_user(session_token)
-    try:
-        from retrieval.session_indexer import update_session_indexing_options
-        options = update_session_indexing_options(
-            session_id, auth_user["id"], refine_labels_with_llm=body.refine_labels_with_llm
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    return {"session_id": session_id, "indexing_options": options}
-
-
 @v1.get("/sessions/{session_id}/messages")
 def list_session_messages_v1(
     session_id: str,
@@ -1520,7 +1484,7 @@ def retry_session_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs
@@ -1679,7 +1643,33 @@ def get_latest_evaluation_report_v1(
     return get_latest_evaluation_report(session_id)
 
 
-
+@v1.get("/sessions/{session_id}/evaluation/regression-tests")
+def get_evaluation_regression_tests_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    repo_root = session.get("repo_root")
+    if not repo_root or not os.path.isdir(repo_root):
+        return {"tests": []}
+    
+    config_path = os.path.join(repo_root, ".codeseek-evals.json")
+    if not os.path.exists(config_path):
+        return {"tests": []}
+    
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            import json
+            tests = json.load(f)
+        if not isinstance(tests, list):
+            tests = []
+        return {"tests": tests}
+    except Exception:
+        return {"tests": []}
 @v1.get("/evals/latest")
 def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
@@ -1709,7 +1699,7 @@ def index_latest_session_v1(
             "freshness_status": "indexing"
         }
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs
@@ -1760,7 +1750,7 @@ def index_incremental_session_v1(
             "estimated_files_to_update": 0,
         }
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs

@@ -259,7 +259,7 @@ export const querySessionStream = async ({
           } else if (event.type === 'error' && onError) {
             onError(event.message);
           } else if (event.type === 'done' && onDone) {
-            onDone();
+            onDone(event);
           }
         } catch (e) {
           console.error('Failed to parse NDJSON line:', trimmed, e);
@@ -341,38 +341,6 @@ export const retrySessionIndexing = async (sessionId) => {
   return data.session;
 };
 
-export const getSessionIndexingOptions = async (sessionId) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-options`, {
-        credentials: 'include',
-        headers: authHeaders(),
-      }),
-    'Get session indexing options'
-  );
-  if (!res.ok) await throwApiError('Get session indexing options', res);
-  const data = await res.json();
-  return data.indexing_options;
-};
-
-export const updateSessionIndexingOptions = async (sessionId, options) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-options`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: {
-          ...authHeaders(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(options),
-      }),
-    'Update session indexing options'
-  );
-  if (!res.ok) await throwApiError('Update session indexing options', res);
-  const data = await res.json();
-  return data.indexing_options;
-};
 
 export const fetchSessionMessages = async (sessionId) => {
   const res = await withNetworkError(
@@ -473,21 +441,6 @@ export const fetchHealth = async () => {
   } catch {
     return false;
   }
-};
-
-export const fetchRagasValidationBundle = async () => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/ragas/latest`, {
-        credentials: 'include',
-        headers: authHeaders(),
-      }),
-    'Load RAGAS validation bundle'
-  );
-  if (!res.ok) {
-    await throwApiError('Load RAGAS validation bundle', res);
-  }
-  return res.json();
 };
 
 /**
@@ -703,6 +656,19 @@ export const fetchLatestEvaluationReport = async (sessionId) => {
   return res.json();
 };
 
+export const fetchEvaluationRegressionTests = async (sessionId) => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/regression-tests`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Fetch evaluation regression tests'
+  );
+  if (!res.ok) await throwApiError('Fetch evaluation regression tests', res);
+  return res.json();
+};
+
 export const fetchLatestGlobalEvaluationReport = async () => {
   const res = await withNetworkError(
     () =>
@@ -788,7 +754,6 @@ export const fetchIndexingJobHistory = async (sessionId, limit = 20) => {
   if (!res.ok) await throwApiError('Fetch indexing job history', res);
   return res.json();
 };
-
 
 
 

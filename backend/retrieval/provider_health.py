@@ -120,7 +120,7 @@ def require_llm_ready_for_user(user_id: str) -> dict:
 
         # Decouple chat model check from ingestion check.
         # We verify that the ingestion-safe models are pulled.
-        from rag_ingestion.config import CODESEEK_DESCRIPTION_MODEL, CODESEEK_LABEL_MODEL
+        from rag_ingestion.config import CODESEEK_DESCRIPTION_MODEL
 
         pulled = _get_ollama_pulled_models()
 
@@ -129,15 +129,7 @@ def require_llm_ready_for_user(user_id: str) -> dict:
                 f"Local ingestion model '{CODESEEK_DESCRIPTION_MODEL}' is not available in Ollama.\n"
                 f"Run:\n"
                 f"ollama pull {CODESEEK_DESCRIPTION_MODEL}\n"
-                f"or choose an installed 3B model in CODESEEK_DESCRIPTION_MODEL and CODESEEK_LABEL_MODEL."
-            )
-
-        if not _is_model_available(CODESEEK_LABEL_MODEL, pulled):
-            raise ProviderNotReadyError(
-                f"Local ingestion model '{CODESEEK_LABEL_MODEL}' is not available in Ollama.\n"
-                f"Run:\n"
-                f"ollama pull {CODESEEK_LABEL_MODEL}\n"
-                f"or choose an installed 3B model in CODESEEK_DESCRIPTION_MODEL and CODESEEK_LABEL_MODEL."
+                f"or choose an installed 3B model in CODESEEK_DESCRIPTION_MODEL."
             )
 
         return credential

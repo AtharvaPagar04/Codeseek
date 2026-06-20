@@ -96,6 +96,8 @@ At a high level, a query currently goes through this sequence:
 2. Retrieval memory is loaded and may be used to rewrite short follow-up queries.
 3. Query intent and entities are extracted with a bounded scored-intent/entity layer.
 4. Search runs across:
+   - Tier 0 deterministic exact file lookup for explicit file/path queries. This stage extracts file-like tokens from the user query, normalizes them to repo-relative POSIX paths, tries exact `relative_path` and `normalized_path` metadata lookup first, then tries `filename` lookup, and falls back to grounded local-file evidence when indexed metadata is incomplete.
+   - Tier 1 deterministic symbol-definition lookup for explicit symbol/component queries. This stage prefers exact `symbol_name`, `basename`, and `file_symbols` matches, and can fall back to local `.py/.js/.jsx/.ts/.tsx` definition scanning when symbol metadata is incomplete.
    - dense vector search
    - metadata symbol/path search
    - exact entity search for extracted env keys, dependency names, route/API terms, and config keys
@@ -111,6 +113,7 @@ At a high level, a query currently goes through this sequence:
 7. Context is assembled under a token budget.
 8. Display-time source filtering reduces the visible evidence set.
    - For broad overview, indexing, retrieval/RAG, and frontend UI-location questions, the same query-family source cleanup is also applied to the broader reasoning source set before LLM context assembly. This keeps source cards and the LLM context aligned instead of letting high-scoring but unrelated helper, eval, benchmark, report, or backend/frontend-mismatched chunks leak into generation.
+   - Retrieval diagnostics now also expose a consolidated `retrieval_targeting` object that summarizes deterministic exact-path hits, filename hits, symbol hits, selected primary/expanded paths, reasoning/rendered paths, and drop reasons across the retrieval-to-render pipeline.
 9. Response mode is selected:
    - deterministic code answer
    - deterministic architecture answer
@@ -174,6 +177,10 @@ Important remaining limitation:
 Stored chunk metadata can include:
 
 - `relative_path`
+- `normalized_path`
+- `filename`
+- `basename`
+- `extension`
 - `chunk_type`
 - `symbol_name`
 - `parent_symbol`
@@ -442,7 +449,34 @@ The ranking logic can now surface the synthetic repo-summary chunk and represent
 
 For architecture prompts specifically, search can prepend exact structural file hits from generic architecture file hints when those files exist in Qdrant. This reduces dependence on dense README-style matches for anchors such as route/controller/server entrypoints, frontend app entrypoints, manifests, and deployment/config files.
 
-### 7.2 Import-backed candidate injection
+### 7.2 Structural hint injection
+
+`_inject_structural_hint_candidates()` adds soft repo-shape hints after overview/architecture injection and before import-backed expansion.
+
+Current behavior:
+
+- scans the active repo root and caches a lightweight file-role inventory
+- infers homepage/app-entry files such as `src/app/page.tsx`, `src/pages/index.tsx`, `src/App.tsx`, and `src/main.tsx`
+- infers likely source-of-content files such as `data.ts`, `content.ts`, `constants.ts`, and `config.ts` under common `lib/`, `data/`, `content/`, and `config/` paths
+- infers component files from `components/`, `views/`, and `widgets/`
+- infers overview anchors such as `README.md` and `package.json`
+- matches those repo-scoped hints against overview/homepage prompts, data/content prompts, component-name prompts, and rendering/card/list prompts
+- injects matching files as soft candidates with `support_kind=structural_hint` and `structural_hint_ids`
+- applies only a moderate reranking boost, so exact path hits and symbol-definition hits still outrank structural hints
+- records matched hint IDs and paths in `retrieval_targeting.structural_hint_ids` and `retrieval_targeting.structural_hint_paths`
+
+This is useful for questions like:
+
+- where is portfolio data stored
+- how are project cards rendered
+- hero typewriter
+
+Current limitation boundary:
+
+- hints are inferred from the current repo tree; there is not yet a persisted per-repo structural-hint artifact
+- there is not yet a manual reviewer override layer for hint curation
+
+### 7.3 Import-backed candidate injection
 
 `_inject_import_backing_candidates()` looks at the first few candidate chunks and tries to resolve named imports whose identifiers overlap with the query.
 
@@ -453,10 +487,11 @@ Current behavior:
 - parses JS/TS namespace imports such as `import * as data from "@/lib/data"`
 - parses JS/TS mixed default + named imports such as `import SkillsData, { skillCategories } from "@/lib/data"`
 - parses Python `from module import name` statements
-- supports JS/TS relative imports and `@/` aliases
+- supports JS/TS relative imports, config-driven alias resolution from `tsconfig.json` / `jsconfig.json`, and the common `@/* -> src/*` convention when the repo layout matches it
 - resolves JS/TS `.ts`, `.tsx`, `.js`, `.jsx`, `.json`, and `index.*`
 - resolves Python dotted-module imports to `.py` files or package `__init__.py`
 - fetches matching exported symbol chunks from the imported file
+- records alias-resolved repo paths in retrieval diagnostics so import-backed expansion is visible in `retrieval_targeting.alias_resolved_paths`
 - tags retrieved import-backed chunks so deterministic answer builders can reuse them directly instead of always re-reading backing files
 - reuses retrieved callee/dependency support chunks in deterministic answer builders when the selected symbol already carries those dependencies in retrieved evidence
 - adds explicit handler -> store -> database trace lines for backend auth/provider flows when the selected evidence shows direct calls and SQL-bearing store helpers
@@ -474,6 +509,7 @@ This mechanism now handles:
 - namespace imports
 - simple re-export chains (`export { X } from "./mod"` and `export * from "./mod"`)
 - direct JSON config/data imports, surfaced as imported backing data when the imported alias overlaps the query
+- local symbol-definition fallback when Qdrant does not already have the imported symbol chunk but the repo file exists on disk
 - a default import/re-export trace depth limit of `3`
 - an explicit per-query trace-support cap of `6` chunks, with visited-set dedupe on import edges and dependency call targets
 
@@ -492,7 +528,22 @@ The boost uses token overlap against:
 - `qualified_symbol`
 - `summary`
 
-This is not a full reranker. It is a lightweight lexical bias added on top of merge ordering and dense score.
+This is not only lexical anymore. For file/symbol targeting, reranking also uses lightweight symbol-role metadata:
+
+- `symbol_role`
+- `defined_symbols`
+- `used_symbols`
+- `imported_symbols`
+
+Current behavior:
+
+- ingestion stores these fields on new chunk payloads
+- retrieval derives the same signals at query time when older payloads do not have them yet
+- matching symbol-definition candidates receive an additional boost for implementation-style symbol/component questions
+- usage/import-only files that reference the symbol are lightly demoted so they stay available as supporting context without outranking the definition file
+- reranked candidates carry `definition_boost_applied` and `usage_demoted` flags, and diagnostics summarize the affected paths through `retrieval_targeting.definition_boost_paths` and `retrieval_targeting.usage_demoted_paths`
+- file-level chunks can also carry `source_of_truth`, `centrality_score`, and `exported_symbols`
+- source-of-truth files receive a query-sensitive boost for data/content/value questions and are surfaced through `retrieval_targeting.central_file_paths`
 
 ## 9. Expansion Stage
 
@@ -549,6 +600,21 @@ Chunks are ordered by:
 4. line number
 
 Expansion tier priority:
+
+### 10.3 Source-card alignment
+
+After two-layer source selection, `retrieval/main.py` now aligns visible source cards with the broader reasoning set for the most important cases:
+
+- primary reasoning chunks
+- Tier 0 exact hits
+- symbol-definition lookup hits
+- structural hint hits
+
+Current behavior:
+
+- those files are promoted into `display_sources` before final rendering
+- diagnostics expose `source_alignment.context_paths`, `source_alignment.source_card_paths`, `source_alignment.rendered_paths`, and any missing/stale path lists
+- the public query diagnostics now include `source_alignment` alongside `retrieval_targeting`
 
 - `primary`
 - `split_part`
@@ -1028,7 +1094,7 @@ The first lexical layer now exists. Next work is validation and tuning:
 - measure memory and latency cost of lazy per-collection indexing
 - tune fusion only after baselines exist
 
-Initial baseline results are recorded in [Lexical Retrieval Baseline Results](./eval_results_lexical_baseline.md). The first run showed that lexical retrieval should remain disabled by default because it did not improve `hit@10` and reduced MRR on the exact-wording eval.
+Initial lexical baseline runs showed that lexical retrieval should remain disabled by default because it did not improve `hit@10` and reduced MRR on the exact-wording eval.
 
 The later scored-intent/exact-entity promotion pass improved the default dense path on the same exact-wording eval from `hit@10 0.500` to `0.750` without enabling lexical retrieval. That makes structured extraction the better next step than enabling BM25 by default.
 
@@ -1146,7 +1212,7 @@ The V2 response-quality pass adds an answer/source intent contract on top of the
 
 `source_filter.py` applies the same generic contract during display/reasoning source selection. Overview and runtime architecture prompts prefer README/docs, manifests/config, and real entrypoints; indexing prompts prefer files whose paths indicate ingestion, parsing, chunking, embedding, vector storage, jobs, status, or docs about indexing; UI prompts require frontend-shaped sources; API endpoint prompts prioritize backend/server route/controller/handler files while keeping frontend API clients as supporting evidence; failure recovery prompts require failure/status/job/database/troubleshooting sources and demote helper, scratch, test, benchmark, and irrelevant provider endpoint sources.
 
-Answer generation is also stricter. Deterministic and LLM answers pass through source post-processing so the body does not include a manual `Sources:` footer. `answer_validation.py` rejects unsupported speculative recovery language for failure-recovery questions. The final prompt policy explicitly tells the model to synthesize overview/explanation answers in natural paragraphs and not to emit `Function:`, `Signature:`, `Calls:`, `Parameters:`, or implementation-line metadata unless the user asks for code metadata.
+Answer generation is also stricter. Deterministic and LLM answers pass through source post-processing so the body does not include a manual `Sources:` footer. `answer_validation.py` rejects unsupported speculative recovery language for failure-recovery questions and now applies a conservative exact-value numeric grounding guard for prompts such as `what is the CGPA?`, versions, ports, delays, token limits, and similar source-value queries. If the returned numeric value does not appear verbatim in the selected source context, the answer is repaired into a verification failure instead of guessing. The final prompt policy explicitly tells the model to synthesize overview/explanation answers in natural paragraphs and not to emit `Function:`, `Signature:`, `Calls:`, `Parameters:`, or implementation-line metadata unless the user asks for code metadata.
 
 Focused validation for this pass:
 

@@ -427,7 +427,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/evals/run_safe_evals.py", full_answer)
         self.assertIn("# ... omitted for brevity ...", normal_answer)
         self.assertNotIn("# ... omitted for brevity ...", full_answer)
-        self.assertIn('input_traces = "../evals/reports/ragas_calibration_traces.jsonl"', full_answer)
+        self.assertIn("eval_policy_summary.py", full_answer)
         self.assertGreater(len(full_answer.splitlines()), len(normal_answer.splitlines()))
 
     @patch("retrieval.code_answers._read_source_excerpt")

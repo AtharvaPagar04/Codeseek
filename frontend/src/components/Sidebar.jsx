@@ -6,7 +6,6 @@ export default function Sidebar({
   onSelectSession,
   onDeleteSession,
   onNewSession,
-  onUpdateIndexingOptions,
 }) {
   return (
     <aside className="flex flex-col h-full bg-surface/80 backdrop-blur-md border-r border-border w-full">
@@ -26,7 +25,6 @@ export default function Sidebar({
               isActive={session.id === activeSessionId}
               onSelect={() => onSelectSession(session.id)}
               onDelete={onDeleteSession}
-              onUpdateIndexingOptions={onUpdateIndexingOptions}
             />
           ))
         )}

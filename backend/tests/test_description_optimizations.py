@@ -439,7 +439,7 @@ def test_description_eligibility_excludes_tiny_helpers():
 def test_description_eligibility_for_docs_product():
     """docs/product/*.md chunks are eligible regardless of chunk_part."""
     first_part = Chunk(
-        relative_path="docs/product/final_handoff.md",
+        relative_path="docs/product/repo_freshness.md",
         chunk_type="file",
         chunk_part=1,
         token_count=80,
@@ -448,7 +448,7 @@ def test_description_eligibility_for_docs_product():
     assert _should_describe_chunk(first_part) is True
 
     second_part = Chunk(
-        relative_path="docs/product/release_readiness_checklist.md",
+        relative_path="docs/product/manual_regression.md",
         chunk_type="file",
         chunk_part=2,
         token_count=80,
@@ -586,5 +586,4 @@ def test_skips_gitignore():
         content="node_modules/\ndist/\n"
     )
     assert _should_describe_chunk(c) is False
-
 

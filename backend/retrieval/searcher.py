@@ -35,10 +35,19 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
+from retrieval.import_resolution import resolve_import_relative_path
+from retrieval.structural_hints import match_structural_hints
+from retrieval.source_truth import analyze_source_truth, is_source_truth_query
 from retrieval.query_intent import (
     classify_query_intent,
     classify_source_intent,
     compute_label_boost,
+)
+from retrieval.path_utils import (
+    is_filename_only,
+    normalize_repo_path,
+    path_matches_candidate,
+    path_metadata,
 )
 
 _client = None
@@ -246,7 +255,6 @@ CODE_REQUEST_TOPIC_ROUTES = (
         },
         "exclude_paths": [
             "backend/scripts/lexical_layer_benchmark.py",
-            "backend/scripts/ragas_eval.py",
             "backend/scripts/retrieval_eval.py",
         ],
         "multi_intro": "I found multiple reranking/searcher-internals snippets:",
@@ -444,12 +452,267 @@ def _qdrant_call(fn):
     return None
 
 
+def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = None) -> list[tuple[dict, float, str]]:
+    from retrieval.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
+    collection = get_collection_name()
+    if query_info is not None:
+        query_info.setdefault("domain_boost_retrieval", {
+            "enabled": False,
+            "boost_labels": [],
+            "domain_terms": [],
+            "candidate_paths": [],
+            "boosted_paths": [],
+            "penalized_paths": [],
+            "selected_primary_paths": [],
+            "rendered_source_paths": [],
+            "dropped_paths": [],
+            "drop_reasons": {},
+            "source_kind_penalties": [],
+            "exact_hits_preserved": True
+        })
+
+    if not collection:
+        return []
+    
+    boost_labels = entities.get("boost_labels") or []
+    if query_info is not None:
+        query_info["domain_boost_retrieval"]["enabled"] = bool(boost_labels)
+        query_info["domain_boost_retrieval"]["boost_labels"] = list(boost_labels)
+
+    if not boost_labels:
+        return []
+        
+    try:
+        profile = get_repo_profile(collection)
+    except Exception:
+        return []
+        
+    client = _get_client()
+    
+    domain_terms = set()
+    for lbl in boost_labels:
+        if lbl in DOMAIN_SEARCH_TERMS:
+            domain_terms.update(DOMAIN_SEARCH_TERMS[lbl])
+            
+    if query_info is not None:
+        query_info["domain_boost_retrieval"]["domain_terms"] = list(domain_terms)
+
+    if not domain_terms:
+        return []
+        
+    file_scores = []
+    for rel_path, meta in profile.files.items():
+        score = 0.0
+        matched_terms = set()
+        
+        # 1. Label match
+        overlap_labels = set(meta["labels"]).intersection(boost_labels)
+        score += len(overlap_labels) * 5.0
+        
+        # 2. Path/filename term overlap
+        path_lower = rel_path.lower()
+        for term in domain_terms:
+            if term in path_lower:
+                score += 3.0
+                matched_terms.add(term)
+                
+        # 3. Summaries/code_intents overlap
+        for summary in meta["summaries"]:
+            sum_lower = summary.lower()
+            for term in domain_terms:
+                if term in sum_lower:
+                    score += 0.5
+                    matched_terms.add(term)
+        for intent in meta["code_intents"]:
+            int_lower = intent.lower()
+            for term in domain_terms:
+                if term in int_lower:
+                    score += 0.5
+                    matched_terms.add(term)
+                    
+        # 4. Dependency match
+        for term in domain_terms:
+            if term in meta["dependencies"]:
+                score += 1.0
+                matched_terms.add(term)
+                
+        if score > 0.0:
+            file_scores.append((rel_path, score, list(matched_terms)))
+            
+    file_scores.sort(key=lambda x: x[1], reverse=True)
+    
+    results = []
+    # Take top 3 candidate files
+    candidate_paths = [rel_path for rel_path, _, _ in file_scores[:3]]
+    if query_info is not None:
+        query_info["domain_boost_retrieval"]["candidate_paths"] = candidate_paths
+
+    for rel_path, score, matched_terms in file_scores[:3]:
+        chunks = _scroll_exact_field_matches(client, collection, "relative_path", rel_path)
+        for chunk in chunks:
+            p = dict(chunk)
+            p["domain_boost_hit"] = True
+            p["domain_boost_labels"] = list(boost_labels)
+            p["domain_matched_terms"] = matched_terms
+            p["support_kind"] = "domain_boost"
+            p["domain_boost_score"] = score
+            results.append((p, 0.35 + min(score * 0.05, 0.25), "domain_boost"))
+            
+    return results
+
+def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
+    from retrieval.repo_profile import discover_feature_recall_candidates, get_repo_profile
+    collection = get_collection_name()
+    if not collection:
+        return []
+    try:
+        repo_profile = get_repo_profile(collection)
+    except Exception:
+        return []
+        
+    query_info.setdefault("feature_recall_discovery", {
+        "enabled": False,
+        "query_type": "feature_location",
+        "feature_terms": [],
+        "normalized_terms": [],
+        "candidate_paths": [],
+        "candidate_scores": {},
+        "injected_paths": [],
+        "survived_rendered_sources": [],
+        "fallback_reason": None
+    })
+    
+    candidates = discover_feature_recall_candidates(raw_query, repo_profile, limit=5)
+    
+    if candidates:
+        query_info["feature_recall_discovery"]["enabled"] = True
+        
+        results = []
+        for c in candidates:
+            path = c.get("relative_path")
+            query_info["feature_recall_discovery"]["candidate_paths"].append(path)
+            query_info["feature_recall_discovery"]["candidate_scores"][path] = c.get("feature_recall_score", 0.0)
+            
+            for t in c.get("feature_recall_terms", []):
+                if t not in query_info["feature_recall_discovery"]["feature_terms"]:
+                    query_info["feature_recall_discovery"]["feature_terms"].append(t)
+                    
+            score = 0.5 + min(c.get("feature_recall_score", 0.0) * 0.1, 0.4)
+            results.append((c, score, "feature_recall"))
+            
+        return results
+        
+    return []
+
+
+
+def _framework_aware_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
+    from retrieval.repo_profile import get_repo_profile
+    from retrieval.query_intent import classify_source_intent
+    
+    collection = get_collection_name()
+    if not collection:
+        return []
+    try:
+        profile = get_repo_profile(collection)
+    except Exception:
+        return []
+        
+    source_intent = classify_source_intent(raw_query)
+    
+    fw_diag = {
+        "enabled": True,
+        "detected_frameworks": profile.framework_profile.get("frameworks", []),
+        "query_type": source_intent,
+        "preferred_source_roles": [],
+        "boosted_paths": [],
+        "demoted_paths": [],
+        "wrong_evidence_guard_applied": False
+    }
+    query_info["framework_routing"] = fw_diag
+    
+    preferred_roles = []
+    support_roles = []
+    
+    if source_intent == "backend_entrypoint_location":
+        preferred_roles = ["backend_entrypoint"]
+        support_roles = ["route_registry"]
+    elif source_intent == "global_middleware_location":
+        preferred_roles = ["backend_entrypoint", "middleware"]
+        support_roles = ["route_registry"]
+    elif source_intent == "route_registration_location":
+        preferred_roles = ["route_registry", "backend_entrypoint"]
+        support_roles = ["controller", "service"]
+    elif source_intent == "jwt_implementation":
+        preferred_roles = ["utility", "middleware", "service"]
+    elif source_intent == "rbac_implementation":
+        preferred_roles = ["middleware", "route_registry"]
+    elif source_intent == "service_behavior":
+        preferred_roles = ["service", "repository", "utility"]
+        support_roles = ["test", "schema", "migration"]
+    elif source_intent == "schema_location":
+        preferred_roles = ["schema", "validator"]
+    elif source_intent == "migration_schema":
+        preferred_roles = ["migration"]
+    elif source_intent == "frontend_page_location":
+        preferred_roles = ["frontend_page", "frontend_component"]
+    elif source_intent == "test_lookup":
+        preferred_roles = ["test"]
+    elif source_intent == "api_error_handling":
+        preferred_roles = ["middleware", "utility"]
+    elif source_intent == "auth_implementation":
+        preferred_roles = ["service", "controller", "middleware"]
+    
+    fw_diag["preferred_source_roles"] = preferred_roles
+    if not preferred_roles and not support_roles:
+        return []
+        
+    client = _get_client()
+    results = []
+    boosted_paths = []
+    
+    for rel_path, meta in profile.files.items():
+        role = meta.get("framework_source_role", "unknown")
+        
+        score = 0.0
+        if role in preferred_roles:
+            score = 0.95
+        elif role in support_roles:
+            score = 0.75
+            
+        if score > 0.0:
+            boosted_paths.append(rel_path)
+            chunks = _scroll_exact_field_matches(client, collection, "relative_path", rel_path)
+            for chunk in chunks:
+                p = dict(chunk)
+                p["framework_routing_hit"] = True
+                p["framework_source_role"] = role
+                p["support_kind"] = "framework_boost"
+                results.append((p, score, "framework_routing"))
+                
+    fw_diag["boosted_paths"] = boosted_paths
+    return results
+
+
 def search(query_info: dict) -> list[dict]:
     """Run dense + metadata + dependency searches and merge results."""
     raw_query = query_info["raw_query"]
     intent = query_info["intent"]
     primary_intent = query_info.get("primary_intent", intent)
     entities = query_info["entities"]
+    
+    query_info.setdefault("feature_routing", {
+        "enabled": True,
+        "query_type": "feature_location",
+        "feature_terms": [],
+        "normalized_terms": [],
+        "candidate_paths": [],
+        "boosted_paths": [],
+        "penalized_paths": [],
+        "selected_primary_paths": [],
+        "rendered_source_paths": [],
+        "drop_reasons": {}
+    })
 
     dense_results = _dense_search(raw_query)
     lexical_results = _lexical_search(raw_query) if ENABLE_LEXICAL_RETRIEVAL else []
@@ -493,6 +756,9 @@ def search(query_info: dict) -> list[dict]:
 
     direct_topic_results = _inject_direct_topics_candidates(raw_query, primary_intent)
     auth_routing_results = _inject_code_topic_routing_candidates(raw_query, primary_intent, matched_code_topic_route)
+    domain_boost_results = _domain_boost_discovery(raw_query, entities, query_info)
+    feature_recall_results = _feature_recall_discovery(raw_query, query_info)
+    framework_routing_results = _framework_aware_discovery(raw_query, query_info)
 
     merged = _merge_results(
         dense_results,
@@ -504,7 +770,59 @@ def search(query_info: dict) -> list[dict]:
         history_results,
         direct_topic_results,
         auth_routing_results,
+        domain_boost_results,
+        feature_recall_results,
+        framework_routing_results,
     )
+
+    from retrieval.semantic_targeting import detect_component_semantic_targets
+    comp_targeting = detect_component_semantic_targets(raw_query, query_info, merged)
+    query_info["component_targeting"] = comp_targeting
+
+    if comp_targeting.get("enabled") and comp_targeting.get("target_paths"):
+        client = _get_client()
+        collection = get_collection_name()
+        comp_semantic_results = []
+        for path in comp_targeting["target_paths"]:
+            comp_chunks = _scroll_exact_field_matches(client, collection, "relative_path", path)
+            for payload in comp_chunks:
+                p = dict(payload)
+                p["component_semantic_hit"] = True
+                p["component_target_symbol"] = comp_targeting["symbols_detected"][0]
+                p["component_target_path"] = path
+                p["support_kind"] = "component_definition"
+                comp_semantic_results.append((p, 10.0, "component_semantic"))
+        if comp_semantic_results:
+            merged = _merge_results(
+                [(m, m.get("retrieval_score", 0.0), "previous_merged") for m in merged],
+                comp_semantic_results
+            )
+
+    try:
+        from retrieval.exact_value_grounding import detect_exact_value_query
+        exact_val_query = detect_exact_value_query(raw_query, query_info)
+        query_info["exact_value_grounding"] = exact_val_query
+        
+        if exact_val_query.get("enabled") and exact_val_query.get("target_paths"):
+            client = _get_client()
+            collection = get_collection_name()
+            exact_val_results = []
+            for path in exact_val_query["target_paths"]:
+                val_chunks = _scroll_exact_field_matches(client, collection, "relative_path", path)
+                for payload in val_chunks:
+                    p = dict(payload)
+                    p["exact_retrieval_hit"] = True
+                    p["support_kind"] = "exact_value_forced"
+                    exact_val_results.append((p, 10.0, "component_semantic"))
+            if exact_val_results:
+                merged = _merge_results(
+                    [(m, m.get("retrieval_score", 0.0), "previous_merged") for m in merged],
+                    exact_val_results
+                )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+
     # Inject repo-summary and structured overview evidence for any query whose
     # primary intent is broad/structural.  The phrase-based gate is kept as a
     # fast-path fallback for cases where intent scoring disagrees.
@@ -512,7 +830,8 @@ def search(query_info: dict) -> list[dict]:
         merged = _inject_overview_candidates(merged)
     if primary_intent == "ARCHITECTURE" or _is_architecture_query(raw_query):
         merged = _inject_architecture_file_candidates(merged, entities)
-    merged = _inject_import_backing_candidates(raw_query, merged)
+    merged = _inject_structural_hint_candidates(raw_query, merged, query_info)
+    merged = _inject_import_backing_candidates(raw_query, merged, query_info)
     merged = _rerank_with_query_tokens(raw_query, merged, query_info)
 
     query_intent_explicit = any(
@@ -530,6 +849,21 @@ def search(query_info: dict) -> list[dict]:
             m for m in merged
             if "query_intent.py" not in (m.get("relative_path") or "")
         ]
+
+    if "feature_routing" in query_info:
+        from retrieval.repo_profile import FEATURE_PHRASE_NORMALIZATION
+        for m in merged:
+            if m.get("feature_routing_hit"):
+                path = m.get("relative_path")
+                if path and path not in query_info["feature_routing"]["candidate_paths"]:
+                    query_info["feature_routing"]["candidate_paths"].append(path)
+                for feat in m.get("matched_features", []):
+                    if feat not in query_info["feature_routing"]["feature_terms"]:
+                        query_info["feature_routing"]["feature_terms"].append(feat)
+                        # Add variants
+                        for variant in FEATURE_PHRASE_NORMALIZATION.get(feat, []):
+                            if variant not in query_info["feature_routing"]["normalized_terms"]:
+                                query_info["feature_routing"]["normalized_terms"].append(variant)
 
     return merged[:TOP_K_AFTER_MERGE]
 
@@ -628,6 +962,22 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
     results = []
     symbols = entities.get("symbols", [])
     files = entities.get("files", [])
+    exact_lookup_hits = _tier0_exact_lookup(
+        client=client,
+        collection=collection,
+        raw_query=raw_query,
+        entities=entities,
+        query_info=query_info,
+    )
+    results.extend(exact_lookup_hits)
+    symbol_lookup_hits = _tier1_symbol_definition_lookup(
+        client=client,
+        collection=collection,
+        raw_query=raw_query,
+        entities=entities,
+        query_info=query_info,
+    )
+    results.extend(symbol_lookup_hits)
 
     for file_hint in files:
         found_file_hint = False
@@ -662,27 +1012,6 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
                 continue
             hits, _ = response
             results.extend((dict(hit.payload or {}), 0.0, "filter") for hit in hits)
-
-    for symbol in symbols:
-        found_symbol = False
-        response = _qdrant_call(lambda: client.scroll(
-            collection_name=collection,
-            scroll_filter=Filter(
-                must=[FieldCondition(key="symbol_name", match=MatchValue(value=symbol))]
-            ),
-            limit=10,
-            with_payload=True,
-        ))
-        if response is None:
-            hits = []
-        else:
-            hits, _ = response
-            found_symbol = bool(hits)
-            results.extend((dict(hit.payload or {}), 0.0, "filter") for hit in hits)
-        if not found_symbol:
-            local_payload = _local_symbol_hint_payload(symbol)
-            if local_payload:
-                results.append((local_payload, 0.0, "filter"))
 
     # Query-aware file pattern boosts for hard disambiguation (tests/websocket/ws).
     for symbol in symbols:
@@ -758,25 +1087,370 @@ def _metadata_search(raw_query: str, entities: dict, query_info: dict | None = N
     return results
 
 
+def _tier1_symbol_definition_lookup(
+    *,
+    client,
+    collection: str,
+    raw_query: str,
+    entities: dict,
+    query_info: dict | None = None,
+) -> list[tuple[dict, float, str]]:
+    symbols = [str(symbol).strip() for symbol in (entities.get("symbols") or []) if str(symbol).strip()]
+    if not symbols:
+        if query_info is not None:
+            query_info["symbol_lookup"] = {
+                "symbol_hits": 0,
+                "symbols_detected": [],
+                "definition_paths": [],
+                "basename_fallback_used": False,
+                "file_symbol_fallback_used": False,
+                "local_fallback_used": False,
+            }
+        return []
+
+    results: list[tuple[dict, float, str]] = []
+    seen_keys: set[tuple[str, str, int, int]] = set()
+    diag = {
+        "symbol_hits": 0,
+        "symbols_detected": symbols,
+        "definition_paths": [],
+        "basename_fallback_used": False,
+        "file_symbol_fallback_used": False,
+        "local_fallback_used": False,
+    }
+
+    for symbol in symbols:
+        found_any = False
+        for payload in _scroll_exact_field_matches(client, collection, "symbol_name", symbol):
+            score = _symbol_definition_lookup_priority(payload, symbol, raw_query, match_kind="symbol_name")
+            if _append_symbol_lookup_result(results, seen_keys, payload, score=score, match_kind="symbol_name"):
+                found_any = True
+                diag["symbol_hits"] += 1
+                rel_path = str(payload.get("relative_path", "")).strip()
+                if rel_path and rel_path not in diag["definition_paths"]:
+                    diag["definition_paths"].append(rel_path)
+
+        basename_hits = _scroll_exact_field_matches(client, collection, "basename", symbol)
+        for payload in basename_hits:
+            score = _symbol_definition_lookup_priority(payload, symbol, raw_query, match_kind="basename")
+            if _append_symbol_lookup_result(results, seen_keys, payload, score=score, match_kind="basename"):
+                found_any = True
+                diag["symbol_hits"] += 1
+                diag["basename_fallback_used"] = True
+                rel_path = str(payload.get("relative_path", "")).strip()
+                if rel_path and rel_path not in diag["definition_paths"]:
+                    diag["definition_paths"].append(rel_path)
+
+        file_symbol_hits = _scroll_match_any_field_matches(client, collection, "file_symbols", [symbol])
+        for payload in file_symbol_hits:
+            score = _symbol_definition_lookup_priority(payload, symbol, raw_query, match_kind="file_symbols")
+            if _append_symbol_lookup_result(results, seen_keys, payload, score=score, match_kind="file_symbols"):
+                found_any = True
+                diag["symbol_hits"] += 1
+                diag["file_symbol_fallback_used"] = True
+                rel_path = str(payload.get("relative_path", "")).strip()
+                if rel_path and rel_path not in diag["definition_paths"]:
+                    diag["definition_paths"].append(rel_path)
+
+        if found_any:
+            continue
+
+        local_payload = _local_symbol_hint_payload(symbol)
+        if _append_symbol_lookup_result(
+            results,
+            seen_keys,
+            local_payload,
+            score=0.97,
+            match_kind="local_symbol",
+        ):
+            diag["symbol_hits"] += 1
+            diag["local_fallback_used"] = True
+            rel_path = str(local_payload.get("relative_path", "")).strip()
+            if rel_path and rel_path not in diag["definition_paths"]:
+                diag["definition_paths"].append(rel_path)
+
+    if query_info is not None:
+        query_info["symbol_lookup"] = diag
+    return results
+
+
+def _tier0_exact_lookup(
+    *,
+    client,
+    collection: str,
+    raw_query: str,
+    entities: dict,
+    query_info: dict | None = None,
+) -> list[tuple[dict, float, str]]:
+    lookup = entities.get("file_lookup") if isinstance(entities.get("file_lookup"), dict) else {}
+    raw_tokens = [str(item).strip() for item in lookup.get("raw_tokens", []) if str(item).strip()]
+    normalized_paths = [
+        str(item).strip()
+        for item in lookup.get("normalized_paths", [])
+        if str(item).strip()
+    ]
+    filename_tokens = [
+        str(item).strip()
+        for item in lookup.get("filename_tokens", [])
+        if str(item).strip()
+    ]
+
+    results: list[tuple[dict, float, str]] = []
+    seen_keys: set[tuple[str, str, int, int]] = set()
+    diag = {
+        "tier0_exact_lookup_enabled": True,
+        "exact_path_hits": 0,
+        "normalized_path_hits": 0,
+        "filename_hits": 0,
+        "exact_path_hit_paths": [],
+        "normalized_path_hit_paths": [],
+        "filename_hit_paths": [],
+        "filename_ambiguous": False,
+        "exact_match_forced": False,
+        "forced_primary_paths": [],
+        "raw_tokens": raw_tokens,
+        "normalized_paths": normalized_paths,
+        "filename_tokens": filename_tokens,
+    }
+
+    for token in normalized_paths:
+        for field_name, diag_key in (("relative_path", "exact_path_hits"), ("normalized_path", "normalized_path_hits")):
+            for payload in _scroll_exact_field_matches(client, collection, field_name, token):
+                if _append_exact_lookup_result(results, seen_keys, payload, lookup_type=field_name):
+                    diag[diag_key] += 1
+                    diag["exact_match_forced"] = True
+                    rel_path = str(payload.get("relative_path", "")).strip()
+                    hit_paths_key = "exact_path_hit_paths" if field_name == "relative_path" else "normalized_path_hit_paths"
+                    if rel_path and rel_path not in diag[hit_paths_key]:
+                        diag[hit_paths_key].append(rel_path)
+                    if rel_path and rel_path not in diag["forced_primary_paths"]:
+                        diag["forced_primary_paths"].append(rel_path)
+
+        if not any(path_matches_candidate(token, path) for path in diag["forced_primary_paths"]):
+            local_payload = _local_file_hint_payload(token)
+            if _append_exact_lookup_result(results, seen_keys, local_payload, lookup_type="relative_path"):
+                diag["exact_path_hits"] += 1
+                diag["exact_match_forced"] = True
+                rel_path = str(local_payload.get("relative_path", "")).strip()
+                if rel_path and rel_path not in diag["exact_path_hit_paths"]:
+                    diag["exact_path_hit_paths"].append(rel_path)
+                if rel_path and rel_path not in diag["forced_primary_paths"]:
+                    diag["forced_primary_paths"].append(rel_path)
+
+    for filename in filename_tokens:
+        if not is_filename_only(filename):
+            continue
+            
+        matches: list[dict] = []
+        for payload in _scroll_exact_field_matches(client, collection, "filename", filename):
+            matches.append(payload)
+            
+        unique_paths = list({str(m.get("relative_path", "")).strip() for m in matches if str(m.get("relative_path", "")).strip()})
+        if len(unique_paths) > 1:
+            diag["filename_ambiguous"] = True
+            
+            q_lower = raw_query.lower()
+            def path_score(p: str) -> int:
+                score = 0
+                parts = p.split("/")[:-1]
+                for part in parts:
+                    if part.lower() in q_lower:
+                        score += 1
+                return score
+                
+            unique_paths.sort(key=path_score, reverse=True)
+            allowed_paths = set(unique_paths[:2])
+            matches = [m for m in matches if str(m.get("relative_path", "")).strip() in allowed_paths]
+            
+        filename_found = False
+        for payload in matches:
+            if _append_exact_lookup_result(results, seen_keys, payload, lookup_type="filename"):
+                filename_found = True
+                diag["filename_hits"] += 1
+                diag["exact_match_forced"] = True
+                rel_path = str(payload.get("relative_path", "")).strip()
+                if rel_path and rel_path not in diag["filename_hit_paths"]:
+                    diag["filename_hit_paths"].append(rel_path)
+                if rel_path and rel_path not in diag["forced_primary_paths"]:
+                    diag["forced_primary_paths"].append(rel_path)
+        if filename_found:
+            continue
+        local_payload = _local_file_hint_payload(filename)
+        if _append_exact_lookup_result(results, seen_keys, local_payload, lookup_type="filename"):
+            diag["filename_hits"] += 1
+            diag["exact_match_forced"] = True
+            rel_path = str(local_payload.get("relative_path", "")).strip()
+            if rel_path and rel_path not in diag["filename_hit_paths"]:
+                diag["filename_hit_paths"].append(rel_path)
+            if rel_path and rel_path not in diag["forced_primary_paths"]:
+                diag["forced_primary_paths"].append(rel_path)
+
+    if query_info is not None:
+        query_info["tier0_exact_lookup"] = diag
+    return results
+
+
+def _scroll_exact_field_matches(client, collection: str, field_name: str, value: str) -> list[dict]:
+    response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        scroll_filter=Filter(
+            must=[FieldCondition(key=field_name, match=MatchValue(value=value))]
+        ),
+        limit=24,
+        with_payload=True,
+    ))
+    if response is None:
+        return []
+    hits, _ = response
+    return [dict(hit.payload or {}) for hit in hits if hit.payload]
+
+
+def _scroll_match_any_field_matches(client, collection: str, field_name: str, values: list[str]) -> list[dict]:
+    if not values:
+        return []
+    response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        scroll_filter=Filter(
+            must=[FieldCondition(key=field_name, match=MatchAny(any=values))]
+        ),
+        limit=24,
+        with_payload=True,
+    ))
+    if response is None:
+        return []
+    hits, _ = response
+    return [dict(hit.payload or {}) for hit in hits if hit.payload]
+
+
+def _append_exact_lookup_result(
+    results: list[tuple[dict, float, str]],
+    seen_keys: set[tuple[str, str, int, int]],
+    payload: dict | None,
+    *,
+    lookup_type: str,
+) -> bool:
+    if not payload:
+        return False
+    rel_path = str(payload.get("relative_path", "")).strip()
+    symbol_name = str(payload.get("symbol_name", "")).strip()
+    start_line = int(payload.get("start_line", 0) or 0)
+    end_line = int(payload.get("end_line", 0) or 0)
+    key = (rel_path, symbol_name, start_line, end_line)
+    if not rel_path or key in seen_keys:
+        return False
+    tagged = dict(payload)
+    tagged["exact_retrieval_hit"] = True
+    tagged["support_kind"] = "tier0_exact_lookup"
+    tagged["exact_lookup_type"] = lookup_type
+    results.append((tagged, 1.0, "tier0_exact_lookup"))
+    seen_keys.add(key)
+    return True
+
+
+def _append_symbol_lookup_result(
+    results: list[tuple[dict, float, str]],
+    seen_keys: set[tuple[str, str, int, int]],
+    payload: dict | None,
+    *,
+    score: float,
+    match_kind: str,
+) -> bool:
+    if not payload:
+        return False
+    rel_path = str(payload.get("relative_path", "")).strip()
+    symbol_name = str(payload.get("symbol_name", "")).strip()
+    start_line = int(payload.get("start_line", 0) or 0)
+    end_line = int(payload.get("end_line", 0) or 0)
+    key = (rel_path, symbol_name, start_line, end_line)
+    if not rel_path or key in seen_keys:
+        return False
+    tagged = dict(payload)
+    tagged["exact_retrieval_hit"] = True
+    tagged["support_kind"] = "symbol_definition_lookup"
+    tagged["symbol_lookup_match_kind"] = match_kind
+    results.append((tagged, score, "symbol_lookup"))
+    seen_keys.add(key)
+    return True
+
+
+def _symbol_definition_lookup_priority(payload: dict, symbol: str, raw_query: str, *, match_kind: str) -> float:
+    rel_path = str(payload.get("relative_path", "")).strip()
+    symbol_name = str(payload.get("symbol_name", "")).strip()
+    basename = str(payload.get("basename", "")).strip()
+    chunk_type = str(payload.get("chunk_type", "")).strip().lower()
+    file_symbols = {str(item).strip() for item in (payload.get("file_symbols") or []) if str(item).strip()}
+    content = str(payload.get("content") or payload.get("content_excerpt") or payload.get("summary") or "")
+
+    score = 0.85
+    if match_kind == "symbol_name":
+        score += 0.10
+    elif match_kind == "basename":
+        score += 0.08
+    elif match_kind == "file_symbols":
+        score += 0.05
+
+    if symbol_name == symbol:
+        score += 0.12
+    if basename == symbol:
+        score += 0.10
+    if symbol in file_symbols:
+        score += 0.06
+    if chunk_type in {"function", "class"}:
+        score += 0.05
+    elif chunk_type == "file":
+        score -= 0.02
+
+    if _content_looks_like_symbol_definition(content, symbol):
+        score += 0.08
+    if _content_looks_like_symbol_usage_only(content, symbol):
+        score -= 0.07
+
+    lower_path = rel_path.lower()
+    if any(part in lower_path for part in ("/tests/", "tests/", "/docs/", "docs/", "/fixtures/", "fixtures/")):
+        score -= 0.20
+    if any(part in lower_path for part in ("/dist/", "/build/", "/coverage/", "/node_modules/")):
+        score -= 0.25
+
+    query_lower = (raw_query or "").lower()
+    if basename.lower() and basename.lower() in query_lower:
+        score += 0.04
+    if symbol_name.lower() and symbol_name.lower() in query_lower:
+        score += 0.04
+
+    return min(max(score, 0.0), 1.0)
+
+
 def _local_file_hint_payload(file_hint: str) -> dict | None:
     """Return grounded local-file evidence when Qdrant lacks an exact file hit."""
-    clean_hint = str(file_hint).strip().lstrip("/")
+    repo_root = Path(get_repo_root()).resolve()
+    clean_hint = normalize_repo_path(file_hint, repo_root=str(repo_root))
     if not clean_hint or ".." in Path(clean_hint).parts:
         return None
-    repo_root = Path(get_repo_root()).resolve()
     resolved = _resolve_local_file_hint(repo_root, clean_hint)
     if not resolved:
         return None
     relative_path, path = resolved
+    relative_path = normalize_repo_path(relative_path, repo_root=str(repo_root)) or relative_path
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     lines = text.splitlines()
     summary = f"File: {relative_path}"
+    path_fields = path_metadata(relative_path, repo_root=str(repo_root))
+    source_truth = analyze_source_truth(
+        relative_path=relative_path,
+        content=text,
+        imports=[],
+        exported_symbols=[],
+    )
     return {
         "chunk_id": f"local-file::{relative_path}",
         "relative_path": relative_path,
+        "normalized_path": path_fields["normalized_path"] or relative_path,
+        "filename": path_fields["filename"],
+        "basename": path_fields["basename"],
+        "extension": path_fields["extension"],
         "symbol_name": path.name,
         "qualified_symbol": f"{relative_path}::<file>",
         "chunk_type": "file_summary",
@@ -787,10 +1461,14 @@ def _local_file_hint_payload(file_hint: str) -> dict | None:
         "summary": summary,
         "content": text,
         "content_excerpt": text[:4000],
+        "source_of_truth": bool(source_truth["source_of_truth"]),
+        "centrality_score": float(source_truth["centrality_score"]),
+        "exported_symbols": list(source_truth["exported_symbols"]),
     }
 
 
 def _resolve_local_file_hint(repo_root: Path, clean_hint: str) -> tuple[str, Path] | None:
+    clean_hint = normalize_repo_path(clean_hint, repo_root=str(repo_root))
     exact_path = (repo_root / clean_hint).resolve()
     try:
         exact_path.relative_to(repo_root)
@@ -818,13 +1496,13 @@ def _resolve_local_file_hint(repo_root: Path, clean_hint: str) -> tuple[str, Pat
 
 def _local_file_hint_priority(relative_path: str) -> int:
     lower = relative_path.lower()
-    if lower.startswith("backend/"):
-        return 0
-    if lower.startswith("deploy/"):
-        return 1
-    if lower.startswith("frontend/"):
-        return 2
-    return 3
+    depth = len([part for part in Path(relative_path).parts if part not in {"", "."}])
+    penalty = depth
+    if any(part in lower for part in ("/tests/", "tests/", "/docs/", "docs/", "/fixtures/", "fixtures/")):
+        penalty += 20
+    if any(part in lower for part in ("/dist/", "/build/", "/coverage/", "/node_modules/", "/vendor/")):
+        penalty += 40
+    return penalty
 
 
 def _local_symbol_hint_payload(symbol: str) -> dict | None:
@@ -836,6 +1514,9 @@ def _local_symbol_hint_payload(symbol: str) -> dict | None:
         payload = _local_symbol_payload_from_file(repo_root, path, clean_symbol)
         if payload:
             return payload
+    basename_payload = _local_basename_symbol_payload(repo_root, clean_symbol)
+    if basename_payload:
+        return basename_payload
     return None
 
 def _local_content_match_candidates(raw_query: str, intent: str, limit: int = 12) -> list[tuple[dict, float, str]]:
@@ -945,7 +1626,12 @@ def _local_content_match_candidates(raw_query: str, intent: str, limit: int = 12
     return [(payload, score, source) for _priority, payload, score, source in matches[:limit]]
 def _iter_local_symbol_files(repo_root: Path):
     skip_dirs = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "build"}
-    for path in repo_root.rglob("*.py"):
+    allowed_suffixes = {".py", ".js", ".jsx", ".ts", ".tsx"}
+    for path in repo_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in allowed_suffixes:
+            continue
         if any(part in skip_dirs for part in path.parts):
             continue
         yield path
@@ -957,7 +1643,21 @@ def _local_symbol_payload_from_file(repo_root: Path, path: Path, symbol: str) ->
         relative_path = path.resolve().relative_to(repo_root).as_posix()
     except (OSError, ValueError):
         return None
-    pattern = re.compile(rf"^(async\s+def|def|class)\s+{re.escape(symbol)}\b")
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        pattern = re.compile(rf"^(async\s+def|def|class)\s+{re.escape(symbol)}\b")
+        next_symbol_pattern = re.compile(r"^(async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*\b")
+        chunk_type = "function"
+        language = "python"
+    else:
+        pattern = re.compile(
+            rf"^\s*(?:export\s+default\s+|export\s+)?(?:async\s+function|function|class|const|let|var)\s+{re.escape(symbol)}\b|^\s*export\s+default\s+function\s+{re.escape(symbol)}\b"
+        )
+        next_symbol_pattern = re.compile(
+            r"^\s*(?:export\s+default\s+|export\s+)?(?:async\s+function|function|class|const|let|var)\s+[A-Za-z_][A-Za-z0-9_]*\b"
+        )
+        chunk_type = "function"
+        language = "typescript" if suffix in {".ts", ".tsx"} else "javascript"
     start_index = None
     for index, line in enumerate(lines):
         if pattern.match(line):
@@ -966,7 +1666,6 @@ def _local_symbol_payload_from_file(repo_root: Path, path: Path, symbol: str) ->
     if start_index is None:
         return None
     end_index = len(lines) - 1
-    next_symbol_pattern = re.compile(r"^(async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*\b")
     for index in range(start_index + 1, len(lines)):
         if next_symbol_pattern.match(lines[index]):
             end_index = index - 1
@@ -974,19 +1673,93 @@ def _local_symbol_payload_from_file(repo_root: Path, path: Path, symbol: str) ->
     content = "\n".join(lines[start_index : end_index + 1])
     start_line = start_index + 1
     end_line = end_index + 1
+    path_fields = path_metadata(relative_path, repo_root=str(repo_root))
     return {
         "chunk_id": f"local-symbol::{relative_path}::{symbol}",
         "relative_path": relative_path,
+        "normalized_path": path_fields["normalized_path"] or relative_path,
+        "filename": path_fields["filename"],
+        "basename": path_fields["basename"],
+        "extension": path_fields["extension"],
         "symbol_name": symbol,
         "qualified_symbol": f"{relative_path}::{symbol}",
-        "chunk_type": "function",
-        "language": "python",
+        "chunk_type": chunk_type,
+        "language": language,
         "start_line": start_line,
         "end_line": end_line,
-        "summary": f"Function: {symbol}",
+        "summary": f"Definition: {symbol}",
         "content": content,
         "content_excerpt": content[:4000],
     }
+
+
+def _local_basename_symbol_payload(repo_root: Path, symbol: str) -> dict | None:
+    symbol_lower = symbol.lower()
+    matches: list[tuple[int, dict]] = []
+    for path in _iter_local_symbol_files(repo_root):
+        path_fields = path_metadata(path.resolve().relative_to(repo_root).as_posix(), repo_root=str(repo_root))
+        if path_fields["basename"].lower() != symbol_lower:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            relative_path = path.resolve().relative_to(repo_root).as_posix()
+        except (OSError, ValueError):
+            continue
+        lines = text.splitlines()
+        payload = {
+            "chunk_id": f"local-basename::{relative_path}::{symbol}",
+            "relative_path": relative_path,
+            "normalized_path": path_fields["normalized_path"] or relative_path,
+            "filename": path_fields["filename"],
+            "basename": path_fields["basename"],
+            "extension": path_fields["extension"],
+            "symbol_name": symbol,
+            "qualified_symbol": f"{relative_path}::{symbol}",
+            "chunk_type": "file",
+            "language": "typescript" if path.suffix.lower() in {".ts", ".tsx"} else ("javascript" if path.suffix.lower() in {".js", ".jsx"} else "python"),
+            "start_line": 1,
+            "end_line": max(1, len(lines)),
+            "summary": f"File likely defining {symbol}",
+            "content": text,
+            "content_excerpt": text[:4000],
+            "file_symbols": [symbol],
+        }
+        priority = _local_file_hint_priority(relative_path)
+        matches.append((priority, payload))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0])
+    return matches[0][1]
+
+
+def _content_looks_like_symbol_definition(content: str, symbol: str) -> bool:
+    if not content or not symbol:
+        return False
+    symbol_esc = re.escape(symbol)
+    patterns = (
+        rf"\bdef\s+{symbol_esc}\b",
+        rf"\bclass\s+{symbol_esc}\b",
+        rf"\bfunction\s+{symbol_esc}\b",
+        rf"\bconst\s+{symbol_esc}\b",
+        rf"\blet\s+{symbol_esc}\b",
+        rf"\bvar\s+{symbol_esc}\b",
+        rf"\bexport\s+default\s+function\s+{symbol_esc}\b",
+    )
+    return any(re.search(pattern, content) for pattern in patterns)
+
+
+def _content_looks_like_symbol_usage_only(content: str, symbol: str) -> bool:
+    if not content or not symbol:
+        return False
+    symbol_esc = re.escape(symbol)
+    usage_patterns = (
+        rf"\bimport\s+.*\b{symbol_esc}\b",
+        rf"\bfrom\s+[\"'][^\"']+[\"']",
+        rf"<{symbol_esc}\b",
+    )
+    if _content_looks_like_symbol_definition(content, symbol):
+        return False
+    return any(re.search(pattern, content) for pattern in usage_patterns)
 
 
 def _dependency_search(entities: dict):
@@ -1387,13 +2160,46 @@ def _merge_results(*layers):
                 records[chunk_id]["retrieval_score"] = 0.0
                 records[chunk_id]["fusion_score"] = 0.0
                 records[chunk_id]["exact_retrieval_hit"] = False
-            if source == "dense":
+            if source in {"dense", "domain_boost"}:
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
-            if source in {"dense", "lexical", "metadata"}:
+            if source in {"dense", "lexical", "metadata", "domain_boost"}:
                 records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
-            if source in {"filter", "calls", "exact_entity", "history", "direct_injection", "auth_routing", "code_topic_routing"}:
+            if source in {
+                "filter",
+                "calls",
+                "exact_entity",
+                "history",
+                "direct_injection",
+                "auth_routing",
+                "code_topic_routing",
+                "tier0_exact_lookup",
+                "symbol_lookup",
+                "component_semantic",
+            }:
                 records[chunk_id]["exact_retrieval_hit"] = True
+            if source in {"tier0_exact_lookup", "symbol_lookup", "component_semantic"}:
+                records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
             layer_hits[chunk_id].add(source)
+            if payload.get("support_kind") and not records[chunk_id].get("support_kind"):
+                records[chunk_id]["support_kind"] = payload["support_kind"]
+            if payload.get("exact_lookup_type") and not records[chunk_id].get("exact_lookup_type"):
+                records[chunk_id]["exact_lookup_type"] = payload["exact_lookup_type"]
+            if payload.get("component_semantic_hit"):
+                records[chunk_id]["component_semantic_hit"] = payload["component_semantic_hit"]
+                records[chunk_id]["component_target_symbol"] = payload.get("component_target_symbol", "")
+                records[chunk_id]["component_target_path"] = payload.get("component_target_path", "")
+            if payload.get("domain_boost_hit"):
+                records[chunk_id]["domain_boost_hit"] = payload["domain_boost_hit"]
+                if payload.get("domain_boost_labels"):
+                    records[chunk_id]["domain_boost_labels"] = payload["domain_boost_labels"]
+                if payload.get("domain_matched_terms"):
+                    records[chunk_id]["domain_matched_terms"] = payload["domain_matched_terms"]
+                records[chunk_id]["domain_boost_score"] = max(records[chunk_id].get("domain_boost_score", 0.0), float(payload.get("domain_boost_score", 0.0)))
+            if payload.get("feature_recall_hit"):
+                records[chunk_id]["feature_recall_hit"] = payload["feature_recall_hit"]
+                if payload.get("feature_recall_terms"):
+                    records[chunk_id]["feature_recall_terms"] = payload["feature_recall_terms"]
+                records[chunk_id]["feature_recall_score"] = max(records[chunk_id].get("feature_recall_score", 0.0), float(payload.get("feature_recall_score", 0.0)))
 
     merged = []
     for chunk_id, payload in records.items():
@@ -1584,7 +2390,7 @@ def _generic_contract_path_score(relative_path: str, source_intent: str, raw_que
     elif source_intent == "api_endpoint":
         score += 1000 if (is_api or is_auth) and not is_frontend else 0
         score += 300 if is_frontend and ("api" in path or is_auth) else 0
-        score += 700 if name == "db.py" else 0
+        score += 1000 if name == "db.py" else 0
         if "authcallback" in path or ("auth" in path and "callback" in path):
             score += 800
         if "/scripts/" in path:
@@ -1735,12 +2541,13 @@ def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list
     return results
 
 
-def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) -> list[dict]:
+def _inject_import_backing_candidates(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     tokens = _query_tokens(raw_query)
     if not tokens:
         return candidates
 
     backing_hits: list[dict] = []
+    alias_resolved_paths: list[str] = []
     seen = {str(item.get("chunk_id", "")) for item in candidates if item.get("chunk_id")}
     visited_edges: set[tuple[str, str, str]] = set()
     for candidate in candidates[: min(len(candidates), 6)]:
@@ -1755,7 +2562,11 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
             for imported_name, module_path in _parse_named_imports(statement):
                 if _identifier_token_overlap(imported_name, tokens) <= 0:
                     continue
-                resolved = _resolve_import_relative_path(relative_path, module_path)
+                resolved, resolution_info = resolve_import_relative_path(
+                    relative_path,
+                    module_path,
+                    repo_root=get_repo_root(),
+                )
                 if not resolved:
                     continue
                 edge = (relative_path, resolved, imported_name)
@@ -1774,10 +2585,21 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict]) ->
                     backing_payload["support_kind"] = "import_backing"
                     backing_payload["supporting_from"] = relative_path
                     backing_payload["supporting_import_name"] = imported_name
+                    backing_payload["resolved_import_path"] = resolved
+                    if resolution_info.get("alias_used"):
+                        backing_payload["alias_resolution"] = dict(resolution_info)
+                        if resolved not in alias_resolved_paths:
+                            alias_resolved_paths.append(resolved)
                     backing_hits.append(backing_payload)
                     seen.add(chunk_id)
                 if len(backing_hits) >= TRACE_EXPANDED_CHUNKS_LIMIT:
                     break
+    if query_info is not None and alias_resolved_paths:
+        current = list(query_info.get("alias_resolved_paths") or [])
+        for path in alias_resolved_paths:
+            if path not in current:
+                current.append(path)
+        query_info["alias_resolved_paths"] = current
     return candidates + backing_hits
 
 
@@ -1866,10 +2688,31 @@ def symbol_definition_boost(candidate: dict, extracted_symbols: list[str], query
     q = (query or "").lower()
     is_definition_query = any(
         term in q
-        for term in ["defined", "definition", "declared", "implemented", "located", "where is"]
+        for term in [
+            "defined",
+            "definition",
+            "declared",
+            "implemented",
+            "implementation",
+            "located",
+            "where is",
+            "explain",
+            "logic",
+            "works",
+            "work",
+            "render",
+            "rendered",
+            "does",
+            "do",
+            "behavior",
+        ]
     )
 
     if not is_definition_query:
+        return 0.0
+
+    metadata = _candidate_symbol_role_metadata(candidate, extracted_symbols)
+    if not metadata["definition_matches"]:
         return 0.0
 
     symbol_name = (candidate.get("symbol_name") or "").lower()
@@ -1880,22 +2723,60 @@ def symbol_definition_boost(candidate: dict, extracted_symbols: list[str], query
         or candidate.get("summary")
         or ""
     ).lower()
-
+    score = 0.0
     for sym in extracted_symbols:
         s = (sym or "").lower()
         if not s:
             continue
 
         if symbol_name == s:
-            return 0.25
+            score = max(score, 0.28)
 
         if qualified_symbol.endswith("." + s) or qualified_symbol.endswith("::" + s):
-            return 0.22
+            score = max(score, 0.24)
 
         if f"def {s}" in content or f"class {s}" in content or f"{s} =" in content or f"{s}:" in content:
-            return 0.18
+            score = max(score, 0.20)
 
-    return 0.0
+    if metadata["symbol_role"] == "definition":
+        score += 0.08
+    if metadata["used_matches"] or metadata["import_matches"]:
+        score -= 0.03
+    return min(max(score, 0.0), 0.36)
+
+
+def symbol_usage_penalty(candidate: dict, extracted_symbols: list[str], query: str) -> float:
+    if not extracted_symbols:
+        return 0.0
+
+    q = (query or "").lower()
+    is_implementation_query = any(
+        term in q
+        for term in [
+            "explain",
+            "logic",
+            "works",
+            "work",
+            "render",
+            "rendered",
+            "implementation",
+            "implemented",
+            "behavior",
+            "does",
+            "do",
+        ]
+    )
+    if not is_implementation_query:
+        return 0.0
+
+    metadata = _candidate_symbol_role_metadata(candidate, extracted_symbols)
+    if metadata["definition_matches"]:
+        return 0.0
+    if not metadata["used_matches"] and not metadata["import_matches"]:
+        return 0.0
+    if metadata["symbol_role"] == "definition" and not metadata["used_matches"] and not metadata["import_matches"]:
+        return 0.0
+    return -0.35
 
 
 def content_exact_match_boost(candidate: dict, extracted_symbols: list[str], query_terms: list[str]) -> float:
@@ -1914,6 +2795,129 @@ def content_exact_match_boost(candidate: dict, extracted_symbols: list[str], que
             score += 0.08
 
     return min(score, 0.20)
+
+
+def _extract_imported_symbol_names(imports: list[str]) -> list[str]:
+    names: list[str] = []
+    for statement in imports or []:
+        for imported_name, _module_path in _parse_named_imports(statement):
+            if imported_name and imported_name not in names:
+                names.append(imported_name)
+    return names
+
+
+def _extract_used_symbol_names(content: str) -> list[str]:
+    names = re.findall(r"<([A-Z][A-Za-z0-9_]*)\b", content or "")
+    deduped: list[str] = []
+    for name in names:
+        if name and name not in deduped:
+            deduped.append(name)
+    return deduped
+
+
+def _candidate_symbol_role_metadata(candidate: dict, extracted_symbols: list[str]) -> dict[str, object]:
+    symbol_role = str(candidate.get("symbol_role") or "").strip()
+    defined_symbols = [str(item).strip() for item in (candidate.get("defined_symbols") or []) if str(item).strip()]
+    used_symbols = [str(item).strip() for item in (candidate.get("used_symbols") or []) if str(item).strip()]
+    imported_symbols = [str(item).strip() for item in (candidate.get("imported_symbols") or []) if str(item).strip()]
+    imports = list(candidate.get("imports") or [])
+    content = str(candidate.get("content") or candidate.get("content_excerpt") or candidate.get("summary") or "")
+    symbol_name = str(candidate.get("symbol_name") or "").strip()
+    basename = str(candidate.get("basename") or "").strip()
+    file_symbols = [str(item).strip() for item in (candidate.get("file_symbols") or []) if str(item).strip()]
+
+    if not imported_symbols and imports:
+        imported_symbols = _extract_imported_symbol_names(imports)
+    if not used_symbols and content:
+        used_symbols = _extract_used_symbol_names(content)
+
+    definition_matches: list[str] = []
+    used_matches: list[str] = []
+    import_matches: list[str] = []
+    for symbol in extracted_symbols:
+        clean = str(symbol).strip()
+        if not clean:
+            continue
+        if (
+            clean in defined_symbols
+            or clean == symbol_name
+            or clean == basename
+            or clean in file_symbols
+            or _content_looks_like_symbol_definition(content, clean)
+        ):
+            definition_matches.append(clean)
+        if clean in used_symbols or _content_looks_like_symbol_usage_only(content, clean):
+            used_matches.append(clean)
+        if clean in imported_symbols:
+            import_matches.append(clean)
+
+    if not symbol_role:
+        if definition_matches:
+            symbol_role = "definition"
+        elif import_matches:
+            symbol_role = "import"
+        elif used_matches:
+            symbol_role = "usage"
+
+    return {
+        "symbol_role": symbol_role,
+        "defined_symbols": defined_symbols,
+        "used_symbols": used_symbols,
+        "imported_symbols": imported_symbols,
+        "definition_matches": definition_matches,
+        "used_matches": used_matches,
+        "import_matches": import_matches,
+    }
+
+
+def _candidate_source_truth_metadata(candidate: dict) -> dict[str, object]:
+    exported_symbols = [str(item).strip() for item in (candidate.get("exported_symbols") or []) if str(item).strip()]
+    source_of_truth = candidate.get("source_of_truth")
+    centrality_score = candidate.get("centrality_score")
+    relative_path = str(candidate.get("relative_path") or "").strip()
+    content = str(candidate.get("content") or candidate.get("content_excerpt") or candidate.get("summary") or "")
+    imports = list(candidate.get("imports") or [])
+
+    if source_of_truth is None or centrality_score is None or not exported_symbols:
+        derived = analyze_source_truth(
+            relative_path=relative_path,
+            content=content,
+            imports=imports,
+            exported_symbols=exported_symbols,
+        )
+        if source_of_truth is None:
+            source_of_truth = derived["source_of_truth"]
+        if centrality_score is None:
+            centrality_score = derived["centrality_score"]
+        if not exported_symbols:
+            exported_symbols = list(derived["exported_symbols"])
+
+    return {
+        "source_of_truth": bool(source_of_truth),
+        "centrality_score": float(centrality_score or 0.0),
+        "exported_symbols": exported_symbols,
+    }
+
+
+def central_file_boost(candidate: dict, raw_query: str, extracted_symbols: list[str]) -> float:
+    if not is_source_truth_query(raw_query):
+        return 0.0
+
+    metadata = _candidate_source_truth_metadata(candidate)
+    if not metadata["source_of_truth"]:
+        return 0.0
+
+    score = min(0.45, float(metadata["centrality_score"]) * 0.55)
+    path_lower = str(candidate.get("relative_path", "")).lower()
+    q_lower = (raw_query or "").lower()
+    exported_symbols = {str(item).lower() for item in metadata["exported_symbols"]}
+    if any(token in q_lower for token in ("cgpa", "skill", "skills", "project", "projects", "education", "experience", "experiences", "certification", "certifications", "resume", "social", "contact", "portfolio")):
+        score += 0.10
+    if any(str(symbol).lower() in exported_symbols for symbol in extracted_symbols):
+        score += 0.08
+    if "/components/" in path_lower and "/data" not in path_lower and "/content" not in path_lower:
+        score -= 0.18
+    return min(max(score, 0.0), 0.55)
 
 
 def framework_source_boost(candidate: dict, query: str, intent: str) -> float:
@@ -2041,7 +3045,7 @@ def classify_source_role(relative_path: str) -> str:
         "safe_eval_latest/" in path_lower or 
         path_lower.startswith("safe_eval_latest/")):
         return "generated_eval"
-    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("eval", "ragas", "report")):
+    if path_lower.startswith("backend/scripts/") and any(term in path_lower for term in ("eval", "report")):
         return "generated_eval"
         
     # 3. test
@@ -2124,9 +3128,6 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
     ):
         if path in {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"}:
             return 1.0
-        if path == "backend/scripts/ragas_eval.py":
-            return -0.8
-            
     # 4. auth/session validation
     if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:
         if path in {"backend/retrieval/api_service.py", "backend/retrieval/auth_store.py", "backend/retrieval/db.py"}:
@@ -2147,6 +3148,11 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     response_mode = query_profile.get("response_mode", "")
     extracted_entities = query_info.get("entities") if query_info else None
     extracted_symbols = extracted_entities.get("symbols", []) if extracted_entities else []
+
+    if extracted_entities and extracted_entities.get("boost_labels"):
+        current_boost = set(query_profile.get("boost_labels", []))
+        current_boost.update(extracted_entities.get("boost_labels", []))
+        query_profile["boost_labels"] = list(current_boost)
     is_followup = query_info.get("is_followup", False) if query_info else False
     is_low_context = (query_info.get("primary_intent") == "LOW_CONTEXT") if query_info else False
     primary_intent = query_info.get("primary_intent") if query_info else None
@@ -2182,10 +3188,30 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     )
 
     rescored = []
+    definition_ranking = None
+    central_file_ranking = None
+    if query_info is not None:
+        definition_ranking = query_info.setdefault(
+            "definition_ranking",
+            {
+                "definition_boost_paths": [],
+                "usage_support_paths": [],
+                "usage_demoted_paths": [],
+            },
+        )
+        central_file_ranking = query_info.setdefault(
+            "central_file_ranking",
+            {
+                "boosted_paths": [],
+            },
+        )
     for item in candidates:
         vector_score = float(item.get("retrieval_score", 0.0))
         if item.get("exact_retrieval_hit"):
             vector_score = max(vector_score, 0.70)
+        elif item.get("domain_boost_hit"):
+            domain_boost = min(float(item.get("domain_boost_score", 0.0)), 15.0) / 30.0
+            vector_score = max(vector_score, 0.40 + domain_boost)
         elif vector_score == 0.0 and item.get("fusion_score", 0.0) > 0.0:
             vector_score = min(0.65, 0.50 + 5.0 * float(item.get("fusion_score", 0.0)))
 
@@ -2230,10 +3256,23 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         if (reranker_intent == "DEPENDENCY" or label_intent == "DEPENDENCY" or is_dependency_trace_query(raw_query)) and item.get("support_kind") == "dependency_edge":
             dependency_boost = 0.25
 
-        sym_def_boost = symbol_definition_boost(item, extracted_symbols, raw_query) if reranker_intent in {"FILE", "SYMBOL"} else 0.0
+        structural_hint_boost = min(float(item.get("structural_hint_score", 0.0) or 0.0), 0.85) * 0.55
+        central_boost = central_file_boost(item, raw_query, extracted_symbols)
+        symbol_role_metadata = _candidate_symbol_role_metadata(item, extracted_symbols) if extracted_symbols else {
+            "symbol_role": "",
+            "defined_symbols": [],
+            "used_symbols": [],
+            "imported_symbols": [],
+            "definition_matches": [],
+            "used_matches": [],
+            "import_matches": [],
+        }
+        use_symbol_targeting_rerank = reranker_intent in {"FILE", "SYMBOL"} or primary_intent in {"FILE", "SYMBOL"}
+        sym_def_boost = symbol_definition_boost(item, extracted_symbols, raw_query) if use_symbol_targeting_rerank else 0.0
+        usage_penalty = symbol_usage_penalty(item, extracted_symbols, raw_query) if use_symbol_targeting_rerank else 0.0
 
         content_match_boost = 0.0
-        if reranker_intent in {"FILE", "SYMBOL", "DEPENDENCY"}:
+        if reranker_intent in {"FILE", "SYMBOL", "DEPENDENCY"} or primary_intent in {"FILE", "SYMBOL"}:
             content_match_boost = content_exact_match_boost(item, extracted_symbols, list(tokens))
 
         fw_boost = 0.0
@@ -2493,6 +3532,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             role_boost += 1.5
         if item.get("support_kind") == "code_topic_routing":
             role_boost += 2.0
+        if item.get("support_kind") == "tier0_exact_lookup":
+            role_boost += 2.5
+        if item.get("support_kind") == "symbol_definition_lookup":
+            role_boost += 3.0
 
         routing_boost = feature_specific_routing_boost(relative_path, raw_query)
 
@@ -2504,7 +3547,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + file_type_boost
             + followup_boost
             + dependency_boost
+            + structural_hint_boost
+            + central_boost
             + sym_def_boost
+            + usage_penalty
             + content_match_boost
             + fw_boost
             + qdrant_boost
@@ -2522,13 +3568,52 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + code_topic_route_deboost
         )
 
+        dyn_boost = 0.0
+        dyn_penalty = 0.0
+        collection = get_collection_name()
+        if collection:
+            from retrieval.repo_profile import compute_dynamic_boosts_and_penalties
+            dyn_boost, dyn_penalty, dyn_meta = compute_dynamic_boosts_and_penalties(
+                item, raw_query, extracted_entities or {}, collection
+            )
+            if dyn_meta and dyn_meta.get("matched_features"):
+                item["feature_routing_hit"] = True
+                item["matched_features"] = dyn_meta["matched_features"]
+        final_score += dyn_boost + dyn_penalty
+
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)
         if item.get("injected_from_previous_turn"):
             final_score *= PREVIOUS_CANDIDATE_PENALTY
 
+        if item.get("exact_retrieval_hit"):
+            final_score += 10.0
+
         boosted = dict(item)
+        boosted["symbol_role"] = symbol_role_metadata["symbol_role"]
+        boosted["defined_symbols"] = list(symbol_role_metadata["defined_symbols"])
+        boosted["used_symbols"] = list(symbol_role_metadata["used_symbols"])
+        boosted["imported_symbols"] = list(symbol_role_metadata["imported_symbols"])
+        source_truth_metadata = _candidate_source_truth_metadata(item)
+        boosted["source_of_truth"] = bool(source_truth_metadata["source_of_truth"])
+        boosted["centrality_score"] = float(source_truth_metadata["centrality_score"])
+        boosted["exported_symbols"] = list(source_truth_metadata["exported_symbols"])
+        boosted["central_file_boost_applied"] = central_boost > 0
+        boosted["definition_boost_applied"] = sym_def_boost > 0
+        boosted["usage_demoted"] = usage_penalty < 0
+        if usage_penalty < 0:
+            boosted["support_kind"] = boosted.get("support_kind") or "symbol_usage_support"
         boosted["retrieval_score"] = final_score
         boosted["final_score"] = final_score
+        rel_path = str(boosted.get("relative_path", "")).strip()
+        if definition_ranking is not None and rel_path:
+            if sym_def_boost > 0 and rel_path not in definition_ranking["definition_boost_paths"]:
+                definition_ranking["definition_boost_paths"].append(rel_path)
+            if (symbol_role_metadata["used_matches"] or symbol_role_metadata["import_matches"]) and rel_path not in definition_ranking["usage_support_paths"]:
+                definition_ranking["usage_support_paths"].append(rel_path)
+            if usage_penalty < 0 and rel_path not in definition_ranking["usage_demoted_paths"]:
+                definition_ranking["usage_demoted_paths"].append(rel_path)
+        if central_file_ranking is not None and rel_path and central_boost > 0 and rel_path not in central_file_ranking["boosted_paths"]:
+            central_file_ranking["boosted_paths"].append(rel_path)
         rescored.append(boosted)
 
     rescored.sort(key=lambda item: -float(item.get("final_score", 0.0)))
@@ -2544,6 +3629,12 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         if count < 2:
             diverse_results.append(item)
             file_counts[rel_path] = count + 1
+
+    if query_info is not None and collection:
+        from retrieval.repo_profile import build_diagnostics
+        query_info["domain_boost_retrieval"] = build_diagnostics(
+            diverse_results, raw_query, extracted_entities or {}, collection
+        )
 
     return diverse_results
 
@@ -2646,6 +3737,87 @@ def _inject_architecture_file_candidates(candidates: list[dict], entities: dict)
         if str(item.get("chunk_id", "")).strip() not in promoted_ids
     ]
     return to_prepend + remaining
+
+
+def _structural_hint_payload_priority(payload: dict) -> tuple[int, int, str, int]:
+    return (
+        0 if str(payload.get("chunk_type", "")).lower() == "file" else 1,
+        0 if classify_source_role(str(payload.get("relative_path", ""))) == "implementation" else 1,
+        str(payload.get("symbol_name", "")),
+        int(payload.get("start_line", 0) or 0),
+    )
+
+
+def _inject_structural_hint_candidates(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
+    repo_root = Path(get_repo_root()).resolve()
+    entities = query_info.get("entities") if query_info else {}
+    matched_hints = match_structural_hints(raw_query, entities or {}, repo_root)
+    diag = {
+        "hint_ids": [str(item.get("id", "")).strip() for item in matched_hints if str(item.get("id", "")).strip()],
+        "paths": [],
+    }
+    if not matched_hints:
+        if query_info is not None:
+            query_info["structural_hints"] = diag
+        return candidates
+
+    client = _get_client()
+    collection = get_collection_name()
+    updated_candidates = [dict(item) for item in candidates]
+    by_chunk_id = {
+        str(item.get("chunk_id", "")).strip(): item
+        for item in updated_candidates
+        if str(item.get("chunk_id", "")).strip()
+    }
+    by_path = {
+        str(item.get("relative_path", "")).strip(): item
+        for item in updated_candidates
+        if str(item.get("relative_path", "")).strip()
+    }
+
+    for hint in matched_hints:
+        hint_id = str(hint.get("id", "")).strip()
+        score = float(hint.get("score", 0.65) or 0.65)
+        for rel_path in [str(path).strip() for path in (hint.get("files") or []) if str(path).strip()]:
+            if rel_path not in diag["paths"]:
+                diag["paths"].append(rel_path)
+
+            existing = by_path.get(rel_path)
+            if existing is not None:
+                hint_ids = list(existing.get("structural_hint_ids") or [])
+                if hint_id and hint_id not in hint_ids:
+                    hint_ids.append(hint_id)
+                existing["structural_hint_ids"] = hint_ids
+                existing["support_kind"] = existing.get("support_kind") or "structural_hint"
+                existing["retrieval_score"] = max(float(existing.get("retrieval_score", 0.0) or 0.0), score)
+                existing["structural_hint_score"] = max(float(existing.get("structural_hint_score", 0.0) or 0.0), score)
+                continue
+
+            payloads = _scroll_exact_field_matches(client, collection, "relative_path", rel_path)
+            chosen = min(payloads, key=_structural_hint_payload_priority) if payloads else _local_file_hint_payload(rel_path)
+            if not chosen:
+                continue
+            promoted = dict(chosen)
+            hint_ids = list(promoted.get("structural_hint_ids") or [])
+            if hint_id and hint_id not in hint_ids:
+                hint_ids.append(hint_id)
+            promoted["structural_hint_ids"] = hint_ids
+            promoted["support_kind"] = promoted.get("support_kind") or "structural_hint"
+            promoted.setdefault("exact_retrieval_hit", False)
+            promoted["retrieval_score"] = max(float(promoted.get("retrieval_score", 0.0) or 0.0), score)
+            promoted["structural_hint_score"] = max(float(promoted.get("structural_hint_score", 0.0) or 0.0), score)
+            chunk_id = str(promoted.get("chunk_id", "")).strip()
+            if chunk_id and chunk_id not in by_chunk_id:
+                updated_candidates.append(promoted)
+                by_chunk_id[chunk_id] = promoted
+                by_path[rel_path] = promoted
+            elif not chunk_id:
+                updated_candidates.append(promoted)
+                by_path[rel_path] = promoted
+
+    if query_info is not None:
+        query_info["structural_hints"] = diag
+    return updated_candidates
 
 
 def _repository_overview_candidates() -> list[dict]:
@@ -2846,49 +4018,6 @@ def _parse_named_imports(statement: str) -> list[tuple[str, str]]:
     return names
 
 
-def _resolve_import_relative_path(source_relative_path: str, module_path: str) -> str | None:
-    repo_root = Path(get_repo_root())
-    source_path = repo_root / source_relative_path
-
-    if module_path.startswith("@/"):
-        base = repo_root / "src" / module_path[2:]
-    elif module_path.startswith("./") or module_path.startswith("../"):
-        base = (source_path.parent / module_path).resolve()
-    elif module_path.startswith("."):
-        dot_count = len(module_path) - len(module_path.lstrip("."))
-        remainder = module_path[dot_count:]
-        package_root = source_path.parent
-        for _ in range(max(0, dot_count - 1)):
-            package_root = package_root.parent
-        base = package_root / remainder.replace(".", "/") if remainder else package_root
-    elif re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", module_path):
-        base = repo_root / module_path.replace(".", "/")
-    else:
-        return None
-
-    candidates = [
-        base.with_suffix(".ts"),
-        base.with_suffix(".tsx"),
-        base.with_suffix(".js"),
-        base.with_suffix(".jsx"),
-        base.with_suffix(".py"),
-        base.with_suffix(".json"),
-        base / "index.ts",
-        base / "index.tsx",
-        base / "index.js",
-        base / "index.jsx",
-        base / "__init__.py",
-        base,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            try:
-                return str(candidate.relative_to(repo_root))
-            except ValueError:
-                return None
-    return None
-
-
 def _fetch_import_symbol_chunks(
     relative_path: str,
     symbol_name: str,
@@ -2915,9 +4044,7 @@ def _fetch_import_symbol_chunks(
         limit=10,
         with_payload=True,
     ))
-    if response is None:
-        return []
-    hits, _ = response
+    hits = response[0] if response is not None else []
     payloads = [dict(hit.payload or {}) for hit in hits]
     if payloads:
         return payloads
@@ -2928,13 +4055,21 @@ def _fetch_import_symbol_chunks(
         payload = _build_imported_json_payload(source_path, relative_path, symbol_name)
         return [payload] if payload else []
 
+    payload = _build_imported_symbol_payload(source_path, relative_path, symbol_name)
+    if payload:
+        return [payload]
+
     try:
         lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
 
     for target_symbol, target_module in _parse_re_exports(lines, symbol_name):
-        resolved = _resolve_import_relative_path(relative_path, target_module)
+        resolved, _resolution_info = resolve_import_relative_path(
+            relative_path,
+            target_module,
+            repo_root=get_repo_root(),
+        )
         if not resolved:
             continue
         nested = _fetch_import_symbol_chunks(
@@ -2946,6 +4081,30 @@ def _fetch_import_symbol_chunks(
         if nested:
             return nested
     return []
+
+
+def _build_imported_symbol_payload(path: Path, relative_path: str, imported_name: str) -> dict | None:
+    from retrieval.code_answers import _extract_export_block
+
+    block = _extract_export_block(path, imported_name)
+    if not block:
+        return None
+
+    content = str(block.get("context_block") or block.get("formatted") or "").strip()
+    if not content:
+        return None
+
+    return {
+        "chunk_id": f"imported-symbol::{relative_path}::{imported_name}",
+        "relative_path": relative_path,
+        "symbol_name": imported_name,
+        "start_line": int(block.get("start_line", 1) or 1),
+        "end_line": int(block.get("end_line", 1) or 1),
+        "chunk_type": "symbol_definition",
+        "summary": f"Imported symbol definition for {imported_name} from {relative_path}",
+        "content": content,
+        "source": content,
+    }
 
 
 def _parse_re_exports(lines: list[str], identifier: str) -> list[tuple[str, str]]:
@@ -3048,8 +4207,8 @@ def _overview_priority(payload: dict) -> int:
     if relative_path in {"readme.md", "readme.mdx"}:
         score += 46
     if relative_path in {
-        "docs/product/final_handoff.md",
-        "docs/product/release_readiness_checklist.md",
+        "docs/product/repo_freshness.md",
+        "docs/product/manual_regression.md",
         "docs/product/index_latest.md",
     }:
         score += 44

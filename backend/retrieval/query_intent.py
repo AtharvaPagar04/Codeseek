@@ -15,6 +15,7 @@ DOMAIN_KEYWORDS = {
         "sessions",
         "token",
         "tokens",
+        "security",
     ],
     "capability:session-validation": [
         "session validation",
@@ -28,7 +29,39 @@ DOMAIN_KEYWORDS = {
         "token validate",
     ],
     "domain:retrieval": ["retrieval", "retrieve", "retriever", "search"],
-    "domain:ingestion": ["ingestion", "ingest", "indexing", "parser", "chunker"],
+    "domain:ingestion": [
+        "ingestion",
+        "ingest",
+        "indexing",
+        "index",
+        "session indexer",
+        "parser",
+        "parse",
+        "chunker",
+        "chunking",
+        "embed",
+        "embedding",
+        "qdrant",
+        "qdrant storage",
+        "upsert",
+        "vector",
+        "chunk",
+        "storage",
+        "chunk storage",
+    ],
+    "domain:storage": [
+        "qdrant",
+        "upsert",
+        "vector",
+        "chunk",
+        "storage",
+        "chunk storage",
+    ],
+    "domain:configuration": [
+        "config",
+        "settings",
+        "configuration",
+    ],
     "domain:provider-management": ["provider", "providers", "api key", "api keys"],
     "domain:frontend": ["frontend", "ui", "component", "components", "page", "pages", "css", "react"],
     "domain:testing": ["testing", "test", "tests"],
@@ -42,6 +75,16 @@ DOMAIN_KEYWORDS = {
     ],
     "domain:devops": ["devops", "docker", "dockerfile", "docker-compose", "deploy", "deployment"],
     "domain:vector-db": ["vector db", "vector database", "qdrant"],
+    "domain:source-filtering": [
+        "source",
+        "filter",
+        "filtering",
+        "display source",
+        "selected source",
+        "reasoning source",
+        "context pruning",
+        "prune",
+    ],
     "tech:qdrant": ["qdrant"],
 }
 
@@ -200,6 +243,8 @@ def is_indexing_explanation_query(query: str) -> bool:
             "chunking",
             "embedding",
             "storage",
+            "qdrant",
+            "vector",
         )
     )
     explanatory = any(
@@ -222,9 +267,11 @@ def is_indexing_explanation_query(query: str) -> bool:
 
 def is_retrieval_explanation_query(query: str) -> bool:
     q = query.lower()
+    # Force retrieval title to only trigger if query is actually about answering/LLM/reranking, not just generic 'search'
     return (
-        any(term in q for term in ("retrieval", "rag", "search", "rerank", "source selection", "display sources", "reasoning sources", "rank chunks", "rank retrieved"))
+        any(term in q for term in ("retrieval", "rag", "rerank", "source selection", "display sources", "reasoning sources", "rank chunks", "rank retrieved", "answering", "llm"))
         and any(term in q for term in ("explain", "how", "work", "works", "pipeline", "architecture"))
+        and not any(term in q for term in ("indexing", "ingestion", "storage", "qdrant", "vector"))
     )
 
 
@@ -328,7 +375,7 @@ LABEL_WEIGHTS = {
 
 # Source contracts are intentionally expressed as intent names only. Path
 # selection is handled dynamically from the indexed repository shape in
-# searcher/source_filter so this layer does not encode CodeSeek-specific files.
+# searcher/source_filter so this layer does not encode repository-specific files.
 SOURCE_INTENT_CONTRACTS: dict[str, tuple[str, ...]] = {}
 
 
@@ -343,15 +390,49 @@ def classify_source_intent(query: str) -> str:
             "what problem does this repository solve",
             "what problem does this repo solve",
             "what problem does this project solve",
+            "what does this repo do",
         )
     ):
-        return "overview"
+        return "repo_overview"
+    if "architecture" in normalized and ("flow" in normalized or "frontend to database" in normalized or "project from" in normalized):
+        return "architecture_flow"
     if any(phrase in normalized for phrase in ("major runtime components", "runtime components", "runtime architecture")):
         return "runtime_architecture"
     if "frontend" in normalized and "backend" in normalized and any(
         term in normalized for term in ("work together", "flow", "calls", "communicate", "connect")
     ):
         return "frontend_backend_flow"
+        
+    # Framework-aware abstract categories
+    if any(phrase in normalized for phrase in ("app initialized", "express app", "backend entrypoint")):
+        return "backend_entrypoint_location"
+    if "middleware" in normalized and "global" in normalized:
+        return "global_middleware_location"
+    if "route" in normalized and "register" in normalized:
+        return "route_registration_location"
+    if "jwt" in normalized:
+        return "jwt_implementation"
+    if any(phrase in normalized for phrase in ("role based access", "rbac", "admin only")):
+        return "rbac_implementation"
+    if "ownership" in normalized:
+        return "ownership_implementation"
+    if any(phrase in normalized for phrase in ("soft delete", "hard delete", "filters handled", "task status", "visibility", "admins see", "pagination", "deleted task return")):
+        return "service_behavior"
+    if "schema" in normalized and "migration" not in normalized:
+        return "schema_location"
+    if "migration" in normalized:
+        return "migration_schema"
+    if "login flow" in normalized or "login" in normalized:
+        return "auth_implementation"
+    if "dashboard" in normalized and ("page" in normalized or "frontend" in normalized or "logic" in normalized or "decide" in normalized):
+        return "frontend_page_location"
+    if "api error" in normalized or "error handling" in normalized or "consistent response shape" in normalized:
+        return "api_error_handling"
+    if "swagger" in normalized:
+        return "swagger_configuration"
+    if "test" in normalized and ("verify" in normalized or "which tests" in normalized):
+        return "test_lookup"
+
     if any(phrase in normalized for phrase in ("repository analysis", "responsible for repository analysis", "parts of this repo are responsible")):
         return "repository_analysis"
     if any(term in normalized for term in ("failed incremental", "fails midway", "failure recovery", "recover from", "indexing fails")):
