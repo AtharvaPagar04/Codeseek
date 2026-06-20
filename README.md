@@ -502,6 +502,35 @@ GITHUB_TEST_PAT=ghp_... \
 npm test
 ```
 
+### Local development with Docker Compose
+
+Use the root-level dev stack when you want the backend API, frontend dev server, Qdrant, and Postgres together:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+To start infrastructure only and keep using the existing host-native backend/frontend workflows:
+
+```bash
+docker compose -f docker-compose.dev.yml up qdrant postgres
+```
+
+To stop the stack:
+
+```bash
+docker compose -f docker-compose.dev.yml down
+docker compose -f docker-compose.dev.yml down -v
+```
+
+Notes:
+
+- `docker-compose.dev.yml` is the local development stack.
+- `docker-compose.deploy.yml` remains deployment-oriented and separate.
+- The existing backend-only scripts and `backend/docker-compose.yml` are still valid for narrower backend/infrastructure workflows.
+- The default dev stack does not include Ollama; local LLM/Ollama remains optional and manual unless you set the related backend env vars yourself.
+- For local overrides, provide environment variables from your shell or a root `.env` file that Docker Compose can read for interpolation. For host-native backend runs, continue using `backend/.env`.
+
 ---
 
 ## 12. Project Structure
@@ -532,13 +561,13 @@ CodeSeek/
 │   │   ├── crypto_store.py     # AES-GCM encryption/decryption
 │   │   └── session_indexer.py  # Async clone + ingestion job runner
 │   ├── scripts/                # Ops scripts (backup, cleanup, validation)
-│   ├── tests/                  # 22 test files (pytest)
+│   ├── tests/                  # Package-aligned pytest suite
 │   ├── monitoring/             # Prometheus + Alertmanager configs
 │   ├── docs/                   # Internal documentation
 │   │   ├── deployment_runbook.md
 │   │   ├── ingestion_docs/
 │   │   └── retrieval_docs/
-│   ├── docker-compose.yml      # Local dev compose
+│   ├── docker-compose.yml      # Backend + infra local compose
 │   └── docker-compose.monitoring.yml
 ├── frontend/
 │   ├── src/
@@ -554,6 +583,7 @@ CodeSeek/
 ├── deploy/                     # Production deployment assets
 │   ├── Caddyfile               # TLS reverse proxy config
 │   └── .env.example
+├── docker-compose.dev.yml      # Full local dev compose (frontend + backend + infra)
 ├── docker-compose.deploy.yml   # Production compose (all services)
 ├── DEPLOYMENT_TODO.md          # Deployment readiness checklist
 └── README.md                   # ← You are here
