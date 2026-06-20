@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from retrieval import auth_store, chat_store, db, github_store, memory_store, provider_store, session_indexer
+from retrieval import chat_store, db, memory_store, session_indexer
+from retrieval.stores import auth_store, github_store, provider_store
 
 
 def _reset_db_state() -> None:

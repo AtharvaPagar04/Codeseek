@@ -215,14 +215,14 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Session creation",
-                "paths": {"backend/retrieval/auth_store.py"},
+                "paths": {"backend/retrieval/stores/auth_store.py"},
                 "symbols": {"create_auth_session"},
                 "step": "`create_auth_session()` stores a hashed auth session token with expiry metadata.",
                 "required": True,
             },
             {
                 "name": "Session lookup/validation",
-                "paths": {"backend/retrieval/auth_store.py"},
+                "paths": {"backend/retrieval/stores/auth_store.py"},
                 "symbols": {"get_user_for_session_token"},
                 "step": "Later requests resolve the cookie by hashing the submitted token and loading the associated user.",
                 "required": True,
@@ -2857,10 +2857,10 @@ def _auth_filesystem_sources(route: dict) -> list[dict]:
         ("backend/retrieval/api_service.py", "_require_auth"),
         ("backend/retrieval/api_service.py", "_current_auth_user"),
         ("backend/retrieval/api_service.py", "_require_auth_user"),
-        ("backend/retrieval/auth_store.py", "create_auth_session"),
-        ("backend/retrieval/auth_store.py", "get_user_for_session_token"),
-        ("backend/retrieval/auth_store.py", "upsert_github_user"),
-        ("backend/retrieval/auth_store.py", "delete_auth_session"),
+        ("backend/retrieval/stores/auth_store.py", "create_auth_session"),
+        ("backend/retrieval/stores/auth_store.py", "get_user_for_session_token"),
+        ("backend/retrieval/stores/auth_store.py", "upsert_github_user"),
+        ("backend/retrieval/stores/auth_store.py", "delete_auth_session"),
     ]
     results: list[dict] = []
     seen: set[tuple[str, str]] = set()

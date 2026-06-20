@@ -92,7 +92,7 @@ class TestAnswerModes(unittest.TestCase):
                 "summary": "Looks up session token.",
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "delete_auth_session",
                 "summary": "Deletes session.",
             },

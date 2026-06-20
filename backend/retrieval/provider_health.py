@@ -13,7 +13,7 @@ from retrieval.config import (
     LOCAL_LLM_BASE_URL,
     LOCAL_LLM_TIMEOUT_SECONDS,
 )
-from retrieval.provider_store import get_active_provider_credential
+from retrieval.stores.provider_store import get_active_provider_credential
 
 
 class ProviderNotConfiguredError(RuntimeError):

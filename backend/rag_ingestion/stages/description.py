@@ -560,7 +560,7 @@ def _resolve_active_llm_config() -> dict | None:
     """Fallback provider resolution for CLI / env-only runs (no per-session config)."""
     try:
         from retrieval.db import db_cursor
-        from retrieval.provider_store import _row_to_credential
+        from retrieval.stores.provider_store import _row_to_credential
 
         with db_cursor() as (_conn, cursor):
             row = cursor.execute(

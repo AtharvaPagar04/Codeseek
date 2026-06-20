@@ -25,7 +25,8 @@ fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
 from fastapi.testclient import TestClient
-from retrieval import api_service, auth_store
+from retrieval import api_service
+from retrieval.stores import auth_store
 from retrieval.db import init_db
 
 

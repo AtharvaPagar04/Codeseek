@@ -32,7 +32,7 @@
     "query": "provide me the auth function code",
     "category": "Code Snippet",
     "intent": "code_snippet",
-    "files": ["backend/retrieval/api_service.py", "backend/retrieval/auth_store.py"]
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/stores/auth_store.py"]
   },
   {
     "id": 6,

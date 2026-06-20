@@ -121,7 +121,7 @@ class LlmProviderConfigTests(unittest.TestCase):
                     "intent": "EXPLANATION",
                     "entities": {
                         "symbols": ["create_provider_credential_v1", "create_provider_credential"],
-                        "files": ["retrieval/api_service.py", "retrieval/provider_store.py"],
+                        "files": ["retrieval/api_service.py", "retrieval/stores/provider_store.py"],
                     },
                 },
                 evidence_confidence={"level": "partial"},

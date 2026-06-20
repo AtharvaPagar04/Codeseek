@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from retrieval import auth_store
+from retrieval.stores import auth_store
 
 
 class AuthStoreTests(unittest.TestCase):

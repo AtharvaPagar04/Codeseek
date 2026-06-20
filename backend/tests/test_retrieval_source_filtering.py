@@ -619,14 +619,14 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "create_provider_credential",
                 "start_line": 62,
                 "end_line": 116,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "get_active_provider_credential",
                 "start_line": 45,
                 "end_line": 59,

@@ -180,7 +180,7 @@ class SearcherLexicalTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         payload, _score, source = results[0]
         self.assertEqual(source, "filter")
-        self.assertEqual(payload["relative_path"], "retrieval/provider_store.py")
+        self.assertEqual(payload["relative_path"], "retrieval/stores/provider_store.py")
         self.assertEqual(payload["symbol_name"], "create_provider_credential")
         self.assertNotIn("other_symbol", payload["content_excerpt"])
 

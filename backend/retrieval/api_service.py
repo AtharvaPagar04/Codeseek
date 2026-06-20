@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from retrieval.auth_store import (
+from retrieval.stores.auth_store import (
     create_auth_session,
     delete_auth_session,
     get_user_for_session_token,
@@ -34,9 +34,9 @@ from retrieval.chat_store import (
     list_thread_messages,
 )
 from retrieval.config import get_collection_name, get_repo_root
-from retrieval.crypto_store import has_explicit_app_encryption_key
+from retrieval.stores.crypto_store import has_explicit_app_encryption_key
 from retrieval.db import init_db
-from retrieval.github_store import get_github_credential, upsert_github_credential
+from retrieval.stores.github_store import get_github_credential, upsert_github_credential
 from retrieval.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
@@ -50,7 +50,7 @@ from retrieval.observability import (
     render_prometheus_metrics,
     sanitize_for_log,
 )
-from retrieval.provider_store import (
+from retrieval.stores.provider_store import (
     SUPPORTED_PROVIDER_TYPES,
     create_provider_credential,
     delete_provider_credential,
@@ -267,7 +267,7 @@ app.add_middleware(
 )
 
 
-from retrieval.crypto_store import master_key_override_var
+from retrieval.stores.crypto_store import master_key_override_var
 
 @app.middleware("http")
 async def app_encryption_key_middleware(request: Request, call_next):

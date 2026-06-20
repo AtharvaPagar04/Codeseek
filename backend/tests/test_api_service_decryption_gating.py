@@ -19,7 +19,8 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval import api_service, auth_store, provider_store, github_store
+from retrieval import api_service
+from retrieval.stores import auth_store, github_store, provider_store
 
 
 class ApiServiceDecryptionGatingTests(unittest.TestCase):

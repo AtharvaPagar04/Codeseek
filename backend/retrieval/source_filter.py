@@ -560,7 +560,7 @@ def source_excluded_for_query(
                 return True
     elif topic == "safe_eval_runner":
         if path_lower in {
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
             "backend/rag_ingestion/stages/storage.py",
             "backend/retrieval/searcher.py",
         }:
@@ -580,7 +580,7 @@ def source_excluded_for_query(
             return True
     elif topic == "qdrant_upsert":
         if path_lower in {
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
             "backend/evals/run_safe_evals.py",
             "backend/retrieval/searcher.py",
         }:

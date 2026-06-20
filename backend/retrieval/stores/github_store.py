@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from retrieval.crypto_store import decrypt_secret, encrypt_secret
+from retrieval.stores.crypto_store import decrypt_secret, encrypt_secret
 from retrieval.db import db_cursor
 
 

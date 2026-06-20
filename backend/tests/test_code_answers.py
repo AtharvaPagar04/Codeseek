@@ -858,7 +858,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "start_line": 100,
                 "end_line": 128,
@@ -866,7 +866,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "start_line": 130,
                 "end_line": 154,
@@ -874,7 +874,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "delete_auth_session",
                 "start_line": 157,
                 "end_line": 164,
@@ -913,7 +913,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "start_line": 100,
                 "end_line": 128,
@@ -921,7 +921,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "start_line": 130,
                 "end_line": 154,
@@ -941,8 +941,8 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(
             [
                 "retrieval/api_service.py",
-                "retrieval/auth_store.py",
-                "retrieval/auth_store.py",
+                "retrieval/stores/auth_store.py",
+                "retrieval/stores/auth_store.py",
             ],
             [source["relative_path"] for source in selected],
         )
@@ -1111,7 +1111,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "create_provider_credential",
                 "start_line": 62,
                 "end_line": 116,
@@ -1119,7 +1119,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "set_active_provider_credential",
                 "start_line": 119,
                 "end_line": 140,
@@ -1127,7 +1127,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "delete_provider_credential",
                 "start_line": 143,
                 "end_line": 152,
@@ -1135,7 +1135,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "get_active_provider_credential",
                 "start_line": 45,
                 "end_line": 59,
@@ -1212,7 +1212,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/provider_store.py",
+                    "relative_path": "retrieval/stores/provider_store.py",
                     "symbol_name": "create_provider_credential",
                     "start_line": 1,
                     "end_line": 5,
@@ -1220,7 +1220,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/provider_store.py",
+                    "relative_path": "retrieval/stores/provider_store.py",
                     "symbol_name": "set_active_provider_credential",
                     "start_line": 7,
                     "end_line": 11,
@@ -1287,7 +1287,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "create_auth_session",
                     "start_line": 1,
                     "end_line": 5,
@@ -1295,7 +1295,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "get_user_for_session_token",
                     "start_line": 7,
                     "end_line": 12,
@@ -1303,7 +1303,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "delete_auth_session",
                     "start_line": 14,
                     "end_line": 15,

@@ -24,7 +24,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 22,
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "chunk_type": "function",
                 "content": "def create_auth_session():\n    return 'session'",
@@ -48,7 +48,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 38,
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "chunk_type": "function",
                 "content": "def get_user_for_session_token():\n    return 'user'",
@@ -187,7 +187,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("def _auth_key", ans)
         self.assertIn("def create_auth_session", ans)
         self.assertIn("backend/retrieval/api_service.py", ans)
-        self.assertIn("backend/retrieval/auth_store.py", ans)
+        self.assertIn("backend/retrieval/stores/auth_store.py", ans)
         self.assertNotIn("Summary of Authentication Flow", ans)
         self.assertNotIn("Sources:", ans)
 
@@ -344,7 +344,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("provide me the auth function code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
         self.assertNotIn("backend/retrieval/searcher.py", paths)
         self.assertFalse(any(src.get("symbol_name") == "<file>" for src in final_srcs))
@@ -384,7 +384,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/evals/run_safe_evals.py", ans)
         self.assertIn("def main", ans)
         self.assertIn("# ... omitted for brevity ...", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
         self.assertNotIn("store_chunks", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
@@ -449,7 +449,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("_current_auth_user", ans)
         self.assertNotIn("create_auth_session", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
 
     @patch("retrieval.code_answers._read_source_excerpt")
     def test_safe_eval_runner_after_qdrant_code_does_not_return_low_context(self, mock_read) -> None:
@@ -772,7 +772,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("# ... omitted for brevity ...", ans)
         self.assertNotIn("I could not find strong evidence", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
         self.assertNotIn("backend/retrieval/searcher.py", ans)
 
     @patch("retrieval.code_answers._read_source_excerpt")
@@ -817,7 +817,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             run_query("show me the Qdrant upsert code", memory)
             ans, final_srcs, _ = run_query("provide me the auth function code", memory)
         self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/api_service.py" for src in final_srcs))
-        self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/auth_store.py" for src in final_srcs))
+        self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/stores/auth_store.py" for src in final_srcs))
         for symbol in [
             "_require_auth",
             "_auth_key",
@@ -847,7 +847,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("provide me the session validation function code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
         self.assertIn("get_user_for_session_token", ans)
         self.assertIn("_current_auth_user", ans)
@@ -1238,7 +1238,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         with patch("retrieval.searcher._qdrant_call") as mock_call:
             from qdrant_client.models import Record
             mock_call.side_effect = lambda *args, **kwargs: ([
-                Record(id="1", payload={"relative_path": "backend/retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"}),
+                Record(id="1", payload={"relative_path": "backend/retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"}),
                 Record(id="2", payload={"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_current_auth_user"})
             ], None)
             res = _inject_auth_routing_candidates("provide me the session validation function code", "CODE_REQUEST")
@@ -1352,7 +1352,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         # Query 2 (provide me the session validation function code)
         sources_turn2 = [
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "chunk_type": "function",
                 "content": "def get_user_for_session_token():\n    pass",

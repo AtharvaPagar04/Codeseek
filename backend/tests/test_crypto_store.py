@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from retrieval.crypto_store import decrypt_secret, encrypt_secret
+from retrieval.stores.crypto_store import decrypt_secret, encrypt_secret
 
 
 class CryptoStoreTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class CryptoStoreTests(unittest.TestCase):
                 decrypt_secret(tampered)
 
     def test_master_key_override_var(self) -> None:
-        from retrieval.crypto_store import master_key_override_var
+        from retrieval.stores.crypto_store import master_key_override_var
         
         # When override is set, encrypt under the override
         token = master_key_override_var.set("override-key")

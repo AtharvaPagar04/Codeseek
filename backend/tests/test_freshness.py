@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 from fastapi import HTTPException
 
-from retrieval import api_service, auth_store, session_indexer
+from retrieval import api_service, session_indexer
+from retrieval.stores import auth_store
 
 
 class SessionFreshnessTests(unittest.TestCase):
@@ -625,6 +626,5 @@ class SessionFreshnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 

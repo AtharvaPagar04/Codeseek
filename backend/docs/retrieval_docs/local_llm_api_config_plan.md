@@ -82,7 +82,7 @@ The local model store is mounted under `/var/lib/ollama`.
 
 ### Backend Provider Storage
 
-- [x] Extend provider validation to accept `local` as a supported provider value in [provider_store.py](../../retrieval/provider_store.py).
+- [x] Extend provider validation to accept `local` as a supported provider value in [provider_store.py](../../retrieval/stores/provider_store.py).
   - Preserve the current DB-backed provider credential pattern.
   - Keep the current record shape compatible with existing providers.
 - [x] Define how local provider credentials are stored.

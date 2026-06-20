@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from retrieval import session_indexer, auth_store
+from retrieval import session_indexer
+from retrieval.stores import auth_store
 from retrieval.db import (
     init_db,
     create_indexing_job,
@@ -386,5 +387,4 @@ class IndexingJobsTests(unittest.TestCase):
             resp = client.get("/api/v1/sessions/doesnotexist/indexing-job/latest")
 
         self.assertEqual(resp.status_code, 404)
-
 

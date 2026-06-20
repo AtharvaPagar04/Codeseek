@@ -46,7 +46,7 @@ class DirectTopicRoutingTests(unittest.TestCase):
         
         # Verify auth triggers return expected files
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertIn("frontend/src/pages/AuthCallback.jsx", paths)
         
         # Ensure deboosted tests/docs are not primary
@@ -64,7 +64,7 @@ class DirectTopicRoutingTests(unittest.TestCase):
         paths = [item["relative_path"] for item in results]
         
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertIn("backend/retrieval/db.py", paths)
         
         for p in paths[:2]:

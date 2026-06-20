@@ -82,7 +82,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "target_paths": [
             "backend/retrieval/api_service.py",
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
         ],
         "target_symbols": [
             "_auth_key",
@@ -99,10 +99,10 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "_require_auth": "backend/retrieval/api_service.py",
             "_current_auth_user": "backend/retrieval/api_service.py",
             "_require_auth_user": "backend/retrieval/api_service.py",
-            "create_auth_session": "backend/retrieval/auth_store.py",
-            "get_user_for_session_token": "backend/retrieval/auth_store.py",
-            "upsert_github_user": "backend/retrieval/auth_store.py",
-            "delete_auth_session": "backend/retrieval/auth_store.py",
+            "create_auth_session": "backend/retrieval/stores/auth_store.py",
+            "get_user_for_session_token": "backend/retrieval/stores/auth_store.py",
+            "upsert_github_user": "backend/retrieval/stores/auth_store.py",
+            "delete_auth_session": "backend/retrieval/stores/auth_store.py",
         },
         "exclude_paths": [
             "backend/rag_ingestion/stages/storage.py",
@@ -132,7 +132,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         "target_symbols": [],
         "symbol_path_hints": {},
         "exclude_paths": [
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
             "backend/retrieval/api_service.py",
             "backend/rag_ingestion/stages/storage.py",
             "backend/retrieval/searcher.py",
@@ -162,7 +162,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         "exclude_paths": [
             "backend/retrieval/searcher.py",
             "backend/retrieval/api_service.py",
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
         ],
         "multi_intro": "I found multiple Qdrant upsert snippets:",
         "single_intro": "Here is the matching function/code:",
@@ -2503,7 +2503,7 @@ def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list
         "query endpoint": [("_query_impl", "backend/retrieval/api_service.py")],
         "qdrant upsert": [("store_chunks", "backend/rag_ingestion/stages/storage.py")],
         "session validation": [
-            ("get_user_for_session_token", "backend/retrieval/auth_store.py"),
+            ("get_user_for_session_token", "backend/retrieval/stores/auth_store.py"),
             ("_current_auth_user", "backend/retrieval/api_service.py"),
             ("_require_auth_user", "backend/retrieval/api_service.py"),
         ],
@@ -3130,7 +3130,7 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
             return 1.0
     # 4. auth/session validation
     if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:
-        if path in {"backend/retrieval/api_service.py", "backend/retrieval/auth_store.py", "backend/retrieval/db.py"}:
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/stores/auth_store.py", "backend/retrieval/db.py"}:
             return 0.9
             
     return 0.0
