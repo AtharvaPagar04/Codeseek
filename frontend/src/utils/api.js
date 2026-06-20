@@ -825,7 +825,7 @@ export const testEmbeddingConfig = async (payload) => {
 
 export const getEmbeddingOptions = async () => {
   const res = await withNetworkError(
-    () => fetch(`${API_BASE}/api/v1/embedding/options`, { credentials: 'include', headers: getAuthHeaders() }),
+    () => fetch(`${API_BASE}/api/v1/embedding/options`, { credentials: 'include', headers: authHeaders() }),
     'Get embedding options'
   );
   if (!res.ok) await throwApiError('Get embedding options', res);

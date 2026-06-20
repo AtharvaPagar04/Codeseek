@@ -101,9 +101,22 @@ export default function ApiTokensModal({ onClose }) {
             setEmbConfig(emb);
             setEmbProvider(emb.provider || 'local');
             setEmbBaseUrl(emb.base_url || '');
-            setEmbModel(emb.provider === 'openai_compatible' ? (emb.model || 'text-embedding-3-small') : 'text-embedding-3-small');
+            let loadedModel = emb.model;
+            let invalidSavedModel = false;
+            if (emb.provider === 'openai_compatible' && options?.openai_compatible_models) {
+              if (loadedModel && !options.openai_compatible_models.some(m => m.id === loadedModel)) {
+                invalidSavedModel = true;
+                loadedModel = 'text-embedding-3-small';
+              }
+            } else if (emb.provider !== 'openai_compatible') {
+              loadedModel = 'text-embedding-3-small';
+            }
+            setEmbModel(loadedModel || 'text-embedding-3-small');
             setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
-            // Do not prefill apiKey
+            
+            if (invalidSavedModel) {
+              setError('The saved embedding model was invalid for OpenAI-compatible embeddings. Please save a supported model.');
+            }
           }
         }
       } catch (err) {
@@ -206,10 +219,46 @@ export default function ApiTokensModal({ onClose }) {
     }
   };
 
+  const validateCloudEmbeddingConfig = () => {
+    if (embProvider !== 'openai_compatible') return true;
+    
+    if (!embOptions?.openai_compatible_models) {
+      setError('Embedding options not loaded. Please try again.');
+      return false;
+    }
+    
+    const validModel = embOptions.openai_compatible_models.find(m => m.id === embModel);
+    if (!validModel) {
+      setError('Choose a supported embedding model before saving.');
+      return false;
+    }
+    
+    if (embDims) {
+      const dimInt = parseInt(embDims, 10);
+      if (dimInt > 0 && !validModel.allowed_dimensions.includes(dimInt)) {
+        setError(`Invalid dimension ${dimInt} for model ${embModel}.`);
+        return false;
+      }
+    }
+    
+    if (!embBaseUrl.trim()) {
+      setError('Base URL is required for cloud embeddings.');
+      return false;
+    }
+    
+    if (!embConfig?.api_key_configured && !embApiKey.trim()) {
+      setError('API key is required for new cloud embedding configurations.');
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleSaveEmbedding = async (e) => {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
+    if (!validateCloudEmbeddingConfig()) return;
     try {
       const payload = {
         provider: embProvider,
@@ -229,6 +278,7 @@ export default function ApiTokensModal({ onClose }) {
   const handleTestEmbedding = async () => {
     setError(null);
     setSuccessMsg(null);
+    if (!validateCloudEmbeddingConfig()) return;
     setEmbTestSuccess(false);
     setEmbTesting(true);
     try {
