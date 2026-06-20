@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from retrieval import searcher
+from retrieval.search import searcher
 
 
 class _Hit:
@@ -45,8 +45,8 @@ class SearcherLexicalTests(unittest.TestCase):
         ]
         client = _FakeClient(payloads)
 
-        with patch("retrieval.searcher._get_client", return_value=client), patch(
-            "retrieval.searcher.get_collection_name", return_value="test_collection"
+        with patch("retrieval.search.searcher._get_client", return_value=client), patch(
+            "retrieval.search.searcher.get_collection_name", return_value="test_collection"
         ):
             results = searcher._lexical_search("ppo lstm trading")
 
@@ -69,8 +69,8 @@ class SearcherLexicalTests(unittest.TestCase):
         ]
         client = _FakeClient(payloads)
 
-        with patch("retrieval.searcher._get_client", return_value=client), patch(
-            "retrieval.searcher.get_collection_name", return_value="test_collection"
+        with patch("retrieval.search.searcher._get_client", return_value=client), patch(
+            "retrieval.search.searcher.get_collection_name", return_value="test_collection"
         ):
             results = searcher._lexical_search("CODESEEK_DATABASE_URL")
 
@@ -87,7 +87,7 @@ class SearcherLexicalTests(unittest.TestCase):
             ]
         )
 
-        with patch("retrieval.searcher._get_client", return_value=client):
+        with patch("retrieval.search.searcher._get_client", return_value=client):
             searcher._get_lexical_index("collection_a")
             searcher._get_lexical_index("collection_a")
             self.assertEqual(client.scroll_calls, 1)
@@ -105,10 +105,10 @@ class SearcherLexicalTests(unittest.TestCase):
             "summary": "CODESEEK_DATABASE_URL configures the database connection.",
         }
 
-        with patch("retrieval.searcher.ENABLE_LEXICAL_RETRIEVAL", True), patch(
-            "retrieval.searcher._dense_search", return_value=[]
-        ), patch("retrieval.searcher._metadata_search", return_value=[]), patch(
-            "retrieval.searcher._lexical_search", return_value=[(lexical_payload, 3.0, "lexical")]
+        with patch("retrieval.search.searcher.ENABLE_LEXICAL_RETRIEVAL", True), patch(
+            "retrieval.search.searcher._dense_search", return_value=[]
+        ), patch("retrieval.search.searcher._metadata_search", return_value=[]), patch(
+            "retrieval.search.searcher._lexical_search", return_value=[(lexical_payload, 3.0, "lexical")]
         ):
             results = searcher.search(query_info)
 
@@ -116,8 +116,8 @@ class SearcherLexicalTests(unittest.TestCase):
         self.assertGreater(results[0]["fusion_score"], 0)
 
     def test_dense_search_can_be_disabled_for_offline_evals(self) -> None:
-        with patch("retrieval.searcher.ENABLE_DENSE_RETRIEVAL", False), patch(
-            "retrieval.searcher._get_model", side_effect=AssertionError("model should not load")
+        with patch("retrieval.search.searcher.ENABLE_DENSE_RETRIEVAL", False), patch(
+            "retrieval.search.searcher._get_model", side_effect=AssertionError("model should not load")
         ):
             self.assertEqual(searcher._dense_search("anything"), [])
 
@@ -127,9 +127,9 @@ class SearcherLexicalTests(unittest.TestCase):
             dockerfile = repo_root / "Dockerfile"
             dockerfile.write_text("FROM python:3.11-slim\nEXPOSE 8000\n", encoding="utf-8")
 
-            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
-                "retrieval.searcher._get_client", return_value=_FakeClient([])
-            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+            with patch("retrieval.search.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.search.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.search.searcher._qdrant_call", return_value=([], None)):
                 results = searcher._metadata_search("", {"files": ["Dockerfile"], "symbols": []})
 
         self.assertEqual(len(results), 1)
@@ -149,9 +149,9 @@ class SearcherLexicalTests(unittest.TestCase):
             (backend / "Dockerfile").write_text("FROM python:3.11-slim\n", encoding="utf-8")
             (frontend / "Dockerfile").write_text("FROM node:22-alpine\n", encoding="utf-8")
 
-            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
-                "retrieval.searcher._get_client", return_value=_FakeClient([])
-            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+            with patch("retrieval.search.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.search.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.search.searcher._qdrant_call", return_value=([], None)):
                 results = searcher._metadata_search("", {"files": ["Dockerfile"], "symbols": []})
 
         payload, _score, _source = results[0]
@@ -169,9 +169,9 @@ class SearcherLexicalTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("retrieval.searcher.get_repo_root", return_value=str(repo_root)), patch(
-                "retrieval.searcher._get_client", return_value=_FakeClient([])
-            ), patch("retrieval.searcher._qdrant_call", return_value=([], None)):
+            with patch("retrieval.search.searcher.get_repo_root", return_value=str(repo_root)), patch(
+                "retrieval.search.searcher._get_client", return_value=_FakeClient([])
+            ), patch("retrieval.search.searcher._qdrant_call", return_value=([], None)):
                 results = searcher._metadata_search(
                     "",
                     {"files": [], "symbols": ["create_provider_credential"]},
@@ -220,8 +220,8 @@ class SearcherLexicalTests(unittest.TestCase):
         ]
         client = _FakeClient(payloads)
 
-        with patch("retrieval.searcher._get_client", return_value=client), patch(
-            "retrieval.searcher.get_collection_name", return_value="test_collection"
+        with patch("retrieval.search.searcher._get_client", return_value=client), patch(
+            "retrieval.search.searcher.get_collection_name", return_value="test_collection"
         ):
             results = searcher._exact_entity_search({"env_keys": ["CODESEEK_DATABASE_URL"]})
 
@@ -244,8 +244,8 @@ class SearcherLexicalTests(unittest.TestCase):
         ]
         client = _FakeClient(payloads)
 
-        with patch("retrieval.searcher._get_client", return_value=client), patch(
-            "retrieval.searcher.get_collection_name", return_value="test_collection"
+        with patch("retrieval.search.searcher._get_client", return_value=client), patch(
+            "retrieval.search.searcher.get_collection_name", return_value="test_collection"
         ):
             results = searcher._exact_entity_search({"dependencies": ["qdrant-client"]})
 

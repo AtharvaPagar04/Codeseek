@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from retrieval.source_filter import score_evidence_confidence
+from retrieval.search.source_filter import score_evidence_confidence
 
 
 # ---------------------------------------------------------------------------

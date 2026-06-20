@@ -128,7 +128,7 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
 
 
     def test_repo_freshness_primary_source_prefers_session_indexer(self) -> None:
-        from retrieval.source_filter import select_sources_for_display
+        from retrieval.search.source_filter import select_sources_for_display
         sources = [
             {"relative_path": "backend/retrieval/api_service.py", "expansion_type": "primary"},
             {"relative_path": "backend/retrieval/session_indexer.py", "expansion_type": "primary"},
@@ -140,7 +140,7 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         self.assertEqual(result[1]["relative_path"], "backend/retrieval/api_service.py")
 
     def test_endpoint_wording_prefers_api_service(self) -> None:
-        from retrieval.source_filter import select_sources_for_display
+        from retrieval.search.source_filter import select_sources_for_display
         sources = [
             {"relative_path": "backend/retrieval/session_indexer.py", "expansion_type": "primary"},
             {"relative_path": "backend/retrieval/api_service.py", "expansion_type": "primary"},

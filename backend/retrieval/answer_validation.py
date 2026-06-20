@@ -702,8 +702,8 @@ def _preferred_source_location_sources(sources: list[dict], raw_query: str) -> l
     impl_sources = [src for src in sources if is_impl(src)]
     if impl_sources and not allow_docs_tests:
         try:
-            from retrieval.searcher import classify_source_role
-            from retrieval.searcher import match_code_topic_route
+            from retrieval.search.searcher import classify_source_role
+            from retrieval.search.searcher import match_code_topic_route
         except Exception:
             classify_source_role = None
             match_code_topic_route = None

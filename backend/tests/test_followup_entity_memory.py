@@ -59,11 +59,11 @@ class TestExtractCitedEntities(unittest.TestCase):
     def test_extracts_files_and_symbols(self) -> None:
         sources = [
             {"relative_path": "backend/retrieval/main.py", "symbol_name": "run_query"},
-            {"relative_path": "backend/retrieval/searcher.py", "symbol_name": "search"},
+            {"relative_path": "backend/retrieval/search/searcher.py", "symbol_name": "search"},
         ]
         result = extract_cited_entities(sources)
         self.assertIn("backend/retrieval/main.py", result["files"])
-        self.assertIn("backend/retrieval/searcher.py", result["files"])
+        self.assertIn("backend/retrieval/search/searcher.py", result["files"])
         self.assertIn("run_query", result["symbols"])
         self.assertIn("search", result["symbols"])
 
@@ -419,7 +419,7 @@ class TestSessionEntityPersistence(unittest.TestCase):
                     "explain search()",
                     "search() retrieves chunks from Qdrant.",
                     entities={
-                        "files": ["retrieval/searcher.py"],
+                        "files": ["retrieval/search/searcher.py"],
                         "symbols": ["search"],
                         "routes": [], "env_keys": [], "services": [],
                     },

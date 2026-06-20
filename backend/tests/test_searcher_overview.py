@@ -5,7 +5,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from retrieval.searcher import _inject_overview_candidates, _overview_priority, search
+from retrieval.search.searcher import _inject_overview_candidates, _overview_priority, search
 
 
 class SearcherOverviewTests(unittest.TestCase):
@@ -13,10 +13,10 @@ class SearcherOverviewTests(unittest.TestCase):
         self.original_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
         if "RETRIEVAL_REPO_ROOT" in os.environ:
             del os.environ["RETRIEVAL_REPO_ROOT"]
-        self._lexical_patcher = patch("retrieval.searcher._lexical_search", return_value=[])
+        self._lexical_patcher = patch("retrieval.search.searcher._lexical_search", return_value=[])
         self._lexical_patcher.start()
         self._repo_root_patcher = patch(
-            "retrieval.searcher.get_repo_root",
+            "retrieval.search.searcher.get_repo_root",
             side_effect=lambda: os.getenv("RETRIEVAL_REPO_ROOT", "/dummy_nonexistent_path")
         )
         self._repo_root_patcher.start()
@@ -60,7 +60,7 @@ class SearcherOverviewTests(unittest.TestCase):
             {"chunk_id": "2", "relative_path": "README.md", "chunk_type": "file_summary"},
         ]
 
-        with patch("retrieval.searcher._repository_overview_candidates", return_value=overview):
+        with patch("retrieval.search.searcher._repository_overview_candidates", return_value=overview):
             merged = _inject_overview_candidates(current)
 
         # unique overview chunk ("2") is PREPENDED before the existing candidate ("1")
@@ -79,9 +79,9 @@ class SearcherOverviewTests(unittest.TestCase):
             "chunk_type": "file_summary",
         }
 
-        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
-        ), patch("retrieval.searcher._repository_overview_candidates", return_value=[overview_payload]):
+        with patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[]
+        ), patch("retrieval.search.searcher._repository_overview_candidates", return_value=[overview_payload]):
             results = search(query_info)
 
         self.assertEqual(len(results), 1)
@@ -98,14 +98,14 @@ class SearcherOverviewTests(unittest.TestCase):
             "chunk_type": "function",
         }
 
-        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._repository_overview_candidates", return_value=[overview_payload]
+            "retrieval.search.searcher._repository_overview_candidates", return_value=[overview_payload]
         ), patch(
-            "retrieval.searcher._inject_architecture_file_candidates", side_effect=lambda candidates, entities: candidates
+            "retrieval.search.searcher._inject_architecture_file_candidates", side_effect=lambda candidates, entities: candidates
         ):
             results = search(query_info)
 
@@ -164,14 +164,14 @@ class SearcherOverviewTests(unittest.TestCase):
             }
         )
 
-        with patch("retrieval.searcher._dense_search", return_value=[(dense_readme, 0.9, "dense")]), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=[(dense_readme, 0.9, "dense")]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._repository_overview_candidates", return_value=[]
+            "retrieval.search.searcher._repository_overview_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._qdrant_call",
+            "retrieval.search.searcher._qdrant_call",
             side_effect=[
                 ([api_hit], None),
                 ([main_hit], None),
@@ -239,14 +239,14 @@ class SearcherOverviewTests(unittest.TestCase):
             }
         )
 
-        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._repository_overview_candidates", return_value=[]
+            "retrieval.search.searcher._repository_overview_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._qdrant_call",
+            "retrieval.search.searcher._qdrant_call",
             side_effect=[
                 ([api_query_request, api_query_impl], None),
                 ([main_hit], None),
@@ -302,14 +302,14 @@ class SearcherOverviewTests(unittest.TestCase):
             }
         )
 
-        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._repository_overview_candidates", return_value=[]
+            "retrieval.search.searcher._repository_overview_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._qdrant_call",
+            "retrieval.search.searcher._qdrant_call",
             side_effect=[
                 ([api_hit], None),
                 ([main_hit], None),
@@ -366,14 +366,14 @@ class SearcherOverviewTests(unittest.TestCase):
             }
         )
 
-        with patch("retrieval.searcher._dense_search", return_value=[]), patch(
-            "retrieval.searcher._metadata_search", return_value=[(api_query_request, 0.0, "filter")]
+        with patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+            "retrieval.search.searcher._metadata_search", return_value=[(api_query_request, 0.0, "filter")]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._repository_overview_candidates", return_value=[]
+            "retrieval.search.searcher._repository_overview_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._qdrant_call",
+            "retrieval.search.searcher._qdrant_call",
             side_effect=[
                 ([api_query_impl], None),
                 ([main_hit], None),
@@ -430,7 +430,7 @@ class SearcherOverviewTests(unittest.TestCase):
             }
         )
 
-        with patch("retrieval.searcher._get_client") as get_client:
+        with patch("retrieval.search.searcher._get_client") as get_client:
             get_client.return_value.scroll.side_effect = [
                 ([repo_summary_hit], None),
                 ([noisy_state, noisy_fixture, noisy_docs, backend_readme, backend_main], None),
@@ -479,11 +479,11 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
+                "retrieval.search.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
             ):
                 results = search(query_info)
 
@@ -524,13 +524,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
+                "retrieval.search.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
             ):
                 results = search(query_info)
 
@@ -571,13 +571,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
+                "retrieval.search.searcher._qdrant_call", side_effect=[([type("Hit", (), {"payload": backing})()], None)]
             ):
                 results = search(query_info)
 
@@ -622,13 +622,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call",
+                "retrieval.search.searcher._qdrant_call",
                 side_effect=[
                     ([], None),
                     ([type("Hit", (), {"payload": backing})()], None),
@@ -665,13 +665,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call", side_effect=[([], None)]
+                "retrieval.search.searcher._qdrant_call", side_effect=[([], None)]
             ):
                 results = search(query_info)
 
@@ -727,13 +727,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call",
+                "retrieval.search.searcher._qdrant_call",
                 side_effect=[
                     ([], None),
                     ([], None),
@@ -787,13 +787,13 @@ class SearcherOverviewTests(unittest.TestCase):
             ]
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(component, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(component, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call", side_effect=qdrant_hits
+                "retrieval.search.searcher._qdrant_call", side_effect=qdrant_hits
             ):
                 results = search(query_info)
 
@@ -833,13 +833,13 @@ class SearcherOverviewTests(unittest.TestCase):
             )
 
             with patch.dict("os.environ", {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False), patch(
-                "retrieval.searcher._dense_search", return_value=[(caller, 0.9, "dense")]
+                "retrieval.search.searcher._dense_search", return_value=[(caller, 0.9, "dense")]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._qdrant_call",
+                "retrieval.search.searcher._qdrant_call",
                 side_effect=[
                     ([type("Hit", (), {"payload": backing})()], None),
                     ([], None),

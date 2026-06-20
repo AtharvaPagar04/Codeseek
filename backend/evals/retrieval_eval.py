@@ -26,7 +26,7 @@ _load_env_file()
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from retrieval.query.query_processor import process_query
-from retrieval.searcher import (
+from retrieval.search.searcher import (
     search, 
     _dense_search, 
     _lexical_search, 

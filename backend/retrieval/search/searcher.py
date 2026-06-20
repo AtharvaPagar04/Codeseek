@@ -35,9 +35,9 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
-from retrieval.import_resolution import resolve_import_relative_path
+from retrieval.search.import_resolution import resolve_import_relative_path
 from retrieval.query.structural_hints import match_structural_hints
-from retrieval.source_truth import analyze_source_truth, is_source_truth_query
+from retrieval.search.source_truth import analyze_source_truth, is_source_truth_query
 from retrieval.query.query_intent import (
     classify_query_intent,
     classify_source_intent,
@@ -106,7 +106,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         },
         "exclude_paths": [
             "backend/rag_ingestion/stages/storage.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         ],
         "multi_intro": "I found multiple auth-related functions:",
         "single_intro": "Here is the matching function:",
@@ -135,7 +135,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "backend/retrieval/stores/auth_store.py",
             "backend/retrieval/api_service.py",
             "backend/rag_ingestion/stages/storage.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         ],
         "multi_intro": "I found multiple safe-eval runner snippets:",
         "single_intro": "Here is the matching function/code:",
@@ -160,7 +160,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "store_chunks": "backend/rag_ingestion/stages/storage.py",
         },
         "exclude_paths": [
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/retrieval/api_service.py",
             "backend/retrieval/stores/auth_store.py",
         ],
@@ -200,7 +200,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "get_latest_evaluation_report": "backend/retrieval/eval_reports.py",
         },
         "exclude_paths": [
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/rag_ingestion/stages/storage.py",
         ],
         "multi_intro": "I found multiple evaluation-report endpoint snippets:",
@@ -230,8 +230,8 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "searcher source filter",
         ],
         "target_paths": [
-            "backend/retrieval/searcher.py",
-            "backend/retrieval/source_filter.py",
+            "backend/retrieval/search/searcher.py",
+            "backend/retrieval/search/source_filter.py",
         ],
         "target_symbols": [
             "_merge_results",
@@ -244,14 +244,14 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "apply_query_negative_filters",
         ],
         "symbol_path_hints": {
-            "_merge_results": "backend/retrieval/searcher.py",
-            "_rerank_with_query_tokens": "backend/retrieval/searcher.py",
-            "feature_specific_routing_boost": "backend/retrieval/searcher.py",
-            "artifact_penalty_for_intent": "backend/retrieval/searcher.py",
-            "symbol_definition_boost": "backend/retrieval/searcher.py",
-            "content_exact_match_boost": "backend/retrieval/searcher.py",
-            "classify_source_role": "backend/retrieval/searcher.py",
-            "apply_query_negative_filters": "backend/retrieval/source_filter.py",
+            "_merge_results": "backend/retrieval/search/searcher.py",
+            "_rerank_with_query_tokens": "backend/retrieval/search/searcher.py",
+            "feature_specific_routing_boost": "backend/retrieval/search/searcher.py",
+            "artifact_penalty_for_intent": "backend/retrieval/search/searcher.py",
+            "symbol_definition_boost": "backend/retrieval/search/searcher.py",
+            "content_exact_match_boost": "backend/retrieval/search/searcher.py",
+            "classify_source_role": "backend/retrieval/search/searcher.py",
+            "apply_query_negative_filters": "backend/retrieval/search/source_filter.py",
         },
         "exclude_paths": [
             "backend/scripts/lexical_layer_benchmark.py",
@@ -332,7 +332,7 @@ def query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
             "retrieval candidates",
             "searcher internals",
             "searcher.py",
-            "retrieval/searcher.py",
+            "retrieval/search/searcher.py",
             "source filter",
             "source_filter",
             "where is reranking handled",
@@ -3139,7 +3139,7 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     """Apply unified label-aware and lexical scoring to rank candidates."""
     from pathlib import Path
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.search.source_filter import apply_query_negative_filters
     query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
 
@@ -3524,7 +3524,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                         code_topic_route_deboost -= 2.5
                 if topic_route_excludes_path(relative_path, matched_code_topic_route):
                     code_topic_route_deboost -= 5.0
-                if strict_code_topic_route and "backend/retrieval/searcher.py" in relative_path.lower():
+                if strict_code_topic_route and "backend/retrieval/search/searcher.py" in relative_path.lower():
                     code_topic_route_deboost -= 4.0
 
         # Injected candidates boost
@@ -4220,7 +4220,7 @@ def _overview_priority(payload: dict) -> int:
         score += 42
     if relative_path.endswith("rag_ingestion/main.py"):
         score += 40
-    if relative_path.endswith("retrieval/searcher.py"):
+    if relative_path.endswith("retrieval/search/searcher.py"):
         score += 28
     if relative_path.endswith("retrieval/code_answers.py"):
         score += 22

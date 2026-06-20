@@ -1,7 +1,7 @@
 import os
 import unittest
 from pathlib import Path
-from retrieval.searcher import search
+from retrieval.search.searcher import search
 from retrieval.config import get_repo_root
 
 class DirectTopicRoutingTests(unittest.TestCase):

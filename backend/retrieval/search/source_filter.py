@@ -107,7 +107,7 @@ _SEARCHER_INTERNALS_TERMS = (
     "retrieval candidates",
     "searcher internals",
     "searcher.py",
-    "retrieval/searcher.py",
+    "retrieval/search/searcher.py",
     "source filtering",
     "source filter",
     "source_filter",
@@ -401,7 +401,7 @@ def _query_prefers_implementation_sources(raw_query: str) -> bool:
 
 
 def _source_location_role_rank(src: dict) -> int:
-    from retrieval.searcher import classify_source_role
+    from retrieval.search.searcher import classify_source_role
 
     role = classify_source_role(str(src.get("relative_path", "")))
     return {
@@ -435,13 +435,13 @@ def classify_negative_filter_topic(raw_query: str) -> str | None:
 
 
 def _query_explicitly_allows_non_implementation_artifacts(raw_query: str) -> bool:
-    from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
+    from retrieval.search.searcher import query_explicitly_requests_non_implementation_artifacts
 
     return query_explicitly_requests_non_implementation_artifacts(raw_query)
 
 
 def _query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
-    from retrieval.searcher import query_explicitly_requests_searcher_internals
+    from retrieval.search.searcher import query_explicitly_requests_searcher_internals
 
     return query_explicitly_requests_searcher_internals(raw_query)
 
@@ -449,7 +449,7 @@ def _query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
 def _route_positive_match(source: dict, route: dict | None) -> bool:
     if not route:
         return False
-    from retrieval.searcher import path_matches_topic_route, symbol_matches_topic_route
+    from retrieval.search.searcher import path_matches_topic_route, symbol_matches_topic_route
 
     rel_path = source.get("relative_path", "")
     symbol_name = source.get("symbol_name", "")
@@ -544,8 +544,8 @@ def source_excluded_for_query(
         return False
 
     if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
-        "backend/retrieval/searcher.py",
-        "backend/retrieval/source_filter.py",
+        "backend/retrieval/search/searcher.py",
+        "backend/retrieval/search/source_filter.py",
         "backend/retrieval/query/query_intent.py",
         "backend/retrieval/code_answers.py",
     } and topic not in {"retrieval_internals", "safe_eval_runner", "evaluation_report_api"}:
@@ -562,12 +562,12 @@ def source_excluded_for_query(
         if path_lower in {
             "backend/retrieval/stores/auth_store.py",
             "backend/rag_ingestion/stages/storage.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         }:
             return True
     elif topic == "evaluation_report_api":
         if path_lower in {
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/rag_ingestion/stages/storage.py",
         }:
             return True
@@ -582,7 +582,7 @@ def source_excluded_for_query(
         if path_lower in {
             "backend/retrieval/stores/auth_store.py",
             "backend/evals/run_safe_evals.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         }:
             return True
         if path_lower in {
@@ -601,8 +601,8 @@ def source_excluded_for_query(
 
     if topic not in {"retrieval_internals"} and not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query):
         if path_lower in {
-            "backend/retrieval/searcher.py",
-            "backend/retrieval/source_filter.py",
+            "backend/retrieval/search/searcher.py",
+            "backend/retrieval/search/source_filter.py",
             "backend/retrieval/query/query_intent.py",
             "backend/retrieval/code_answers.py",
         }:
@@ -816,7 +816,7 @@ def refine_overview_display_sources(raw_query: str, selected: list[dict], pool: 
 
 def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict]:
     """Prefer query-relevant primary citations and cap output noise."""
-    from retrieval.searcher import (
+    from retrieval.search.searcher import (
         match_code_topic_route,
         path_matches_topic_route,
         query_explicitly_requests_non_implementation_artifacts,
@@ -1281,12 +1281,12 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
             "backend/retrieval/main.py",
             "backend/rag_ingestion/main.py",
             "backend/evals/run_safe_evals.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/retrieval/query/query_processor.py",
             "backend/retrieval/assembler.py",
             "backend/retrieval/code_answers.py",
             "backend/retrieval/llm.py",
-            "backend/retrieval/source_filter.py",
+            "backend/retrieval/search/source_filter.py",
             "backend/retrieval/answer_validation.py",
             "backend/retrieval/follow_up_memory.py",
             "backend/retrieval/db.py",
@@ -1309,12 +1309,12 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
         "backend/retrieval/main.py",
         "backend/rag_ingestion/main.py",
         "backend/evals/run_safe_evals.py",
-        "backend/retrieval/searcher.py",
+        "backend/retrieval/search/searcher.py",
         "backend/retrieval/query/query_processor.py",
         "backend/retrieval/assembler.py",
         "backend/retrieval/code_answers.py",
         "backend/retrieval/llm.py",
-        "backend/retrieval/source_filter.py",
+        "backend/retrieval/search/source_filter.py",
         "backend/retrieval/answer_validation.py",
         "backend/retrieval/follow_up_memory.py",
         "backend/retrieval/db.py",
@@ -2490,7 +2490,7 @@ def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
     if not relative_path.startswith("backend/"):
         return False
 
-    if relative_path.endswith("retrieval/source_filter.py"):
+    if relative_path.endswith("retrieval/search/source_filter.py"):
         return True
 
     if relative_path.endswith("retrieval/query/query_processor.py") and symbol_name.startswith("_inject_"):
@@ -2503,7 +2503,7 @@ def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
     ):
         return True
 
-    if relative_path.endswith("retrieval/searcher.py") and (
+    if relative_path.endswith("retrieval/search/searcher.py") and (
         symbol_name in _OVERVIEW_NOISE_SYMBOLS
         or symbol_name.startswith("_is_overview")
         or symbol_name.startswith("_inject_overview")

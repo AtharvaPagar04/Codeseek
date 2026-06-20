@@ -10,10 +10,10 @@ Primary implementation files:
 
 - `retrieval/main.py`
 - `retrieval/query/query_processor.py`
-- `retrieval/searcher.py`
-- `retrieval/expander.py`
+- `retrieval/search/searcher.py`
+- `retrieval/search/expander.py`
 - `retrieval/assembler.py`
-- `retrieval/source_filter.py`
+- `retrieval/search/source_filter.py`
 - `retrieval/code_answers.py`
 - `retrieval/llm.py`
 - `retrieval/memory.py`
@@ -323,7 +323,7 @@ This stage is still rule-based. There is no learned intent classifier and no str
 
 ## 6. Retrieval Stage
 
-`retrieval/searcher.py` is the main search implementation.
+`retrieval/search/searcher.py` is the main search implementation.
 
 ### 6.1 Dense vector search
 
@@ -547,7 +547,7 @@ Current behavior:
 
 ## 9. Expansion Stage
 
-`retrieval/expander.py` attaches structurally related chunks.
+`retrieval/search/expander.py` attaches structurally related chunks.
 
 ### 9.1 Expansion types
 
@@ -641,7 +641,7 @@ Primary chunks can be truncated to fit the remaining budget. Non-primary chunks 
 
 ## 11. Source Filtering and Evidence Gating
 
-`retrieval/source_filter.py` and `retrieval/assembler.py` together control which sources reach the user and how much context the LLM receives.
+`retrieval/search/source_filter.py` and `retrieval/assembler.py` together control which sources reach the user and how much context the LLM receives.
 
 ### 11.1 Two-layer source model
 

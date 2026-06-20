@@ -347,7 +347,7 @@ def _embedding_similarity(current_query: str, previous_query: str) -> float | No
     if not current_query.strip() or not previous_query.strip():
         return None
     try:
-        from retrieval.searcher import _get_model
+        from retrieval.search.searcher import _get_model
     except Exception:
         return None
     try:

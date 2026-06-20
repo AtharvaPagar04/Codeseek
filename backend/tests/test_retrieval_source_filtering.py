@@ -2,7 +2,7 @@
 
 import unittest
 
-from retrieval.source_filter import select_sources_for_display, split_sources_two_layer
+from retrieval.search.source_filter import select_sources_for_display, split_sources_two_layer
 
 
 class SourceFilteringTests(unittest.TestCase):
@@ -315,14 +315,14 @@ class SourceFilteringTests(unittest.TestCase):
         query = "Give me a repository overview."
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_is_overview_query",
                 "start_line": 1259,
                 "end_line": 1288,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/source_filter.py",
+                "relative_path": "backend/retrieval/search/source_filter.py",
                 "symbol_name": "query_is_overview_summary",
                 "start_line": 529,
                 "end_line": 549,
@@ -364,7 +364,7 @@ class SourceFilteringTests(unittest.TestCase):
         query = "What are the core modules in this codebase?"
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_is_overview_query",
                 "start_line": 1259,
                 "end_line": 1288,

@@ -18,7 +18,7 @@ from retrieval.code_answers import (
     find_supporting_import_exports,
     _find_python_block_end,
 )
-from retrieval.searcher import _inject_import_backing_candidates
+from retrieval.search.searcher import _inject_import_backing_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +51,8 @@ class TestParseNamedImportsPython:
         assert "HISTORY_TOKEN_CAP" in names
 
     def test_module_path_preserved(self):
-        pairs = _parse_named_imports("from retrieval.source_filter import score_evidence_confidence")
-        assert pairs[0][1] == "retrieval.source_filter"
+        pairs = _parse_named_imports("from retrieval.search.source_filter import score_evidence_confidence")
+        assert pairs[0][1] == "retrieval.search.source_filter"
 
     def test_junk_statement_returns_empty(self):
         pairs = _parse_named_imports("x = 42")

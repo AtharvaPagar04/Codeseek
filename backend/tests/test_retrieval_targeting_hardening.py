@@ -10,7 +10,7 @@ from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.stages.storage import _payload
 from retrieval.support.path_utils import extract_file_reference_tokens, normalize_repo_path
 from retrieval.query.query_processor import process_query
-from retrieval.searcher import search
+from retrieval.search.searcher import search
 
 
 class RetrievalTargetingHardeningTests(unittest.TestCase):
@@ -156,16 +156,16 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     "CODESEEK_STRICT_ISOLATION": "0",
                 },
                 clear=False,
-            ), patch("retrieval.searcher._dense_search", return_value=[dense_candidate]), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+            ), patch("retrieval.search.searcher._dense_search", return_value=[dense_candidate]), patch(
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._dependency_search", return_value=[]
+                "retrieval.search.searcher._dependency_search", return_value=[]
             ), patch(
-                "retrieval.searcher._local_content_match_candidates", return_value=[]
+                "retrieval.search.searcher._local_content_match_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+                "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
             ), patch(
-                "retrieval.searcher._get_client", return_value=_EmptyClient()
+                "retrieval.search.searcher._get_client", return_value=_EmptyClient()
             ):
                 results = search(query_info)
 
@@ -221,22 +221,22 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     )
                 return ([], None)
 
-        with patch("retrieval.searcher._dense_search", return_value=[dense_candidate]), patch(
-            "retrieval.searcher._lexical_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=[dense_candidate]), patch(
+            "retrieval.search.searcher._lexical_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._dependency_search", return_value=[]
+            "retrieval.search.searcher._dependency_search", return_value=[]
         ), patch(
-            "retrieval.searcher._local_content_match_candidates", return_value=[]
+            "retrieval.search.searcher._local_content_match_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_direct_topics_candidates", return_value=[]
+            "retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]
+            "retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+            "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
         ), patch(
-            "retrieval.searcher._get_client", return_value=_SymbolClient()
+            "retrieval.search.searcher._get_client", return_value=_SymbolClient()
         ):
             results = search(query_info)
 
@@ -291,16 +291,16 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     "CODESEEK_STRICT_ISOLATION": "0",
                 },
                 clear=False,
-            ), patch("retrieval.searcher._dense_search", return_value=[dense_candidate]), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+            ), patch("retrieval.search.searcher._dense_search", return_value=[dense_candidate]), patch(
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._dependency_search", return_value=[]
+                "retrieval.search.searcher._dependency_search", return_value=[]
             ), patch(
-                "retrieval.searcher._local_content_match_candidates", return_value=[]
+                "retrieval.search.searcher._local_content_match_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+                "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
             ), patch(
-                "retrieval.searcher._get_client", return_value=_EmptyClient()
+                "retrieval.search.searcher._get_client", return_value=_EmptyClient()
             ):
                 results = search(query_info)
 
@@ -345,26 +345,26 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
             def scroll(self, *args, **kwargs):
                 return ([], None)
 
-        with patch("retrieval.searcher._dense_search", return_value=dense_candidates), patch(
-            "retrieval.searcher._lexical_search", return_value=[]
+        with patch("retrieval.search.searcher._dense_search", return_value=dense_candidates), patch(
+            "retrieval.search.searcher._lexical_search", return_value=[]
         ), patch(
-            "retrieval.searcher._metadata_search", return_value=[]
+            "retrieval.search.searcher._metadata_search", return_value=[]
         ), patch(
-            "retrieval.searcher._exact_entity_search", return_value=[]
+            "retrieval.search.searcher._exact_entity_search", return_value=[]
         ), patch(
-            "retrieval.searcher._dependency_search", return_value=[]
+            "retrieval.search.searcher._dependency_search", return_value=[]
         ), patch(
-            "retrieval.searcher._local_content_match_candidates", return_value=[]
+            "retrieval.search.searcher._local_content_match_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_direct_topics_candidates", return_value=[]
+            "retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]
+            "retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]
         ), patch(
-            "retrieval.searcher._inject_structural_hint_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+            "retrieval.search.searcher._inject_structural_hint_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
         ), patch(
-            "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+            "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
         ), patch(
-            "retrieval.searcher._get_client", return_value=_EmptyClient()
+            "retrieval.search.searcher._get_client", return_value=_EmptyClient()
         ):
             results = search(query_info)
 
@@ -396,24 +396,24 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     "CODESEEK_STRICT_ISOLATION": "0",
                 },
                 clear=False,
-            ), patch("retrieval.searcher._dense_search", return_value=[]), patch(
-                "retrieval.searcher._lexical_search", return_value=[]
+            ), patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+                "retrieval.search.searcher._lexical_search", return_value=[]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._dependency_search", return_value=[]
+                "retrieval.search.searcher._dependency_search", return_value=[]
             ), patch(
-                "retrieval.searcher._local_content_match_candidates", return_value=[]
+                "retrieval.search.searcher._local_content_match_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_direct_topics_candidates", return_value=[]
+                "retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]
+                "retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+                "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
             ), patch(
-                "retrieval.searcher._get_client", return_value=_EmptyClient()
+                "retrieval.search.searcher._get_client", return_value=_EmptyClient()
             ):
                 results = search(query_info)
 
@@ -448,24 +448,24 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     "CODESEEK_STRICT_ISOLATION": "0",
                 },
                 clear=False,
-            ), patch("retrieval.searcher._dense_search", return_value=[]), patch(
-                "retrieval.searcher._lexical_search", return_value=[]
+            ), patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+                "retrieval.search.searcher._lexical_search", return_value=[]
             ), patch(
-                "retrieval.searcher._metadata_search", return_value=[]
+                "retrieval.search.searcher._metadata_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._dependency_search", return_value=[]
+                "retrieval.search.searcher._dependency_search", return_value=[]
             ), patch(
-                "retrieval.searcher._local_content_match_candidates", return_value=[]
+                "retrieval.search.searcher._local_content_match_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_direct_topics_candidates", return_value=[]
+                "retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]
+                "retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+                "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
             ), patch(
-                "retrieval.searcher._get_client", return_value=_EmptyClient()
+                "retrieval.search.searcher._get_client", return_value=_EmptyClient()
             ):
                 results = search(query_info)
 
@@ -499,22 +499,22 @@ class RetrievalTargetingHardeningTests(unittest.TestCase):
                     "CODESEEK_STRICT_ISOLATION": "0",
                 },
                 clear=False,
-            ), patch("retrieval.searcher._dense_search", return_value=[]), patch(
-                "retrieval.searcher._lexical_search", return_value=[]
+            ), patch("retrieval.search.searcher._dense_search", return_value=[]), patch(
+                "retrieval.search.searcher._lexical_search", return_value=[]
             ), patch(
-                "retrieval.searcher._exact_entity_search", return_value=[]
+                "retrieval.search.searcher._exact_entity_search", return_value=[]
             ), patch(
-                "retrieval.searcher._dependency_search", return_value=[]
+                "retrieval.search.searcher._dependency_search", return_value=[]
             ), patch(
-                "retrieval.searcher._local_content_match_candidates", return_value=[]
+                "retrieval.search.searcher._local_content_match_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_direct_topics_candidates", return_value=[]
+                "retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]
+                "retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]
             ), patch(
-                "retrieval.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
+                "retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda raw_query, candidates, query_info=None: candidates
             ), patch(
-                "retrieval.searcher._get_client", return_value=_EmptyClient()
+                "retrieval.search.searcher._get_client", return_value=_EmptyClient()
             ):
                 results = search(query_info)
 

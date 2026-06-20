@@ -1,5 +1,5 @@
 import pytest
-from retrieval.source_filter import score_evidence_confidence
+from retrieval.search.source_filter import score_evidence_confidence
 
 def test_behavior_grounding_confidence_weak_on_frontend_only():
     raw_query = "Is task deletion soft delete or hard delete?"

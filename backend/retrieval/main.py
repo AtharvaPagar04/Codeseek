@@ -42,7 +42,7 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
-from retrieval.expander import expand
+from retrieval.search.expander import expand
 from retrieval.follow_up_memory import (
     analyze_topic_shift,
     build_recent_entity_set,
@@ -57,13 +57,13 @@ from retrieval.support.observability import StageMetrics, log_event, new_request
 from retrieval.query.query_processor import process_query
 from retrieval.support.isolation import validate_collection_binding
 from retrieval.query.query_intent import is_source_location_query
-from retrieval.searcher import (
+from retrieval.search.searcher import (
     _content_looks_like_symbol_definition,
     _content_looks_like_symbol_usage_only,
     query_explicitly_requests_non_implementation_artifacts,
     search,
 )
-from retrieval.source_filter import (
+from retrieval.search.source_filter import (
     explain_source_filter_decision,
     score_evidence_confidence,
     has_strong_source_location_evidence,
@@ -628,7 +628,7 @@ def post_process_answer_and_sources(
     primary_intent: str | None = None,
 ) -> tuple[str, list[dict]]:
     import re
-    from retrieval.searcher import (
+    from retrieval.search.searcher import (
         match_code_topic_route,
         path_matches_topic_route,
         query_explicitly_requests_non_implementation_artifacts,
@@ -636,7 +636,7 @@ def post_process_answer_and_sources(
         symbol_matches_topic_route,
     )
     from retrieval.code_answers import route_filesystem_sources_for_query
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.search.source_filter import apply_query_negative_filters
 
     def _dedupe_sources(items: list[dict]) -> list[dict]:
         seen = set()
@@ -1103,7 +1103,7 @@ def _run_query_impl(
     recent_turns = memory.recent_turn_entities(max_turns=8) if hasattr(memory, "recent_turn_entities") else []
     active_index_paths = None
     try:
-        from retrieval.searcher import _get_lexical_index
+        from retrieval.search.searcher import _get_lexical_index
         idx = _get_lexical_index(get_collection_name())
         active_index_paths = {doc.payload.get("relative_path") for doc in idx.documents if doc.payload.get("relative_path")}
     except Exception:
@@ -1185,7 +1185,7 @@ def _run_query_impl(
             if "query_intent.py" not in (c.get("relative_path") or "")
         ]
 
-    from retrieval.source_filter import prune_exact_file_context
+    from retrieval.search.source_filter import prune_exact_file_context
     expanded, pruning_diag = prune_exact_file_context(raw_query, query_info, expanded)
     meta["exact_file_context_pruning"] = pruning_diag
 
@@ -1217,7 +1217,7 @@ def _run_query_impl(
     if gate_diagnostics["enabled"]:
         meta["feature_source_gate"] = gate_diagnostics
         
-    from retrieval.source_filter import apply_wrong_evidence_guard, prioritize_final_sources
+    from retrieval.search.source_filter import apply_wrong_evidence_guard, prioritize_final_sources
     sources, guard_diag = apply_wrong_evidence_guard(raw_query, sources, query_info)
     if "framework_routing" in query_info:
         query_info["framework_routing"]["wrong_evidence_guard_applied"] = guard_diag.get("guard_applied", False)
@@ -1665,7 +1665,7 @@ def _run_query_impl(
         return answer, shown_sources, token_count
     elif is_code_request(raw_query):
         started = time.perf_counter()
-        from retrieval.searcher import match_code_topic_route
+        from retrieval.search.searcher import match_code_topic_route
         matched_code_topic_route = match_code_topic_route(raw_query, primary_intent)
         route_support_sources = route_filesystem_sources_for_query(raw_query) if matched_code_topic_route else []
         exact_symbol_support_sources = filesystem_exact_symbol_sources_for_query(
@@ -1965,7 +1965,7 @@ def _run_query_impl(
 
     # Phase 2.5: source-location queries with strong evidence
     if is_source_location_query(raw_query):
-        from retrieval.searcher import match_code_topic_route, path_matches_topic_route
+        from retrieval.search.searcher import match_code_topic_route, path_matches_topic_route
 
         matched_route = match_code_topic_route(raw_query, primary_intent)
         if matched_route and matched_route.get("id") in {"evaluation_report_api", "retrieval_internals"}:

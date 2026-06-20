@@ -1,4 +1,4 @@
-from retrieval.source_filter import select_sources_for_display, split_sources_two_layer
+from retrieval.search.source_filter import select_sources_for_display, split_sources_two_layer
 
 
 def _src(path: str, symbol: str = "", *, score: float = 0.5, expansion_type: str = "primary") -> dict:
@@ -235,7 +235,7 @@ def test_failure_recovery_sources_are_grounded_not_speculative_helpers() -> None
 # Task 5: Tests/eval/report demotion for normal queries
 # ---------------------------------------------------------------------------
 
-from retrieval.source_filter import source_excluded_for_query
+from retrieval.search.source_filter import source_excluded_for_query
 
 
 def test_eval_report_json_demoted_for_normal_query() -> None:

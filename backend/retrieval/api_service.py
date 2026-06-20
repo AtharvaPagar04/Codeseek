@@ -67,7 +67,7 @@ from retrieval.provider_health import (
     ProviderNotReadyError,
     require_llm_ready_for_user,
 )
-from retrieval.searcher import dependency_health
+from retrieval.search.searcher import dependency_health
 from retrieval.session_indexer import (
     create_session,
     delete_session,

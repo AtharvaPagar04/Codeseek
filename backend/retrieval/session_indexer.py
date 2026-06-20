@@ -16,7 +16,7 @@ from rag_ingestion.main import run_pipeline
 from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_PORT
 from retrieval.db import db_cursor, init_db
 from retrieval.support.isolation import expected_collection_name
-from retrieval.searcher import invalidate_lexical_index
+from retrieval.search.searcher import invalidate_lexical_index
 from retrieval.stores.thread_store import ensure_default_thread
 
 WORKSPACE_ROOT = Path(
@@ -783,7 +783,7 @@ def _index_job(session_id: str) -> None:
             if repo_root.exists():
                 shutil.rmtree(repo_root, ignore_errors=True)
             
-            from retrieval.searcher import _get_client
+            from retrieval.search.searcher import _get_client
             client = _get_client()
             if client:
                 try:

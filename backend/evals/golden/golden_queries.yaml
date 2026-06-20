@@ -23,7 +23,7 @@
   expected_files:
     - "backend/docs/retrieval_docs/current_retrieval_strategy.md"
     - "backend/retrieval/query/query_processor.py"
-    - "backend/retrieval/searcher.py"
+    - "backend/retrieval/search/searcher.py"
     - "backend/retrieval/code_answers.py"
   must_hit_top_k: 10
   notes: >
@@ -36,7 +36,7 @@
   expected_reranker_intent: "FILE"
   expected_files:
     - "backend/retrieval/query/query_processor.py"
-    - "backend/retrieval/searcher.py"
+    - "backend/retrieval/search/searcher.py"
     - "backend/retrieval/code_answers.py"
   must_hit_top_k: 5
   notes: >

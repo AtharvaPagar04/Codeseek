@@ -90,7 +90,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-dep-003",
         "query": "Which code invalidates the lexical index after ingestion?",
-        "expected_files": ["retrieval/searcher.py", "rag_ingestion/main.py"],
+        "expected_files": ["retrieval/search/searcher.py", "rag_ingestion/main.py"],
         "expected_symbols": [],
         "family": "DEPENDENCY",
     },
@@ -218,7 +218,7 @@ def _top_files(results: list[dict], n: int = 5) -> list[str]:
 
 def _run_search(query_info: dict, enable_lexical: bool) -> tuple[list[dict], float]:
     """Run search with or without lexical layer, return (results, latency_ms)."""
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     original = searcher_mod.ENABLE_LEXICAL_RETRIEVAL
     searcher_mod.ENABLE_LEXICAL_RETRIEVAL = enable_lexical
@@ -236,7 +236,7 @@ def _run_search(query_info: dict, enable_lexical: bool) -> tuple[list[dict], flo
 
 def _measure_index_build(collection: str) -> tuple[float, float]:
     """Return (build_time_ms, memory_delta_mb) for building the BM25 index."""
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     # Clear cached index first
     searcher_mod._lexical_indexes.pop(collection, None)
@@ -258,7 +258,7 @@ def _measure_index_build(collection: str) -> tuple[float, float]:
 def main(output_path: str | None = None) -> None:
     from retrieval.query.query_processor import process_query
     from retrieval.config import get_collection_name
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     collection = get_collection_name()
 

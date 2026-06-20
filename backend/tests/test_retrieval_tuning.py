@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from retrieval.searcher import _rerank_with_query_tokens
+from retrieval.search.searcher import _rerank_with_query_tokens
 from retrieval.code_answers import build_overview_answer
 
 class TestRetrievalTuning(unittest.TestCase):

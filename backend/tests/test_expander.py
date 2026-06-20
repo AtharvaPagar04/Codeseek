@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from retrieval.expander import expand
+from retrieval.search.expander import expand
 
 
 def _chunk(chunk_id: str, symbol_name: str, *, expansion_type: str = "primary", calls: list[str] | None = None) -> dict:
@@ -40,8 +40,8 @@ def test_expand_caps_total_callee_trace_chunks() -> None:
             }
         ]
 
-    with patch("retrieval.expander.CALL_EXPANSION_LIMIT", 8), patch(
-        "retrieval.expander._callee_chunks", side_effect=fake_callee_chunks
+    with patch("retrieval.search.expander.CALL_EXPANSION_LIMIT", 8), patch(
+        "retrieval.search.expander._callee_chunks", side_effect=fake_callee_chunks
     ):
         expanded = expand(candidates, {"intent": "DEPENDENCY"})
 

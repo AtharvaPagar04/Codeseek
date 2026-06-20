@@ -127,7 +127,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 2,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_rerank_with_query_tokens",
                 "chunk_type": "function",
                 "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -346,7 +346,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/retrieval/api_service.py", paths)
         self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
-        self.assertNotIn("backend/retrieval/searcher.py", paths)
+        self.assertNotIn("backend/retrieval/search/searcher.py", paths)
         self.assertFalse(any(src.get("symbol_name") == "<file>" for src in final_srcs))
         self.assertEqual(len(final_srcs), len({(
             src.get("relative_path", ""),
@@ -775,7 +775,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("I could not find strong evidence", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
         self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
-        self.assertNotIn("backend/retrieval/searcher.py", ans)
+        self.assertNotIn("backend/retrieval/search/searcher.py", ans)
 
     @patch("retrieval.code_answers._read_source_excerpt")
     def test_qdrant_upsert_code_after_safe_eval_keeps_topic_isolation(self, mock_read) -> None:
@@ -859,7 +859,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def test_explicit_searcher_internals_query_allows_searcher(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         source = {
-            "relative_path": "backend/retrieval/searcher.py",
+            "relative_path": "backend/retrieval/search/searcher.py",
             "symbol_name": "_rerank_with_query_tokens",
             "chunk_type": "function",
             "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -871,7 +871,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             sources=[source],
             chunks=[source],
         )
-        self.assertIn("backend/retrieval/searcher.py", answer)
+        self.assertIn("backend/retrieval/search/searcher.py", answer)
         self.assertIn("_rerank_with_query_tokens", answer)
 
     @patch("retrieval.code_answers._read_source_excerpt")
@@ -879,7 +879,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         mock_read.side_effect = lambda src: src.get("content", "")
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_rerank_with_query_tokens",
                 "chunk_type": "function",
                 "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -887,7 +887,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 2,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_merge_results",
                 "chunk_type": "function",
                 "content": "def _merge_results(a, b):\n    return a + b",
@@ -895,7 +895,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 4,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "feature_specific_routing_boost",
                 "chunk_type": "function",
                 "content": "def feature_specific_routing_boost(path, query):\n    return 0.0",
@@ -903,7 +903,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 6,
             },
             {
-                "relative_path": "backend/retrieval/source_filter.py",
+                "relative_path": "backend/retrieval/search/source_filter.py",
                 "symbol_name": "apply_query_negative_filters",
                 "chunk_type": "function",
                 "content": "def apply_query_negative_filters(sources, raw_query, **kwargs):\n    return sources",
@@ -925,7 +925,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             sources=sources,
             chunks=sources,
         )
-        self.assertIn("backend/retrieval/searcher.py", answer)
+        self.assertIn("backend/retrieval/search/searcher.py", answer)
         self.assertIn("_rerank_with_query_tokens", answer)
         self.assertIn("_merge_results", answer)
         self.assertIn("feature_specific_routing_boost", answer)
@@ -955,7 +955,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             int(src.get("start_line", 0) or 0),
             int(src.get("end_line", 0) or 0),
         ) for src in final_srcs}))
-        self.assertNotIn("backend/retrieval/searcher.py", paths)
+        self.assertNotIn("backend/retrieval/search/searcher.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
         self.assertNotIn("backend/tests/test_eval_reports.py", paths)
         self.assertIn("get_latest_evaluation_report_v1", ans)
@@ -1024,7 +1024,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("# ... omitted for brevity ...", ans1)
 
     def test_safe_eval_source_location_prefers_implementation(self) -> None:
-        from retrieval.searcher import _rerank_with_query_tokens
+        from retrieval.search.searcher import _rerank_with_query_tokens
         candidates = [
             {
                 "chunk_id": "doc-1",
@@ -1067,7 +1067,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/tests/test_eval_reports.py", answer)
 
     def test_explicit_docs_request_still_allows_safe_eval_docs(self) -> None:
-        from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
+        from retrieval.search.searcher import query_explicitly_requests_non_implementation_artifacts
         self.assertTrue(query_explicitly_requests_non_implementation_artifacts("what does safe_eval_runner.md document?"))
         self.assertFalse(query_explicitly_requests_non_implementation_artifacts("show me the evaluation report API endpoint code"))
 
@@ -1224,9 +1224,9 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_query_endpoint_code_routing(self) -> None:
         # F.5 Query endpoint: "show me the query endpoint code" routes to _query_impl
-        from retrieval.searcher import _inject_auth_routing_candidates
+        from retrieval.search.searcher import _inject_auth_routing_candidates
         # Since _inject_auth_routing_candidates queries Qdrant with _get_client(), let's patch _qdrant_call
-        with patch("retrieval.searcher._qdrant_call") as mock_call:
+        with patch("retrieval.search.searcher._qdrant_call") as mock_call:
             from qdrant_client.models import Record
             mock_call.return_value = ([
                 Record(id="1", payload={"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_query_impl"})
@@ -1236,8 +1236,8 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_session_validation_routing(self) -> None:
         # F.6 Session validation: "provide me the session validation function code" returns get_user_for_session_token etc.
-        from retrieval.searcher import _inject_auth_routing_candidates
-        with patch("retrieval.searcher._qdrant_call") as mock_call:
+        from retrieval.search.searcher import _inject_auth_routing_candidates
+        with patch("retrieval.search.searcher._qdrant_call") as mock_call:
             from qdrant_client.models import Record
             mock_call.side_effect = lambda *args, **kwargs: ([
                 Record(id="1", payload={"relative_path": "backend/retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"}),

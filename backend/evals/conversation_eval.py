@@ -54,7 +54,7 @@ def _effective_symbol_metric_intent(query: str, reranker_intent: str) -> str:
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from retrieval.query.query_processor import process_query
-from retrieval.searcher import search
+from retrieval.search.searcher import search
 from retrieval.query.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
 from retrieval.db import db_cursor
 from retrieval.memory import ConversationMemory
