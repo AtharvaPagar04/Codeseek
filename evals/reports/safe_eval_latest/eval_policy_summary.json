@@ -1,6 +1,0 @@
-{
-  "status": "ERROR",
-  "error": "step failed before producing report",
-  "step": "eval_policy_summary",
-  "return_code": -1
-}

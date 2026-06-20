@@ -13,7 +13,7 @@ Run the default safe workflow (retrieval + conversation evaluations + policy gat
   --session-id d0080c2f183740699918777d953f25fa \
   --expected-repo-root /home/arch/DEV/CodeSeek \
   --expected-collection repository_chunks__local__codeseek \
-  --output-dir ../evals/reports/safe_eval_latest
+  --output-dir evals/reports/safe_eval_latest
 ```
 
 ### Generated Files

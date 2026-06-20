@@ -88,8 +88,8 @@ def format_final_point(payload: dict) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Run conversation evaluation for CodeSeek.")
     parser.add_argument("--session-id", help="Session ID from database.")
-    parser.add_argument("--golden", "--trees", dest="golden", default="../evals/conversation_trees.yaml", help="Path to golden queries YAML file.")
-    parser.add_argument("--output", default="../evals/reports/conversation_latest.json", help="Path to write the evaluation JSON report.")
+    parser.add_argument("--golden", "--trees", dest="golden", default="evals/golden/conversation_trees.yaml", help="Path to golden queries YAML file.")
+    parser.add_argument("--output", default="evals/reports/conversation_latest.json", help="Path to write the evaluation JSON report.")
     parser.add_argument("--k", type=int, default=5, help="K value for evaluation (default: 5).")
     args = parser.parse_args()
 

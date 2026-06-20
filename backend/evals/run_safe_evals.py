@@ -68,7 +68,7 @@ def main() -> None:
         "command": [
             args.python_bin, "evals/retrieval_eval.py",
             "--session-id", args.session_id,
-            "--golden", "../evals/golden_queries.yaml",
+            "--golden", "evals/golden/golden_queries.yaml",
             "--output", str(output_dir / "retrieval_latest.json")
         ],
         "dependent_on": [],
@@ -82,7 +82,7 @@ def main() -> None:
         "command": [
             args.python_bin, "evals/conversation_eval.py",
             "--session-id", args.session_id,
-            "--trees", "../evals/conversation_trees.yaml",
+            "--trees", "evals/golden/conversation_trees.yaml",
             "--output", str(output_dir / "conversation_latest.json")
         ],
         "dependent_on": [],

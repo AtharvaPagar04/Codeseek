@@ -165,8 +165,8 @@ def _likely_failure_type(
 def main():
     parser = argparse.ArgumentParser(description="Run retrieval evaluation for CodeSeek.")
     parser.add_argument("--session-id", help="Session ID from database.")
-    parser.add_argument("--golden", default="../evals/golden_queries.yaml", help="Path to golden queries YAML file.")
-    parser.add_argument("--output", default="../evals/reports/latest.json", help="Path to write the evaluation JSON report.")
+    parser.add_argument("--golden", default="evals/golden/golden_queries.yaml", help="Path to golden queries YAML file.")
+    parser.add_argument("--output", default="evals/reports/latest.json", help="Path to write the evaluation JSON report.")
     parser.add_argument("--k", type=int, default=5, help="K value for evaluation (default: 5).")
     parser.add_argument(
         "--debug-query-ids",

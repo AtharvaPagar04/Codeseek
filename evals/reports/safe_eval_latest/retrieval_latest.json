@@ -1,6 +1,0 @@
-{
-  "status": "ERROR",
-  "error": "step failed before producing report",
-  "step": "retrieval_eval",
-  "return_code": 1
-}
