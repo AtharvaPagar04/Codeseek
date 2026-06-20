@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_LOCAL_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 384
@@ -190,6 +193,16 @@ class OpenAICompatibleEmbeddingProvider:
             "model": self._config.model,
             "input": texts,
         }
+        
+        logger.debug(
+            "[embedding.test.debug] embedding_provider=openai_compatible base_url=%s endpoint=%s model=%s input_type=%s input_count=%d dimensions_sent=false api_key_present=%s",
+            self._config.base_url,
+            self._endpoint,
+            self._config.model,
+            type(texts).__name__,
+            len(texts),
+            str(bool(self._config.api_key)).lower(),
+        )
 
         try:
             response = httpx.post(

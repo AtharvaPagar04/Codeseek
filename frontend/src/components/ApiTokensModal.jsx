@@ -95,7 +95,7 @@ export default function ApiTokensModal({ onClose }) {
             setEmbConfig(emb);
             setEmbProvider(emb.provider || 'local');
             setEmbBaseUrl(emb.base_url || '');
-            setEmbModel(emb.model || '');
+            setEmbModel(emb.provider === 'openai_compatible' ? (emb.model || '') : '');
             setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
             // Do not prefill apiKey
           }
@@ -424,7 +424,12 @@ export default function ApiTokensModal({ onClose }) {
               <label className="text-2xs font-mono text-text-muted uppercase">Provider Type</label>
               <select
                 value={embProvider}
-                onChange={(e) => setEmbProvider(e.target.value)}
+                onChange={(e) => {
+                  setEmbProvider(e.target.value);
+                  if (e.target.value === 'openai_compatible' && embModel === 'BAAI/bge-small-en-v1.5') {
+                    setEmbModel('');
+                  }
+                }}
                 className="bg-surface-3 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
               >
                 <option value="local">Local (Default BGE Model)</option>

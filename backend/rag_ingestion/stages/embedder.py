@@ -28,7 +28,8 @@ def _sleep(seconds: float) -> None:
 
 
 def _get_provider():
-    config = get_embedding_provider_config()
+    from retrieval.support.embedding_provider import resolve_embedding_config
+    config = resolve_embedding_config()
     return config, get_embedding_provider(config)
 
 KNOWN_LABELS = {
@@ -86,6 +87,12 @@ def embed_chunks(
 
     config, provider = _get_provider()
 
+    logger.info(
+        "[embedding] provider=%s model=%s dimensions=%s",
+        config.provider,
+        config.effective_model,
+        config.dimensions if config.dimensions > 0 else "infer",
+    )
     logger.info(
         "Embedding %d chunks — provider=%s model=%s batch_size=%d",
         len(chunks),

@@ -1344,17 +1344,20 @@ def test_embedding_config_v1(
         raise HTTPException(status_code=400, detail="Unsupported provider")
         
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
-    if provider == "openai_compatible" and not api_key:
-        existing = get_embedding_config(user["id"])
-        if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
-            api_key = existing["api_key"]
-        else:
-            from retrieval.support.embedding_provider import get_embedding_provider_config
-            env_config = get_embedding_provider_config()
-            if env_config.api_key:
-                api_key = env_config.api_key
+    if provider == "openai_compatible":
+        if not body.base_url or not body.model:
+            raise HTTPException(status_code=400, detail="base_url and model are required for openai_compatible")
+        if not api_key:
+            existing = get_embedding_config(user["id"])
+            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
+                api_key = existing["api_key"]
             else:
-                raise HTTPException(status_code=400, detail="api_key is required for test")
+                from retrieval.support.embedding_provider import get_embedding_provider_config
+                env_config = get_embedding_provider_config()
+                if env_config.api_key:
+                    api_key = env_config.api_key
+                else:
+                    raise HTTPException(status_code=400, detail="api_key is required for test")
 
     config = EmbeddingProviderConfig(
         provider=provider,
