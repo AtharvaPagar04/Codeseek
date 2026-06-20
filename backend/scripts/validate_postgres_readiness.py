@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from retrieval import chat_store, db, memory_store, session_indexer
+from retrieval.stores import chat_store, memory_store
+from retrieval import db, session_indexer
 from retrieval.stores import auth_store, github_store, provider_store
 
 

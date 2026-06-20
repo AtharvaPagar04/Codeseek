@@ -364,7 +364,7 @@ class TestSessionEntityPersistence(unittest.TestCase):
 
     def test_entity_rows_are_persisted_per_turn(self) -> None:
         from retrieval.memory import SessionConversationMemory
-        from retrieval.memory_store import list_session_turn_entities
+        from retrieval.stores.memory_store import list_session_turn_entities
 
         with TemporaryDirectory() as tmp:
             orig_db, orig_ws, orig_enq, si = self._setup_env(tmp)
@@ -432,9 +432,9 @@ class TestSessionEntityPersistence(unittest.TestCase):
                 self._teardown_env(orig_db, orig_ws, orig_enq, si)
 
     def test_clearing_messages_also_clears_entity_rows(self) -> None:
-        from retrieval import chat_store
+        from retrieval.stores import chat_store
         from retrieval.memory import SessionConversationMemory
-        from retrieval.memory_store import list_session_turn_entities
+        from retrieval.stores.memory_store import list_session_turn_entities
 
         with TemporaryDirectory() as tmp:
             orig_db, orig_ws, orig_enq, si = self._setup_env(tmp)

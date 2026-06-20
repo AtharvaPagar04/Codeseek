@@ -1,4 +1,5 @@
-from retrieval import chat_store, session_indexer
+from retrieval.stores import chat_store
+from retrieval import session_indexer
 
 
 def test_append_list_and_clear_session_messages(monkeypatch, tmp_path):

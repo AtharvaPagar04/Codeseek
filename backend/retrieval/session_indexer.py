@@ -17,7 +17,7 @@ from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_P
 from retrieval.db import db_cursor, init_db
 from retrieval.isolation import expected_collection_name
 from retrieval.searcher import invalidate_lexical_index
-from retrieval.thread_store import ensure_default_thread
+from retrieval.stores.thread_store import ensure_default_thread
 
 WORKSPACE_ROOT = Path(
     os.getenv("CODESEEK_REPO_WORKSPACE", "/tmp/codeseek_repo_workspace")

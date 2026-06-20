@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime, timezone
 
 from retrieval.db import db_cursor
-from retrieval.memory_store import clear_session_memory_for_thread, clear_turn_entities_for_thread
-from retrieval.thread_store import ensure_default_thread
+from retrieval.stores.memory_store import clear_session_memory_for_thread, clear_turn_entities_for_thread
+from retrieval.stores.thread_store import ensure_default_thread
 
 
 def _now() -> str:

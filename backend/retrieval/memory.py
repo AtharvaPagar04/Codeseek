@@ -2,7 +2,7 @@
 
 import tiktoken
 
-from retrieval.chat_store import (
+from retrieval.stores.chat_store import (
     list_session_messages,
     list_session_turns,
     latest_session_assistant_message,
@@ -10,7 +10,7 @@ from retrieval.chat_store import (
     list_thread_turns,
     latest_thread_assistant_message,
 )
-from retrieval.memory_store import (
+from retrieval.stores.memory_store import (
     get_session_memory,
     get_thread_memory,
     list_session_turn_entities,

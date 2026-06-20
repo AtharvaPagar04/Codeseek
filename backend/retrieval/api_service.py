@@ -25,7 +25,7 @@ from retrieval.stores.auth_store import (
     upsert_github_user,
     get_or_create_system_user,
 )
-from retrieval.chat_store import (
+from retrieval.stores.chat_store import (
     append_message,
     append_thread_message,
     clear_session_messages,
@@ -80,7 +80,7 @@ from retrieval.submission_crypto import (
     get_submission_key_id,
     get_submission_public_key_pem,
 )
-from retrieval.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
+from retrieval.stores.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
 from retrieval.indexing_events import (
     get_indexing_events,
     subscribe_indexing_events,

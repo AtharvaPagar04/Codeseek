@@ -474,7 +474,8 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from retrieval import chat_store, session_indexer
+        from retrieval.stores import chat_store
+        from retrieval import session_indexer
         from retrieval.memory import SessionConversationMemory
 
         safe_eval_sources = list(self.safe_eval_sources)
@@ -595,7 +596,8 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from retrieval import chat_store, session_indexer
+        from retrieval.stores import chat_store
+        from retrieval import session_indexer
         from retrieval.memory import SessionConversationMemory
 
         auth_sources = list(self.sources)
