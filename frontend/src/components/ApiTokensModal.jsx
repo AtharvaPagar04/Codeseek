@@ -440,7 +440,7 @@ export default function ApiTokensModal({ onClose }) {
                     type="text"
                     value={embBaseUrl}
                     onChange={(e) => setEmbBaseUrl(e.target.value)}
-                    placeholder="https://api.openai.com/v1"
+                    placeholder="https://api.aicredits.in/v1"
                     className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                     required
                   />
@@ -455,6 +455,14 @@ export default function ApiTokensModal({ onClose }) {
                     className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                     required
                   />
+                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
+                    For AICredits embeddings, use plain OpenAI embedding model IDs such as text-embedding-3-small or text-embedding-3-large. Do not use chat models like deepseek-v4-flash here.
+                  </p>
+                  {(embModel.toLowerCase().includes('deepseek') || embModel.toLowerCase().includes('gpt-') || embModel.toLowerCase().includes('claude-') || embModel.toLowerCase().includes('gemini-')) && (
+                    <p className="text-[11px] leading-relaxed text-warning/90 mt-1">
+                      This looks like a chat/provider-prefixed model. Embeddings usually require a dedicated embedding model such as text-embedding-3-small.
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-2xs font-mono text-text-muted uppercase">API Key (Optional if unchanged)</label>
@@ -476,6 +484,9 @@ export default function ApiTokensModal({ onClose }) {
                     placeholder="Leave empty for auto"
                     className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                   />
+                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
+                    Optional. Leave blank to infer dimensions from the provider response.
+                  </p>
                 </div>
               </div>
             )}

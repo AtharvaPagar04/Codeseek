@@ -140,3 +140,32 @@ def test_cloud_embedding_batches_inputs(monkeypatch: pytest.MonkeyPatch):
 
     assert calls == [["a", "b"], ["c"]]
     assert vectors == [[0.0, 1.0], [1.0, 2.0], [0.0, 1.0]]
+
+
+def test_http_status_error_extracts_and_sanitizes_body(monkeypatch: pytest.MonkeyPatch):
+    class FakeResponse:
+        status_code = 400
+        text = '{"error": {"message": "Invalid model text-embedding for api key super-secret-key"}}'
+        
+        def json(self):
+            import json
+            return json.loads(self.text)
+            
+    class FakeException(httpx.HTTPStatusError):
+        def __init__(self):
+            self.response = FakeResponse()
+            super().__init__("error", request=None, response=self.response)
+
+    def fake_post(url, *, headers, json, timeout):
+        raise FakeException()
+
+    monkeypatch.setattr("retrieval.support.embedding_provider.httpx.post", fake_post)
+    provider = OpenAICompatibleEmbeddingProvider(_cloud_config())
+
+    with pytest.raises(EmbeddingRequestError) as exc_info:
+        provider.embed_texts(["first"])
+
+    assert "super-secret-key" not in str(exc_info.value)
+    assert "*****" in str(exc_info.value)
+    assert "Invalid model" in str(exc_info.value)
+    assert "status 400" in str(exc_info.value)

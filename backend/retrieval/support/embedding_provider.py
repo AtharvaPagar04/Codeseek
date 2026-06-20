@@ -190,8 +190,6 @@ class OpenAICompatibleEmbeddingProvider:
             "model": self._config.model,
             "input": texts,
         }
-        if self._config.dimensions > 0:
-            payload["dimensions"] = self._config.dimensions
 
         try:
             response = httpx.post(
@@ -205,8 +203,26 @@ class OpenAICompatibleEmbeddingProvider:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            try:
+                body_text = exc.response.text
+                try:
+                    data = exc.response.json()
+                    msg = data.get("error", {}).get("message")
+                    if msg:
+                        body_text = str(msg)
+                except Exception:
+                    pass
+                body_text = body_text.strip()
+                if len(body_text) > 500:
+                    body_text = body_text[:497] + "..."
+                safe_text = _sanitize_message(body_text, api_key=self._config.api_key)
+                detail = f": {safe_text}" if safe_text else ""
+            except Exception:
+                detail = ""
+                
             raise EmbeddingRequestError(
-                f"OpenAI-compatible embedding request failed with status {exc.response.status_code}."
+                f"OpenAI-compatible embedding request failed with status {status}{detail}"
             ) from exc
         except Exception as exc:
             raise EmbeddingRequestError(
@@ -315,6 +331,12 @@ def resolve_embedding_config() -> EmbeddingProviderConfig:
                 "OpenAI-compatible embeddings require: " + ", ".join(missing)
             )
 
+        model_lower = config.model.lower()
+        if "deepseek" in model_lower or "gpt-" in model_lower or "claude-" in model_lower or "gemini-" in model_lower:
+            raise EmbeddingConfigurationError(
+                f"Model '{config.model}' appears to be a chat model. OpenAI-compatible embeddings require a dedicated embedding model (e.g., text-embedding-3-small)."
+            )
+
     return config
 
 
@@ -358,6 +380,12 @@ def get_embedding_provider_config() -> EmbeddingProviderConfig:
         if missing:
             raise EmbeddingConfigurationError(
                 "OpenAI-compatible embeddings require: " + ", ".join(missing)
+            )
+
+        model_lower = config.model.lower()
+        if "deepseek" in model_lower or "gpt-" in model_lower or "claude-" in model_lower or "gemini-" in model_lower:
+            raise EmbeddingConfigurationError(
+                f"Model '{config.model}' appears to be a chat model. OpenAI-compatible embeddings require a dedicated embedding model (e.g., text-embedding-3-small)."
             )
 
     return config
