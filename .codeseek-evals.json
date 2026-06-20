@@ -18,7 +18,7 @@
     "query": "What are the main backend modules?",
     "category": "Overview",
     "intent": "general_context",
-    "files": ["backend/retrieval/session_indexer.py", "backend/retrieval/code_answers.py"]
+    "files": ["backend/retrieval/session_indexer.py", "backend/retrieval/generation/code_answers.py"]
   },
   {
     "id": 4,
@@ -81,14 +81,14 @@
     "query": "How does the retrieval pipeline work?",
     "category": "Technical Explanation",
     "intent": "technical_explanation",
-    "files": ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/searcher.py"]
+    "files": ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/search/searcher.py"]
   },
   {
     "id": 13,
     "query": "Where is reranking handled in searcher.py?",
     "category": "Source Location",
     "intent": "code_location",
-    "files": ["backend/retrieval/searcher.py"]
+    "files": ["backend/retrieval/search/searcher.py"]
   },
   {
     "id": 14,
@@ -102,7 +102,7 @@
     "query": "Who wrote code_answers.py?",
     "category": "Source Location",
     "intent": "general_context",
-    "files": ["backend/retrieval/code_answers.py"]
+    "files": ["backend/retrieval/generation/code_answers.py"]
   },
   {
     "id": 16,

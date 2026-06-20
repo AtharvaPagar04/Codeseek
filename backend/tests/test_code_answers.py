@@ -1676,7 +1676,7 @@ class CodeAnswerTests(unittest.TestCase):
             "expansion_type": "primary",
         }
         reasoning_only_source = {
-            "relative_path": "retrieval/thread_store.py",
+            "relative_path": "retrieval/stores/thread_store.py",
             "symbol_name": "ensure_default_thread",
             "start_line": 20,
             "end_line": 40,
@@ -1689,9 +1689,12 @@ class CodeAnswerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
-            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval" / "stores").mkdir(parents=True)
             (repo_root / "retrieval/api_service.py").write_text("def _query_impl():\n    pass\n", encoding="utf-8")
-            (repo_root / "retrieval/thread_store.py").write_text("def ensure_default_thread():\n    pass\n", encoding="utf-8")
+            (repo_root / "retrieval/stores/thread_store.py").write_text(
+                "def ensure_default_thread():\n    pass\n",
+                encoding="utf-8",
+            )
 
             with patch.dict(
                 os.environ,
