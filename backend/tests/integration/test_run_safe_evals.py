@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # Ensure backend directory is in path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from evals.run_safe_evals import main as run_safe_evals_main
 
