@@ -55,7 +55,7 @@ def test_put_embedding_config_openai_compatible(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-3-small",
+        "model": "openai/text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 1536
     }
@@ -87,7 +87,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-3-small",
+        "model": "openai/text-embedding-3-small",
         "api_key": "original_key",
         "dimensions": 1536
     }
@@ -97,7 +97,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload2 = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com/v2",
-        "model": "text-embedding-3-small",
+        "model": "openai/text-embedding-3-small",
         "api_key": "",
         "dimensions": 1536
     }
@@ -113,7 +113,7 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     
     class MockProvider:
         provider_name = "openai_compatible"
-        model_name = "text-embedding-3-small"
+        model_name = "openai/text-embedding-3-small"
         dimensions = 512
         def embed_query(self, text):
             return [0.1] * 512
@@ -123,7 +123,7 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-3-small",
+        "model": "openai/text-embedding-3-small",
         "api_key": "test_key",
         "dimensions": 512
     }
@@ -152,7 +152,7 @@ def test_put_embedding_config_invalid_dimensions(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-3-small",
+        "model": "openai/text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 128
     }

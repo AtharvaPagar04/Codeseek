@@ -74,7 +74,7 @@ export default function ApiTokensModal({ onClose }) {
   const [embConfig, setEmbConfig] = useState(null);
   const [embProvider, setEmbProvider] = useState('local');
   const [embBaseUrl, setEmbBaseUrl] = useState('');
-  const [embModel, setEmbModel] = useState('text-embedding-3-small');
+  const [embModel, setEmbModel] = useState('openai/text-embedding-3-small');
   const [embApiKey, setEmbApiKey] = useState('');
   const [embDims, setEmbDims] = useState('');
   const [embTestSuccess, setEmbTestSuccess] = useState(false);
@@ -106,12 +106,12 @@ export default function ApiTokensModal({ onClose }) {
             if (emb.provider === 'openai_compatible' && options?.openai_compatible_models) {
               if (loadedModel && !options.openai_compatible_models.some(m => m.id === loadedModel)) {
                 invalidSavedModel = true;
-                loadedModel = 'text-embedding-3-small';
+                loadedModel = 'openai/text-embedding-3-small';
               }
             } else if (emb.provider !== 'openai_compatible') {
-              loadedModel = 'text-embedding-3-small';
+              loadedModel = 'openai/text-embedding-3-small';
             }
-            setEmbModel(loadedModel || 'text-embedding-3-small');
+            setEmbModel(loadedModel || 'openai/text-embedding-3-small');
             setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
             
             if (invalidSavedModel) {
@@ -538,7 +538,7 @@ export default function ApiTokensModal({ onClose }) {
                     </p>
                   )}
                   <p className="text-[11px] leading-relaxed text-text-muted mt-1">
-                    {embOptions?.openai_compatible_models?.find(m => m.id === embModel)?.notes || 'For AICredits embeddings, use plain OpenAI embedding model IDs.'}
+                    {embOptions?.openai_compatible_models?.find(m => m.id === embModel)?.notes || 'AICredits may expose both provider-prefixed and plain OpenAI model IDs. Use the provider-prefixed OpenAI model first, such as openai/text-embedding-3-small.'}
                   </p>
                 </div>
                 <div className="flex flex-col gap-1">
