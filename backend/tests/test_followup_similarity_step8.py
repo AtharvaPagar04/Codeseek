@@ -48,7 +48,7 @@ def test_resolve_query_info_keeps_pronoun_followup_with_valid_referent() -> None
             "retrieval.main.process_query",
             return_value=_base_query_info("explain it"),
         ), patch(
-            "retrieval.query_intent.identify_followup_or_low_context",
+            "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
             "retrieval.follow_up_memory._query_similarity_details",
@@ -85,7 +85,7 @@ def test_resolve_query_info_marks_short_unrelated_query_as_new_topic() -> None:
             "retrieval.main.process_query",
             return_value=_base_query_info("explain decorators"),
         ), patch(
-            "retrieval.query_intent.identify_followup_or_low_context",
+            "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
             "retrieval.follow_up_memory._query_similarity_details",
@@ -116,7 +116,7 @@ def test_resolve_query_info_blocks_pronoun_followup_without_referent() -> None:
             "retrieval.main.process_query",
             return_value=_base_query_info("explain it"),
         ), patch(
-            "retrieval.query_intent.identify_followup_or_low_context",
+            "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
             "retrieval.follow_up_memory._query_similarity_details",

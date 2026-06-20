@@ -36,9 +36,9 @@ from retrieval.config import (
     get_repo_root,
 )
 from retrieval.import_resolution import resolve_import_relative_path
-from retrieval.structural_hints import match_structural_hints
+from retrieval.query.structural_hints import match_structural_hints
 from retrieval.source_truth import analyze_source_truth, is_source_truth_query
-from retrieval.query_intent import (
+from retrieval.query.query_intent import (
     classify_query_intent,
     classify_source_intent,
     compute_label_boost,
@@ -608,7 +608,7 @@ def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[di
 
 def _framework_aware_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
     from retrieval.support.repo_profile import get_repo_profile
-    from retrieval.query_intent import classify_source_intent
+    from retrieval.query.query_intent import classify_source_intent
     
     collection = get_collection_name()
     if not collection:
@@ -775,7 +775,7 @@ def search(query_info: dict) -> list[dict]:
         framework_routing_results,
     )
 
-    from retrieval.semantic_targeting import detect_component_semantic_targets
+    from retrieval.query.semantic_targeting import detect_component_semantic_targets
     comp_targeting = detect_component_semantic_targets(raw_query, query_info, merged)
     query_info["component_targeting"] = comp_targeting
 
@@ -3143,7 +3143,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
 
-    from retrieval.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
+    from retrieval.query.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
     label_intent = query_profile.get("intent", "general_context")
     response_mode = query_profile.get("response_mode", "")
     extracted_entities = query_info.get("entities") if query_info else None
@@ -4342,7 +4342,7 @@ def _is_overview_intent(primary_intent: str) -> bool:
 
 
 def _is_overview_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_overview_query
+    from retrieval.query.query_intent import is_overview_query
 
     if is_overview_query(raw_query):
         return True
@@ -4392,13 +4392,13 @@ def _is_overview_query(raw_query: str) -> bool:
 
 
 def _is_indexing_explanation_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_indexing_explanation_query
+    from retrieval.query.query_intent import is_indexing_explanation_query
 
     return is_indexing_explanation_query(raw_query)
 
 
 def _is_retrieval_explanation_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_retrieval_explanation_query
+    from retrieval.query.query_intent import is_retrieval_explanation_query
 
     return is_retrieval_explanation_query(raw_query)
 

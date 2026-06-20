@@ -25,7 +25,7 @@ _load_env_file()
 # Ensure backend directory is in path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from retrieval.query_processor import process_query
+from retrieval.query.query_processor import process_query
 from retrieval.searcher import (
     search, 
     _dense_search, 
@@ -34,7 +34,7 @@ from retrieval.searcher import (
     _exact_entity_search, 
     _dependency_search
 )
-from retrieval.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
+from retrieval.query.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
 from retrieval.db import db_cursor
 
 from evals.golden_loader import load_golden_queries
@@ -277,7 +277,7 @@ def main():
 
         q_info = process_query(raw_query)
         primary_intent = q_info["primary_intent"]
-        from retrieval.query_intent import identify_followup_or_low_context
+        from retrieval.query.query_intent import identify_followup_or_low_context
         is_followup, is_low_context = identify_followup_or_low_context(raw_query, conversation_state=None)
         
         # Map label classifier intent to reranker intent

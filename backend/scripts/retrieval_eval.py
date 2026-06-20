@@ -11,7 +11,7 @@ from retrieval.assembler import assemble
 from retrieval.expander import expand
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory
-from retrieval.query_processor import process_query
+from retrieval.query.query_processor import process_query
 from retrieval.searcher import search
 from retrieval.source_filter import select_sources_for_display
 

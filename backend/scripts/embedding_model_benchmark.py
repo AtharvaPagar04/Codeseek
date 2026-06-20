@@ -47,7 +47,7 @@ try:
         get_collection_name,
     )
     from retrieval.searcher import search
-    from retrieval.query_processor import process_query
+    from retrieval.query.query_processor import process_query
 except ImportError as exc:
     sys.exit(f"Import error – run with PYTHONPATH=.: {exc}")
 

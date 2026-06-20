@@ -9,7 +9,7 @@ from unittest.mock import patch
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.stages.storage import _payload
 from retrieval.support.path_utils import extract_file_reference_tokens, normalize_repo_path
-from retrieval.query_processor import process_query
+from retrieval.query.query_processor import process_query
 from retrieval.searcher import search
 
 

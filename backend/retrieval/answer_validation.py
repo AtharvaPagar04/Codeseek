@@ -194,7 +194,7 @@ def validate_generated_answer(
 
     if "```" in cleaned_answer:
         has_exact = any(src.get("exact_retrieval_hit") for src in (final_sources or allowed_sources))
-        from retrieval.query_intent import is_code_request_query
+        from retrieval.query.query_intent import is_code_request_query
         asked_for_code = is_code_request_query(raw_query)
         
         has_unsupported_code = False

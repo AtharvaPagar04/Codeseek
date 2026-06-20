@@ -102,5 +102,5 @@ When a new language is proposed, add it to the active retrieval roadmap and eval
 | Language detection & skip logic | `rag_ingestion/stages/language.py` | `LANGUAGE_MAP`, `skip_reason="unsupported_language"` |
 | AST parser dispatch | `rag_ingestion/stages/parser.py` | Tier-1 only: Python, JS, TS |
 | Structured file extraction | `rag_ingestion/stages/summary.py` | Tier-2 structured metadata |
-| Query routing by language | `retrieval/query_processor.py` | Intent/entity extraction works on all languages |
+| Query routing by language | `retrieval/query/query_processor.py` | Intent/entity extraction works on all languages |
 | Eval fixtures | `evals/datasets/eval_codeseek_*.json` | Scoped to Python + JS/TS |

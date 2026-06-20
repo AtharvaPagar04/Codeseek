@@ -127,7 +127,7 @@ def _normalized_query(raw_query: str) -> str:
 
 
 def _source_contract_intent(raw_query: str) -> str:
-    from retrieval.query_intent import classify_source_intent
+    from retrieval.query.query_intent import classify_source_intent
 
     return classify_source_intent(raw_query)
 
@@ -331,7 +331,7 @@ def _query_is_general_project_query(raw_query: str) -> bool:
     ):
         return True
     try:
-        from retrieval.query_intent import is_config_query
+        from retrieval.query.query_intent import is_config_query
 
         if is_config_query(raw_query):
             return True
@@ -368,7 +368,7 @@ def _query_matches_general_project_intent(intent: str | None, mode: str | None) 
 
 
 def _query_prefers_implementation_sources(raw_query: str) -> bool:
-    from retrieval.query_intent import is_source_location_query
+    from retrieval.query.query_intent import is_source_location_query
 
     if _query_is_general_project_query(raw_query):
         return False
@@ -546,7 +546,7 @@ def source_excluded_for_query(
     if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
         "backend/retrieval/searcher.py",
         "backend/retrieval/source_filter.py",
-        "backend/retrieval/query_intent.py",
+        "backend/retrieval/query/query_intent.py",
         "backend/retrieval/code_answers.py",
     } and topic not in {"retrieval_internals", "safe_eval_runner", "evaluation_report_api"}:
         return True
@@ -603,7 +603,7 @@ def source_excluded_for_query(
         if path_lower in {
             "backend/retrieval/searcher.py",
             "backend/retrieval/source_filter.py",
-            "backend/retrieval/query_intent.py",
+            "backend/retrieval/query/query_intent.py",
             "backend/retrieval/code_answers.py",
         }:
             return True
@@ -1282,7 +1282,7 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
             "backend/rag_ingestion/main.py",
             "backend/evals/run_safe_evals.py",
             "backend/retrieval/searcher.py",
-            "backend/retrieval/query_processor.py",
+            "backend/retrieval/query/query_processor.py",
             "backend/retrieval/assembler.py",
             "backend/retrieval/code_answers.py",
             "backend/retrieval/llm.py",
@@ -1310,7 +1310,7 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
         "backend/rag_ingestion/main.py",
         "backend/evals/run_safe_evals.py",
         "backend/retrieval/searcher.py",
-        "backend/retrieval/query_processor.py",
+        "backend/retrieval/query/query_processor.py",
         "backend/retrieval/assembler.py",
         "backend/retrieval/code_answers.py",
         "backend/retrieval/llm.py",
@@ -1766,7 +1766,7 @@ def _primary_source_cap(
 ) -> int:
     q = raw_query.lower()
     auth_words = {"auth", "authentication", "session", "cookie", "token"}
-    from retrieval.query_intent import is_code_request_query
+    from retrieval.query.query_intent import is_code_request_query
     if is_code_request_query(raw_query) and any(w in q for w in auth_words):
         return 8
     if wants_phase1_flow and any(term in q for term in ("retrieval", "pipeline", "search", "rerank", "answer", "context")):
@@ -1935,13 +1935,13 @@ def query_tokens_from_text(raw_query: str) -> set[str]:
 
 
 def _query_is_indexing_explanation(raw_query: str) -> bool:
-    from retrieval.query_intent import is_indexing_explanation_query
+    from retrieval.query.query_intent import is_indexing_explanation_query
 
     return is_indexing_explanation_query(raw_query)
 
 
 def _query_is_retrieval_explanation(raw_query: str) -> bool:
-    from retrieval.query_intent import is_retrieval_explanation_query
+    from retrieval.query.query_intent import is_retrieval_explanation_query
 
     return is_retrieval_explanation_query(raw_query)
 
@@ -2493,7 +2493,7 @@ def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
     if relative_path.endswith("retrieval/source_filter.py"):
         return True
 
-    if relative_path.endswith("retrieval/query_processor.py") and symbol_name.startswith("_inject_"):
+    if relative_path.endswith("retrieval/query/query_processor.py") and symbol_name.startswith("_inject_"):
         return True
 
     if relative_path.endswith("retrieval/code_answers.py") and (

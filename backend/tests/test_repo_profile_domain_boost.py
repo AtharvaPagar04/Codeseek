@@ -187,7 +187,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
     def test_feature_location_gate_semantic_targeting(self):
         from retrieval.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/semantic_targeting.py", "expansion_type": "primary"},
+            {"relative_path": "backend/retrieval/query/semantic_targeting.py", "expansion_type": "primary"},
             {"relative_path": "frontend/src/components/EvaluationPanel.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("How does component semantic targeting work?", sources)

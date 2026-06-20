@@ -161,7 +161,7 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Query processor",
-                "paths": {"backend/retrieval/query_processor.py"},
+                "paths": {"backend/retrieval/query/query_processor.py"},
                 "symbols": {"process_query", "classify_query_intent"},
                 "step": "`process_query()` classifies the query, extracts symbols/files/entities, and prepares the intent signals used by the rest of the pipeline.",
                 "required": True,
@@ -981,7 +981,7 @@ def _get_user_facing_why(relative_path: str, default_why: str) -> str:
 
 def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], chunks: list[dict]) -> list[dict]:
     from collections import defaultdict
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
     from retrieval.searcher import (
         classify_source_role,
         match_code_topic_route,
@@ -1275,7 +1275,7 @@ def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], c
 
 
 def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
     from retrieval.searcher import (
         classify_source_role,
         match_code_topic_route,
@@ -1687,7 +1687,7 @@ def filesystem_exact_symbol_sources_for_query(
     raw_query: str,
     candidate_items: list[dict],
 ) -> list[dict]:
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
 
     exact_targets = {sym.lower() for sym in _extract_symbols(raw_query) if sym.strip()}
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw_query):
@@ -2045,7 +2045,7 @@ def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[d
 
 
 def _is_indexing_explanation(raw_query: str) -> bool:
-    from retrieval.query_intent import is_indexing_explanation_query
+    from retrieval.query.query_intent import is_indexing_explanation_query
 
     return is_indexing_explanation_query(raw_query)
 
@@ -2251,7 +2251,7 @@ def rank_follow_up_sources_for_explanation(sources: list[dict], raw_query: str) 
     ``main`` or route handlers, and larger public implementations over tiny
     helpers. Keeps the current file family intact; it only reorders the list.
     """
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
 
     query_lower = raw_query.lower()
     exact_query_symbols = {
@@ -4296,7 +4296,7 @@ def _overview_source_priority(source: dict) -> int:
         for path in (
             "retrieval/searcher.py",
             "retrieval/code_answers.py",
-            "retrieval/query_processor.py",
+            "retrieval/query/query_processor.py",
             "retrieval/assembler.py",
             "retrieval/llm.py",
             "retrieval/source_filter.py",
@@ -4387,7 +4387,7 @@ def _architecture_source_priority(source: dict) -> int:
         relative_path.endswith(path)
         for path in (
             "retrieval/searcher.py",
-            "retrieval/query_processor.py",
+            "retrieval/query/query_processor.py",
             "retrieval/code_answers.py",
             "retrieval/llm.py",
             "retrieval/source_filter.py",

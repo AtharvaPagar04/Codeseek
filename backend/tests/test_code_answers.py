@@ -1853,7 +1853,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/query_processor.py",
+                "relative_path": "backend/retrieval/query/query_processor.py",
                 "symbol_name": "_has_architecture_markers",
                 "chunk_type": "function",
                 "start_line": 664,

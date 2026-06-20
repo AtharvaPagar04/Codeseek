@@ -20,7 +20,7 @@ class TestRetrievalTuning(unittest.TestCase):
         # Candidate 2: query_intent.py (generic parser file)
         candidate_parser = {
             "chunk_id": "c2",
-            "relative_path": "backend/retrieval/query_intent.py",
+            "relative_path": "backend/retrieval/query/query_intent.py",
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher dense score
             "content": "def classify_query_intent(query): ...",

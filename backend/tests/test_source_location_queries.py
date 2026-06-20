@@ -614,7 +614,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "The current retrieval strategy describes the module layout and pipeline flow.",
         }
         query_processor_source = {
-            "relative_path": "backend/retrieval/query_processor.py",
+            "relative_path": "backend/retrieval/query/query_processor.py",
             "symbol_name": "process_query",
             "start_line": 1,
             "end_line": 80,
@@ -750,7 +750,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertIn("Validation and repair", answer)
         self.assertIn("Pipeline documentation", answer)
         self.assertTrue(any(src["relative_path"] == "backend/docs/retrieval_docs/current_retrieval_strategy.md" for src in sources))
-        self.assertTrue(any(src["relative_path"] == "backend/retrieval/query_processor.py" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/query/query_processor.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/searcher.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/code_answers.py" for src in sources))

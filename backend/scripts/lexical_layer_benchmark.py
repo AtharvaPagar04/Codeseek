@@ -61,7 +61,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-sym-004",
         "query": "Where is process_query defined?",
-        "expected_files": ["retrieval/query_processor.py"],
+        "expected_files": ["retrieval/query/query_processor.py"],
         "expected_symbols": ["process_query"],
         "family": "SYMBOL",
     },
@@ -256,7 +256,7 @@ def _measure_index_build(collection: str) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 def main(output_path: str | None = None) -> None:
-    from retrieval.query_processor import process_query
+    from retrieval.query.query_processor import process_query
     from retrieval.config import get_collection_name
     import retrieval.searcher as searcher_mod
 

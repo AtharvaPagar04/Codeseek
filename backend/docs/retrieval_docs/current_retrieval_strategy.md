@@ -9,7 +9,7 @@ Use this doc as the current-state reference and the parent roadmap above as the 
 Primary implementation files:
 
 - `retrieval/main.py`
-- `retrieval/query_processor.py`
+- `retrieval/query/query_processor.py`
 - `retrieval/searcher.py`
 - `retrieval/expander.py`
 - `retrieval/assembler.py`
@@ -246,7 +246,7 @@ When rewriting is triggered, the previous resolved query is prepended to the cur
 
 ## 5. Query Understanding
 
-`retrieval/query_processor.py` classifies the query and extracts entities using bounded heuristics. It still preserves the legacy `intent` field for compatibility, but now also emits a scored intent contract for downstream retrieval and source-gating work.
+`retrieval/query/query_processor.py` classifies the query and extracts entities using bounded heuristics. It still preserves the legacy `intent` field for compatibility, but now also emits a scored intent contract for downstream retrieval and source-gating work.
 
 ### 5.1 Legacy intent classes
 

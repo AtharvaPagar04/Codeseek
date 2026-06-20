@@ -53,9 +53,9 @@ def _effective_symbol_metric_intent(query: str, reranker_intent: str) -> str:
 # Ensure backend directory is in path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from retrieval.query_processor import process_query
+from retrieval.query.query_processor import process_query
 from retrieval.searcher import search
-from retrieval.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
+from retrieval.query.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
 from retrieval.db import db_cursor
 from retrieval.memory import ConversationMemory
 from retrieval.main import _resolve_query_info
@@ -173,7 +173,7 @@ def main():
             
             # Map intents
             from retrieval.follow_up_memory import build_recent_entity_set
-            from retrieval.query_intent import identify_followup_or_low_context
+            from retrieval.query.query_intent import identify_followup_or_low_context
             merged_ents = build_recent_entity_set(recent_turns)
             conversation_state = {
                 "previous_files": merged_ents.get("files", []),

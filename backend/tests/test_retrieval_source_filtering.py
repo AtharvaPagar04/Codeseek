@@ -167,7 +167,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/query_processor.py",
+                "relative_path": "backend/retrieval/query/query_processor.py",
                 "symbol_name": "_llm_classify_intent",
                 "start_line": 1,
                 "end_line": 40,

@@ -1204,7 +1204,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         memory = ConversationMemory(max_turns=2)
         pollution_sources = self.sources + [
             {
-                "relative_path": "backend/retrieval/query_intent.py",
+                "relative_path": "backend/retrieval/query/query_intent.py",
                 "symbol_name": "is_code_request_query",
                 "chunk_type": "function",
                 "content": "def is_code_request_query():\n    pass",

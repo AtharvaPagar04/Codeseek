@@ -54,9 +54,9 @@ from retrieval.follow_up_memory import (
 from retrieval.llm import generate_answer, generate_answer_stream
 from retrieval.memory import ConversationMemory, prepare_history_block
 from retrieval.support.observability import StageMetrics, log_event, new_request_id
-from retrieval.query_processor import process_query
+from retrieval.query.query_processor import process_query
 from retrieval.support.isolation import validate_collection_binding
-from retrieval.query_intent import is_source_location_query
+from retrieval.query.query_intent import is_source_location_query
 from retrieval.searcher import (
     _content_looks_like_symbol_definition,
     _content_looks_like_symbol_usage_only,
@@ -893,7 +893,7 @@ def post_process_answer_and_sources(
     )
 
     # 5. Code request post-processing
-    from retrieval.query_intent import is_explanation_query
+    from retrieval.query.query_intent import is_explanation_query
     is_code_req = ((primary_intent == "CODE_REQUEST") or is_code_request(raw_query)) and not is_explanation_query(raw_query)
     if is_code_req:
         # Strip manual Sources footer (case-insensitive)
@@ -930,7 +930,7 @@ def post_process_answer_and_sources(
         # Replace old intro if present
         old_intro = "Code snippets from retrieved context:"
         if old_intro in answer:
-            from retrieval.query_processor import _extract_symbols
+            from retrieval.query.query_processor import _extract_symbols
             extracted_symbols = _extract_symbols(raw_query)
             
             is_broad_auth = False
@@ -2552,7 +2552,7 @@ def _resolve_query_info(
     query_info["topic_shift_reason"] = str(topic_analysis.get("reason") or "")
 
     # Calculate is_followup and is_low_context using state
-    from retrieval.query_intent import identify_followup_or_low_context
+    from retrieval.query.query_intent import identify_followup_or_low_context
     followup_entity_set = latest_entity_set or recent_entity_set
     conversation_state = {
         "previous_files": followup_entity_set.get("files", []),
@@ -2568,7 +2568,7 @@ def _resolve_query_info(
     query_info["is_followup"] = bool(is_followup_detected and not topic_shift)
     query_info["conversation_state"] = conversation_state
     from retrieval.code_answers import is_code_request
-    from retrieval.query_intent import is_explanation_query, is_source_location_query
+    from retrieval.query.query_intent import is_explanation_query, is_source_location_query
     if is_explanation_query(raw_query):
         query_info["primary_intent"] = "EXPLANATION"
         if "intent" in query_info:
