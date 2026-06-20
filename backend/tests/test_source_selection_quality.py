@@ -99,7 +99,7 @@ def test_indexing_reasoning_context_excludes_unrelated_frontend_and_eval_reports
         "explain me the indexing in current project",
         [
             _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel", score=0.99),
-            _src("evals/reports/latest.json", "<file>", score=0.95),
+            _src("backend/evals/reports/retrieval_latest.json", "<file>", score=0.95),
             _src("backend/scripts/lexical_layer_benchmark.py", "main", score=0.9),
             _src("pipeline/ingest.py", "run_pipeline", score=0.4),
             _src("pipeline/vector_storage.py", "store_chunks", score=0.4),
@@ -112,7 +112,7 @@ def test_indexing_reasoning_context_excludes_unrelated_frontend_and_eval_reports
     assert "pipeline/ingest.py" in reasoning_paths
     assert "pipeline/vector_storage.py" in reasoning_paths
     assert "frontend/src/components/EvaluationPanel.jsx" not in reasoning_paths
-    assert "evals/reports/latest.json" not in reasoning_paths
+    assert "backend/evals/reports/retrieval_latest.json" not in reasoning_paths
     assert "backend/scripts/lexical_layer_benchmark.py" not in reasoning_paths
     assert [source["relative_path"] for source in display[:2]][0].startswith(
         ("pipeline/", "jobs/index_worker.py")
@@ -239,9 +239,9 @@ from retrieval.source_filter import source_excluded_for_query
 
 
 def test_eval_report_json_demoted_for_normal_query() -> None:
-    """evals/reports/*.json should be demoted for a normal (non-eval) query."""
+    """backend/evals/reports/*.json should be demoted for a normal (non-eval) query."""
     eval_src = {
-        "relative_path": "evals/reports/eval_policy_summary_latest.json",
+        "relative_path": "backend/evals/reports/eval_policy_summary.json",
         "symbol_name": "",
         "start_line": 1,
         "end_line": 153,
@@ -282,9 +282,9 @@ def test_tests_allowed_for_test_query() -> None:
 
 
 def test_eval_report_allowed_for_eval_query() -> None:
-    """evals/reports/*.json should NOT be excluded when query asks about evals/reports."""
+    """backend/evals/reports/*.json should NOT be excluded when query asks about evals/reports."""
     eval_src = {
-        "relative_path": "evals/reports/eval_policy_summary_latest.json",
+        "relative_path": "backend/evals/reports/eval_policy_summary.json",
         "symbol_name": "",
         "start_line": 1,
         "end_line": 153,
@@ -300,7 +300,7 @@ def test_normal_query_selects_impl_not_test_chunks() -> None:
     selected = select_sources_for_display(
         "What are the major runtime components?",
         [
-            _src("evals/reports/latest.json", "", score=0.99),
+            _src("backend/evals/reports/retrieval_latest.json", "", score=0.99),
             _src("backend/tests/test_freshness.py", "test_check", score=0.95),
             _src("backend/retrieval/api_service.py", "app", score=0.4),
             _src("backend/rag_ingestion/main.py", "run_pipeline", score=0.4),
@@ -308,7 +308,7 @@ def test_normal_query_selects_impl_not_test_chunks() -> None:
         ],
     )
     paths = [s["relative_path"] for s in selected]
-    assert "evals/reports/latest.json" not in paths
+    assert "backend/evals/reports/retrieval_latest.json" not in paths
     assert "backend/tests/test_freshness.py" not in paths
 
 

@@ -211,11 +211,11 @@ export default function EvaluationPanel({
   --session-id ${sessionId || '<session-id>'} \\
   --expected-repo-root ${defaultRepoRoot} \\
   --expected-collection ${defaultCollection} \\
-  --output-dir ../evals/reports/safe_eval_latest`}
+  --output-dir evals/reports/safe_eval_latest`}
                     </pre>
                     <button
                       onClick={() => {
-                        const text = `cd backend\n.venv/bin/python evals/run_safe_evals.py \\\n  --session-id ${sessionId || '<session-id>'} \\\n  --expected-repo-root ${defaultRepoRoot} \\\n  --expected-collection ${defaultCollection} \\\n  --output-dir ../evals/reports/safe_eval_latest`;
+                        const text = `cd backend\n.venv/bin/python evals/run_safe_evals.py \\\n  --session-id ${sessionId || '<session-id>'} \\\n  --expected-repo-root ${defaultRepoRoot} \\\n  --expected-collection ${defaultCollection} \\\n  --output-dir evals/reports/safe_eval_latest`;
                         navigator.clipboard.writeText(text);
                       }}
                       className="absolute top-2 right-2 p-1.5 bg-surface-3 border border-border rounded text-text-muted hover:text-text-primary hover:border-text-muted transition-colors text-2xs"

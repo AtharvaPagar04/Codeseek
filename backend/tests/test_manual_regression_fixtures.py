@@ -8,7 +8,7 @@ from evals.golden_loader import load_golden_queries
 
 class ManualRegressionFixtureTests(unittest.TestCase):
     def test_manual_regression_golden_queries_loads_expected_cases(self) -> None:
-        fixture_path = Path(__file__).resolve().parents[2] / "evals" / "manual_regression_golden_queries.yaml"
+        fixture_path = Path(__file__).resolve().parents[1] / "evals" / "golden" / "manual_regression_golden_queries.yaml"
         cases = load_golden_queries(fixture_path)
 
         self.assertEqual(
@@ -31,7 +31,7 @@ class ManualRegressionFixtureTests(unittest.TestCase):
         self.assertEqual("source_location", source_location_case["expected_response_mode"])
 
     def test_manual_regression_conversation_trees_loads_expected_sequences(self) -> None:
-        fixture_path = Path(__file__).resolve().parents[2] / "evals" / "manual_regression_conversation_trees.yaml"
+        fixture_path = Path(__file__).resolve().parents[1] / "evals" / "golden" / "manual_regression_conversation_trees.yaml"
         data = yaml.safe_load(fixture_path.read_text(encoding="utf-8"))
         conversations = data.get("conversations", [])
 

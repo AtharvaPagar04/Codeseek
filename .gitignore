@@ -8,6 +8,8 @@ __pycache__/
 
 # Runtime artifacts
 *.db
+data/codeseek.db
+backend/data/codeseek.db
 :memory:
 .rag_ingestion_state.json
 eval_output.txt
@@ -25,3 +27,7 @@ backend/.benchmarks/
 
 # Scratch/debug scripts
 backend/scratch/
+
+# Generated evaluation reports
+evals/reports/
+backend/evals/reports/
