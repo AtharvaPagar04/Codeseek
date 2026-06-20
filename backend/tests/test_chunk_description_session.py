@@ -36,7 +36,7 @@ def test_describe_chunks_override_true():
     provider_config = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
     with patch("rag_ingestion.stages.description.ENABLE_LLM_CHUNK_DESCRIPTIONS", False), \
          patch("rag_ingestion.stages.description._resolve_active_llm_config", return_value=provider_config), \
-         patch("retrieval.llm._chat_completion_request", return_value={
+         patch("retrieval.generation.llm._chat_completion_request", return_value={
              "choices": [{"message": {"content": "Generates a foo function."}}]
          }):
         

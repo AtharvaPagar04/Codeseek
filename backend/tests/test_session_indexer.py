@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from retrieval import auth_store
+from retrieval.stores import auth_store
 from retrieval import session_indexer
 from retrieval.db import db_cursor
 

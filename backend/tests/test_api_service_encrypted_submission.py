@@ -27,7 +27,9 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval import api_service, auth_store, provider_store, submission_crypto
+from retrieval.support import submission_crypto
+from retrieval import api_service
+from retrieval.stores import auth_store, provider_store
 
 
 def _encrypt_for_submission(secret: str) -> dict:

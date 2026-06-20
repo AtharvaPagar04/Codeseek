@@ -1,5 +1,5 @@
-from retrieval.query_intent import classify_response_mode, classify_source_intent, preferred_source_paths_for_intent
-from retrieval.query_processor import process_query
+from retrieval.query.query_intent import classify_response_mode, classify_source_intent, preferred_source_paths_for_intent
+from retrieval.query.query_processor import process_query
 
 
 def test_repo_about_maps_to_overview() -> None:
@@ -55,7 +55,7 @@ def test_source_intent_injects_preferred_files_into_query_info() -> None:
 def test_inject_source_contract_files_none_paths() -> None:
     # 1. Test _inject_source_contract_files returns immediately if active_index_paths is None
     from unittest.mock import patch
-    from retrieval.query_intent import SOURCE_INTENT_CONTRACTS
+    from retrieval.query.query_intent import SOURCE_INTENT_CONTRACTS
     mock_contracts = {"api_endpoint": ("backend/retrieval/api_service.py",)}
     with patch.dict(SOURCE_INTENT_CONTRACTS, mock_contracts):
         # When active_index_paths is None

@@ -3,8 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from retrieval import auth_store
-from retrieval import github_store
+from retrieval.stores import auth_store
+from retrieval.stores import github_store
 
 
 class GithubStoreTests(unittest.TestCase):

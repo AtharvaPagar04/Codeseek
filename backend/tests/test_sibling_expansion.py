@@ -53,7 +53,7 @@ class _FakeEnc:
 fake_tiktoken.get_encoding = lambda _: _FakeEnc()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval.expander import (  # noqa: E402
+from retrieval.search.expander import (  # noqa: E402
     _build_query_tokens,
     _merge_siblings,
     _sibling_lexical_overlap,
@@ -176,10 +176,10 @@ class TestMergeSiblingsMinOverlap:
         primary = _make_chunk("primary-1", "create_session", start_line=5, end_line=25)
         seen: dict[str, dict] = {primary["chunk_id"]: primary}
 
-        with patch("retrieval.expander._sibling_chunks_for", return_value=siblings), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 3), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=siblings), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 3), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], query_tokens)
 
         return seen
@@ -212,10 +212,10 @@ class TestMergeSiblingsMinOverlap:
             "already-in-seen": already_seen,
         }
         tokens = frozenset(["other_func"])
-        with patch("retrieval.expander._sibling_chunks_for", return_value=[already_seen]), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 3), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=[already_seen]), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 3), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], tokens)
         # still exactly the same keys
         assert list(seen.keys()) == ["primary-1", "already-in-seen"]
@@ -241,10 +241,10 @@ class TestSiblingPerPrimaryLimit:
         seen: dict[str, dict] = {primary["chunk_id"]: primary}
         tokens = frozenset(["session", "helper"])
 
-        with patch("retrieval.expander._sibling_chunks_for", return_value=siblings), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 2), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=siblings), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 2), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], tokens)
 
         sibling_keys = [k for k in seen if k != "p1"]
@@ -268,10 +268,10 @@ class TestSiblingPerPrimaryLimit:
 
         tokens = frozenset(["helper"])
         # Budget fraction 0.20 of 7000 / 200 per sib = 7 max total.
-        with patch("retrieval.expander._sibling_chunks_for", side_effect=fake_siblings_for), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 2), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", side_effect=fake_siblings_for), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 2), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, primaries, tokens)
 
         sibling_count = sum(1 for v in seen.values() if v.get("expansion_type") == "sibling")
@@ -290,14 +290,14 @@ class TestExpandIntentGating:
         primary = _make_chunk("p1", "create_session")
         query_info = _query_info(intent, raw_query="explain create_session auth flow")
 
-        with patch("retrieval.expander.EXPAND_SIBLINGS", True), \
-             patch("retrieval.expander.EXPAND_SPLIT_PARTS", False), \
-             patch("retrieval.expander.EXPAND_PARENT", False), \
-             patch("retrieval.expander.EXPAND_CALLS", False), \
-             patch("retrieval.expander._sibling_chunks_for", return_value=sibling_chunks), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 3), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander.EXPAND_SIBLINGS", True), \
+             patch("retrieval.search.expander.EXPAND_SPLIT_PARTS", False), \
+             patch("retrieval.search.expander.EXPAND_PARENT", False), \
+             patch("retrieval.search.expander.EXPAND_CALLS", False), \
+             patch("retrieval.search.expander._sibling_chunks_for", return_value=sibling_chunks), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 3), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             return expand([primary], query_info)
 
     def test_explanation_intent_allows_siblings(self) -> None:
@@ -323,11 +323,11 @@ class TestExpandIntentGating:
         primary = _make_chunk("p1", "create_session")
         query_info = _query_info("EXPLANATION", raw_query="explain session")
 
-        with patch("retrieval.expander.EXPAND_SIBLINGS", False), \
-             patch("retrieval.expander.EXPAND_SPLIT_PARTS", False), \
-             patch("retrieval.expander.EXPAND_PARENT", False), \
-             patch("retrieval.expander.EXPAND_CALLS", False), \
-             patch("retrieval.expander._sibling_chunks_for", return_value=[sibling]):
+        with patch("retrieval.search.expander.EXPAND_SIBLINGS", False), \
+             patch("retrieval.search.expander.EXPAND_SPLIT_PARTS", False), \
+             patch("retrieval.search.expander.EXPAND_PARENT", False), \
+             patch("retrieval.search.expander.EXPAND_CALLS", False), \
+             patch("retrieval.search.expander._sibling_chunks_for", return_value=[sibling]):
             result = expand([primary], query_info)
 
         types_ = {c["expansion_type"] for c in result}
@@ -366,10 +366,10 @@ class TestSiblingContextForClassExplanation:
         seen: dict[str, dict] = {primary["chunk_id"]: primary}
         tokens = frozenset(["auth", "method", "service"])
 
-        with patch("retrieval.expander._sibling_chunks_for", return_value=method_siblings), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 2), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=method_siblings), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 2), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], tokens)
 
         sibling_keys = [k for k in seen if k != "cls-init"]
@@ -392,10 +392,10 @@ class TestSiblingContextForClassExplanation:
         seen: dict[str, dict] = {primary["chunk_id"]: primary}
         tokens = frozenset(["create_session", "token", "auth", "session"])
 
-        with patch("retrieval.expander._sibling_chunks_for", return_value=[high_overlap, low_overlap]), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 1), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=[high_overlap, low_overlap]), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 1), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], tokens)
 
         # Only 1 sibling allowed; should be the higher-overlap one.
@@ -411,10 +411,10 @@ class TestSiblingContextForClassExplanation:
         seen: dict[str, dict] = {primary["chunk_id"]: primary}
         tokens = frozenset(["module", "helper"])
 
-        with patch("retrieval.expander._sibling_chunks_for", return_value=module_siblings), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 2), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander._sibling_chunks_for", return_value=module_siblings), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 2), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             _merge_siblings(seen, [primary], tokens)
 
         assert "sib-mod-1" in seen
@@ -429,14 +429,14 @@ class TestSiblingContextForClassExplanation:
         )
         query_info = _query_info("EXPLANATION", raw_query="explain auth_login and auth_logout flow")
 
-        with patch("retrieval.expander.EXPAND_SIBLINGS", True), \
-             patch("retrieval.expander.EXPAND_SPLIT_PARTS", False), \
-             patch("retrieval.expander.EXPAND_PARENT", False), \
-             patch("retrieval.expander.EXPAND_CALLS", False), \
-             patch("retrieval.expander._sibling_chunks_for", return_value=[sibling]), \
-             patch("retrieval.expander.SIBLING_MIN_OVERLAP", 1), \
-             patch("retrieval.expander.SIBLING_MAX_PER_PRIMARY", 2), \
-             patch("retrieval.expander.SIBLING_BUDGET_FRACTION", 0.20):
+        with patch("retrieval.search.expander.EXPAND_SIBLINGS", True), \
+             patch("retrieval.search.expander.EXPAND_SPLIT_PARTS", False), \
+             patch("retrieval.search.expander.EXPAND_PARENT", False), \
+             patch("retrieval.search.expander.EXPAND_CALLS", False), \
+             patch("retrieval.search.expander._sibling_chunks_for", return_value=[sibling]), \
+             patch("retrieval.search.expander.SIBLING_MIN_OVERLAP", 1), \
+             patch("retrieval.search.expander.SIBLING_MAX_PER_PRIMARY", 2), \
+             patch("retrieval.search.expander.SIBLING_BUDGET_FRACTION", 0.20):
             result = expand([primary], query_info)
 
         expansion_types = {c["expansion_type"] for c in result}

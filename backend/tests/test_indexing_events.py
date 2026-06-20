@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrieval.indexing_events import (
+from retrieval.support.indexing_events import (
     clear_indexing_events,
     emit_indexing_event,
     get_indexing_events,
@@ -60,7 +60,7 @@ class TestEmitAndRetrieve:
         assert get_indexing_events("test-session") == []
 
     def test_max_events_cap(self):
-        from retrieval import indexing_events
+        from retrieval.support import indexing_events
         original = indexing_events.MAX_EVENTS_PER_SESSION
         try:
             indexing_events.MAX_EVENTS_PER_SESSION = 5
@@ -228,7 +228,7 @@ class TestPipelineEventCallback:
         ]
         provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
 
-        with patch("retrieval.llm._chat_completion_request", return_value={
+        with patch("retrieval.generation.llm._chat_completion_request", return_value={
             "choices": [{"message": {"content": "A function."}}]
         }):
             describe_chunks(chunks, enabled=True, provider_config=provider, event_callback=cb)

@@ -22,7 +22,7 @@ from rag_ingestion.utils.gpu_cleanup import (
     unload_ollama_model,
     cleanup_after_batch,
 )
-from retrieval.isolation import expected_collection_name, validate_collection_binding
+from retrieval.support.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
 from rag_ingestion.stages.embedder import embed_chunks, unload_embedding_model
@@ -435,7 +435,7 @@ def run_incremental_pipeline(
     """
     from rag_ingestion.utils.counters import PipelineCounters
     from rag_ingestion.stages.loader import load_repository
-    from retrieval.isolation import expected_collection_name, validate_collection_binding
+    from retrieval.support.isolation import expected_collection_name, validate_collection_binding
     from rag_ingestion.stages.discovery import discover_files
     from rag_ingestion.stages.filtering import filter_files
     from rag_ingestion.stages.language import detect_languages

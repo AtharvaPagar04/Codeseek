@@ -77,51 +77,51 @@
       "id": "cs-011",
       "query": "Which retrieval stage performs dense vector search?",
       "expected_sources": [
-        {"relative_path": "retrieval/searcher.py", "symbol_name": "_dense_search"}
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_dense_search"}
       ]
     },
     {
       "id": "cs-012",
       "query": "Where are retrieval results merged and deduplicated?",
       "expected_sources": [
-        {"relative_path": "retrieval/searcher.py", "symbol_name": "_merge_results"}
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_merge_results"}
       ]
     },
     {
       "id": "cs-013",
       "query": "Which function applies lexical reranking to search candidates?",
       "expected_sources": [
-        {"relative_path": "retrieval/searcher.py", "symbol_name": "_rerank_with_query_tokens"}
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_rerank_with_query_tokens"}
       ]
     },
     {
       "id": "cs-014",
       "query": "Where are parent and callee expansions implemented?",
       "expected_sources": [
-        {"relative_path": "retrieval/expander.py", "symbol_name": "_parent_chunk"},
-        {"relative_path": "retrieval/expander.py", "symbol_name": "_callee_chunks"}
+        {"relative_path": "retrieval/search/expander.py", "symbol_name": "_parent_chunk"},
+        {"relative_path": "retrieval/search/expander.py", "symbol_name": "_callee_chunks"}
       ]
     },
     {
       "id": "cs-015",
       "query": "Which retrieval function assembles final context and sources?",
       "expected_sources": [
-        {"relative_path": "retrieval/assembler.py", "symbol_name": "assemble"}
+        {"relative_path": "retrieval/generation/assembler.py", "symbol_name": "assemble"}
       ]
     },
     {
       "id": "cs-016",
       "query": "Where is source display filtering and test-source suppression implemented?",
       "expected_sources": [
-        {"relative_path": "retrieval/source_filter.py", "symbol_name": "select_sources_for_display"},
-        {"relative_path": "retrieval/source_filter.py", "symbol_name": "is_test_source"}
+        {"relative_path": "retrieval/search/source_filter.py", "symbol_name": "select_sources_for_display"},
+        {"relative_path": "retrieval/search/source_filter.py", "symbol_name": "is_test_source"}
       ]
     },
     {
       "id": "cs-017",
       "query": "Which function calls Groq to generate the final answer?",
       "expected_sources": [
-        {"relative_path": "retrieval/llm.py", "symbol_name": "_groq_answer"}
+        {"relative_path": "retrieval/generation/llm.py", "symbol_name": "_groq_answer"}
       ]
     },
     {

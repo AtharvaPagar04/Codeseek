@@ -5,7 +5,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from retrieval import submission_crypto
+from retrieval.support import submission_crypto
 
 
 class SubmissionCryptoTests(unittest.TestCase):

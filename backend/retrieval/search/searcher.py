@@ -35,15 +35,15 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
-from retrieval.import_resolution import resolve_import_relative_path
-from retrieval.structural_hints import match_structural_hints
-from retrieval.source_truth import analyze_source_truth, is_source_truth_query
-from retrieval.query_intent import (
+from retrieval.search.import_resolution import resolve_import_relative_path
+from retrieval.query.structural_hints import match_structural_hints
+from retrieval.search.source_truth import analyze_source_truth, is_source_truth_query
+from retrieval.query.query_intent import (
     classify_query_intent,
     classify_source_intent,
     compute_label_boost,
 )
-from retrieval.path_utils import (
+from retrieval.support.path_utils import (
     is_filename_only,
     normalize_repo_path,
     path_matches_candidate,
@@ -82,7 +82,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "target_paths": [
             "backend/retrieval/api_service.py",
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
         ],
         "target_symbols": [
             "_auth_key",
@@ -99,14 +99,14 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "_require_auth": "backend/retrieval/api_service.py",
             "_current_auth_user": "backend/retrieval/api_service.py",
             "_require_auth_user": "backend/retrieval/api_service.py",
-            "create_auth_session": "backend/retrieval/auth_store.py",
-            "get_user_for_session_token": "backend/retrieval/auth_store.py",
-            "upsert_github_user": "backend/retrieval/auth_store.py",
-            "delete_auth_session": "backend/retrieval/auth_store.py",
+            "create_auth_session": "backend/retrieval/stores/auth_store.py",
+            "get_user_for_session_token": "backend/retrieval/stores/auth_store.py",
+            "upsert_github_user": "backend/retrieval/stores/auth_store.py",
+            "delete_auth_session": "backend/retrieval/stores/auth_store.py",
         },
         "exclude_paths": [
             "backend/rag_ingestion/stages/storage.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         ],
         "multi_intro": "I found multiple auth-related functions:",
         "single_intro": "Here is the matching function:",
@@ -132,10 +132,10 @@ CODE_REQUEST_TOPIC_ROUTES = (
         "target_symbols": [],
         "symbol_path_hints": {},
         "exclude_paths": [
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
             "backend/retrieval/api_service.py",
             "backend/rag_ingestion/stages/storage.py",
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
         ],
         "multi_intro": "I found multiple safe-eval runner snippets:",
         "single_intro": "Here is the matching function/code:",
@@ -160,9 +160,9 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "store_chunks": "backend/rag_ingestion/stages/storage.py",
         },
         "exclude_paths": [
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/retrieval/api_service.py",
-            "backend/retrieval/auth_store.py",
+            "backend/retrieval/stores/auth_store.py",
         ],
         "multi_intro": "I found multiple Qdrant upsert snippets:",
         "single_intro": "Here is the matching function/code:",
@@ -189,7 +189,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "target_paths": [
             "backend/retrieval/api_service.py",
-            "backend/retrieval/eval_reports.py",
+            "backend/retrieval/support/eval_reports.py",
         ],
         "target_symbols": [
             "get_latest_evaluation_report_v1",
@@ -197,10 +197,10 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "symbol_path_hints": {
             "get_latest_evaluation_report_v1": "backend/retrieval/api_service.py",
-            "get_latest_evaluation_report": "backend/retrieval/eval_reports.py",
+            "get_latest_evaluation_report": "backend/retrieval/support/eval_reports.py",
         },
         "exclude_paths": [
-            "backend/retrieval/searcher.py",
+            "backend/retrieval/search/searcher.py",
             "backend/rag_ingestion/stages/storage.py",
         ],
         "multi_intro": "I found multiple evaluation-report endpoint snippets:",
@@ -230,8 +230,8 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "searcher source filter",
         ],
         "target_paths": [
-            "backend/retrieval/searcher.py",
-            "backend/retrieval/source_filter.py",
+            "backend/retrieval/search/searcher.py",
+            "backend/retrieval/search/source_filter.py",
         ],
         "target_symbols": [
             "_merge_results",
@@ -244,14 +244,14 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "apply_query_negative_filters",
         ],
         "symbol_path_hints": {
-            "_merge_results": "backend/retrieval/searcher.py",
-            "_rerank_with_query_tokens": "backend/retrieval/searcher.py",
-            "feature_specific_routing_boost": "backend/retrieval/searcher.py",
-            "artifact_penalty_for_intent": "backend/retrieval/searcher.py",
-            "symbol_definition_boost": "backend/retrieval/searcher.py",
-            "content_exact_match_boost": "backend/retrieval/searcher.py",
-            "classify_source_role": "backend/retrieval/searcher.py",
-            "apply_query_negative_filters": "backend/retrieval/source_filter.py",
+            "_merge_results": "backend/retrieval/search/searcher.py",
+            "_rerank_with_query_tokens": "backend/retrieval/search/searcher.py",
+            "feature_specific_routing_boost": "backend/retrieval/search/searcher.py",
+            "artifact_penalty_for_intent": "backend/retrieval/search/searcher.py",
+            "symbol_definition_boost": "backend/retrieval/search/searcher.py",
+            "content_exact_match_boost": "backend/retrieval/search/searcher.py",
+            "classify_source_role": "backend/retrieval/search/searcher.py",
+            "apply_query_negative_filters": "backend/retrieval/search/source_filter.py",
         },
         "exclude_paths": [
             "backend/scripts/lexical_layer_benchmark.py",
@@ -332,7 +332,7 @@ def query_explicitly_requests_searcher_internals(raw_query: str) -> bool:
             "retrieval candidates",
             "searcher internals",
             "searcher.py",
-            "retrieval/searcher.py",
+            "retrieval/search/searcher.py",
             "source filter",
             "source_filter",
             "where is reranking handled",
@@ -453,7 +453,7 @@ def _qdrant_call(fn):
 
 
 def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = None) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
+    from retrieval.support.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
     collection = get_collection_name()
     if query_info is not None:
         query_info.setdefault("domain_boost_retrieval", {
@@ -561,7 +561,7 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
     return results
 
 def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import discover_feature_recall_candidates, get_repo_profile
+    from retrieval.support.repo_profile import discover_feature_recall_candidates, get_repo_profile
     collection = get_collection_name()
     if not collection:
         return []
@@ -607,8 +607,8 @@ def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[di
 
 
 def _framework_aware_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import get_repo_profile
-    from retrieval.query_intent import classify_source_intent
+    from retrieval.support.repo_profile import get_repo_profile
+    from retrieval.query.query_intent import classify_source_intent
     
     collection = get_collection_name()
     if not collection:
@@ -775,7 +775,7 @@ def search(query_info: dict) -> list[dict]:
         framework_routing_results,
     )
 
-    from retrieval.semantic_targeting import detect_component_semantic_targets
+    from retrieval.query.semantic_targeting import detect_component_semantic_targets
     comp_targeting = detect_component_semantic_targets(raw_query, query_info, merged)
     query_info["component_targeting"] = comp_targeting
 
@@ -799,7 +799,7 @@ def search(query_info: dict) -> list[dict]:
             )
 
     try:
-        from retrieval.exact_value_grounding import detect_exact_value_query
+        from retrieval.generation.exact_value_grounding import detect_exact_value_query
         exact_val_query = detect_exact_value_query(raw_query, query_info)
         query_info["exact_value_grounding"] = exact_val_query
         
@@ -851,7 +851,7 @@ def search(query_info: dict) -> list[dict]:
         ]
 
     if "feature_routing" in query_info:
-        from retrieval.repo_profile import FEATURE_PHRASE_NORMALIZATION
+        from retrieval.support.repo_profile import FEATURE_PHRASE_NORMALIZATION
         for m in merged:
             if m.get("feature_routing_hit"):
                 path = m.get("relative_path")
@@ -2419,7 +2419,7 @@ def _inject_code_topic_routing_candidates(
     primary_intent: str,
     matched_route: dict | None = None,
 ) -> list[tuple[dict, float, str]]:
-    from retrieval.code_answers import is_code_request
+    from retrieval.generation.code_answers import is_code_request
     route = matched_route or match_code_topic_route(raw_query, primary_intent)
     if not route:
         return []
@@ -2494,7 +2494,7 @@ def _inject_code_topic_routing_candidates(
 
 
 def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list[tuple[dict, float, str]]:
-    from retrieval.code_answers import is_code_request
+    from retrieval.generation.code_answers import is_code_request
     if primary_intent != "CODE_REQUEST" and not is_code_request(raw_query):
         return _inject_code_topic_routing_candidates(raw_query, primary_intent)
 
@@ -2503,7 +2503,7 @@ def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list
         "query endpoint": [("_query_impl", "backend/retrieval/api_service.py")],
         "qdrant upsert": [("store_chunks", "backend/rag_ingestion/stages/storage.py")],
         "session validation": [
-            ("get_user_for_session_token", "backend/retrieval/auth_store.py"),
+            ("get_user_for_session_token", "backend/retrieval/stores/auth_store.py"),
             ("_current_auth_user", "backend/retrieval/api_service.py"),
             ("_require_auth_user", "backend/retrieval/api_service.py"),
         ],
@@ -3036,7 +3036,7 @@ def classify_source_role(relative_path: str) -> str:
     path_lower = relative_path.lower()
     
     # 1. answer_template
-    if path_lower == "backend/retrieval/code_answers.py" or path_lower.endswith("backend/retrieval/code_answers.py"):
+    if path_lower == "backend/retrieval/generation/code_answers.py" or path_lower.endswith("backend/retrieval/generation/code_answers.py"):
         return "answer_template"
         
     # 2. generated_eval
@@ -3126,11 +3126,11 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
         or "evaluation diagnostics endpoint" in q
         or "where is evaluation report" in q
     ):
-        if path in {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"}:
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"}:
             return 1.0
     # 4. auth/session validation
     if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:
-        if path in {"backend/retrieval/api_service.py", "backend/retrieval/auth_store.py", "backend/retrieval/db.py"}:
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/stores/auth_store.py", "backend/retrieval/db.py"}:
             return 0.9
             
     return 0.0
@@ -3139,11 +3139,11 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
 def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info: dict | None = None) -> list[dict]:
     """Apply unified label-aware and lexical scoring to rank candidates."""
     from pathlib import Path
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.search.source_filter import apply_query_negative_filters
     query_profile = classify_query_intent(raw_query)
     tokens = _query_tokens(raw_query)
 
-    from retrieval.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
+    from retrieval.query.query_intent import map_label_intent_to_reranker_intent, is_dependency_trace_query
     label_intent = query_profile.get("intent", "general_context")
     response_mode = query_profile.get("response_mode", "")
     extracted_entities = query_info.get("entities") if query_info else None
@@ -3524,7 +3524,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                         code_topic_route_deboost -= 2.5
                 if topic_route_excludes_path(relative_path, matched_code_topic_route):
                     code_topic_route_deboost -= 5.0
-                if strict_code_topic_route and "backend/retrieval/searcher.py" in relative_path.lower():
+                if strict_code_topic_route and "backend/retrieval/search/searcher.py" in relative_path.lower():
                     code_topic_route_deboost -= 4.0
 
         # Injected candidates boost
@@ -3572,7 +3572,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         dyn_penalty = 0.0
         collection = get_collection_name()
         if collection:
-            from retrieval.repo_profile import compute_dynamic_boosts_and_penalties
+            from retrieval.support.repo_profile import compute_dynamic_boosts_and_penalties
             dyn_boost, dyn_penalty, dyn_meta = compute_dynamic_boosts_and_penalties(
                 item, raw_query, extracted_entities or {}, collection
             )
@@ -3631,7 +3631,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             file_counts[rel_path] = count + 1
 
     if query_info is not None and collection:
-        from retrieval.repo_profile import build_diagnostics
+        from retrieval.support.repo_profile import build_diagnostics
         query_info["domain_boost_retrieval"] = build_diagnostics(
             diverse_results, raw_query, extracted_entities or {}, collection
         )
@@ -4084,7 +4084,7 @@ def _fetch_import_symbol_chunks(
 
 
 def _build_imported_symbol_payload(path: Path, relative_path: str, imported_name: str) -> dict | None:
-    from retrieval.code_answers import _extract_export_block
+    from retrieval.generation.code_answers import _extract_export_block
 
     block = _extract_export_block(path, imported_name)
     if not block:
@@ -4220,9 +4220,9 @@ def _overview_priority(payload: dict) -> int:
         score += 42
     if relative_path.endswith("rag_ingestion/main.py"):
         score += 40
-    if relative_path.endswith("retrieval/searcher.py"):
+    if relative_path.endswith("retrieval/search/searcher.py"):
         score += 28
-    if relative_path.endswith("retrieval/code_answers.py"):
+    if relative_path.endswith("retrieval/generation/code_answers.py"):
         score += 22
     if relative_path.endswith("package.json"):
         score += 24
@@ -4342,7 +4342,7 @@ def _is_overview_intent(primary_intent: str) -> bool:
 
 
 def _is_overview_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_overview_query
+    from retrieval.query.query_intent import is_overview_query
 
     if is_overview_query(raw_query):
         return True
@@ -4392,13 +4392,13 @@ def _is_overview_query(raw_query: str) -> bool:
 
 
 def _is_indexing_explanation_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_indexing_explanation_query
+    from retrieval.query.query_intent import is_indexing_explanation_query
 
     return is_indexing_explanation_query(raw_query)
 
 
 def _is_retrieval_explanation_query(raw_query: str) -> bool:
-    from retrieval.query_intent import is_retrieval_explanation_query
+    from retrieval.query.query_intent import is_retrieval_explanation_query
 
     return is_retrieval_explanation_query(raw_query)
 

@@ -1,6 +1,6 @@
 # [ignoring loop detection]
 import pytest
-from retrieval.observability import sanitize_credentials_in_string, sanitize_for_log
+from retrieval.support.observability import sanitize_credentials_in_string, sanitize_for_log
 from retrieval.db import db_cursor, create_indexing_job, update_indexing_job, mark_indexing_job_cancelled, list_indexing_jobs
 
 def test_sanitize_credentials_in_string():

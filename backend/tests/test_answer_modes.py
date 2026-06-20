@@ -1,5 +1,5 @@
 import unittest
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     build_source_location_answer,
     build_overview_answer,
     build_flow_answer,
@@ -92,7 +92,7 @@ class TestAnswerModes(unittest.TestCase):
                 "summary": "Looks up session token.",
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "delete_auth_session",
                 "summary": "Deletes session.",
             },

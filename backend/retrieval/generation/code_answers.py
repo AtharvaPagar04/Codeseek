@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from retrieval.config import QDRANT_HOST, QDRANT_PORT, get_collection_name, get_repo_root
-from retrieval.import_resolution import resolve_import_target
+from retrieval.search.import_resolution import resolve_import_target
 
 _DIRECT_CODE_PHRASES = (
     "show code",
@@ -161,21 +161,21 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Query processor",
-                "paths": {"backend/retrieval/query_processor.py"},
+                "paths": {"backend/retrieval/query/query_processor.py"},
                 "symbols": {"process_query", "classify_query_intent"},
                 "step": "`process_query()` classifies the query, extracts symbols/files/entities, and prepares the intent signals used by the rest of the pipeline.",
                 "required": True,
             },
             {
                 "name": "Searcher",
-                "paths": {"backend/retrieval/searcher.py"},
+                "paths": {"backend/retrieval/search/searcher.py"},
                 "symbols": {"search"},
                 "step": "`search()` runs dense retrieval, lexical retrieval, metadata matching, entity matching, and dependency-aware candidate discovery.",
                 "required": True,
             },
             {
                 "name": "Merge and rerank",
-                "paths": {"backend/retrieval/searcher.py"},
+                "paths": {"backend/retrieval/search/searcher.py"},
                 "symbols": {"_merge_results", "_rerank_with_query_tokens"},
                 "step": "The searcher merges candidate pools and reranks them using query overlap, labels, and path/symbol boosts.",
                 "required": False,
@@ -189,14 +189,14 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Answer generation",
-                "paths": {"backend/retrieval/code_answers.py", "backend/retrieval/llm.py"},
+                "paths": {"backend/retrieval/generation/code_answers.py", "backend/retrieval/generation/llm.py"},
                 "symbols": {"build_flow_answer", "generate_answer"},
                 "step": "Deterministic flow responses and the LLM fallback convert the assembled evidence into the final grounded answer.",
                 "required": False,
             },
             {
                 "name": "Validation and repair",
-                "paths": {"backend/retrieval/answer_validation.py"},
+                "paths": {"backend/retrieval/generation/answer_validation.py"},
                 "symbols": {"validate_generated_answer"},
                 "step": "Answer validation repairs weakly sourced flow answers and removes unsupported references before the response is returned.",
                 "required": False,
@@ -215,14 +215,14 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Session creation",
-                "paths": {"backend/retrieval/auth_store.py"},
+                "paths": {"backend/retrieval/stores/auth_store.py"},
                 "symbols": {"create_auth_session"},
                 "step": "`create_auth_session()` stores a hashed auth session token with expiry metadata.",
                 "required": True,
             },
             {
                 "name": "Session lookup/validation",
-                "paths": {"backend/retrieval/auth_store.py"},
+                "paths": {"backend/retrieval/stores/auth_store.py"},
                 "symbols": {"get_user_for_session_token"},
                 "step": "Later requests resolve the cookie by hashing the submitted token and loading the associated user.",
                 "required": True,
@@ -663,7 +663,7 @@ def is_flow_explanation_request(raw_query: str) -> bool:
     if not query:
         return False
     try:
-        from retrieval.searcher import query_explicitly_requests_searcher_internals
+        from retrieval.search.searcher import query_explicitly_requests_searcher_internals
 
         if query_explicitly_requests_searcher_internals(raw_query):
             return False
@@ -981,15 +981,15 @@ def _get_user_facing_why(relative_path: str, default_why: str) -> str:
 
 def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], chunks: list[dict]) -> list[dict]:
     from collections import defaultdict
-    from retrieval.query_processor import _extract_symbols
-    from retrieval.searcher import (
+    from retrieval.query.query_processor import _extract_symbols
+    from retrieval.search.searcher import (
         classify_source_role,
         match_code_topic_route,
         path_matches_topic_route,
         query_explicitly_requests_non_implementation_artifacts,
         symbol_matches_topic_route,
     )
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.search.source_filter import apply_query_negative_filters
 
     def route_item_is_valid(item: dict, route: dict) -> bool:
         rel_path = item.get("relative_path", "")
@@ -1011,7 +1011,7 @@ def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], c
         if route_id == "evaluation_report_api":
             rel_lower = rel_path.lower()
             content_lower = content.lower()
-            if "backend/retrieval/searcher.py" in rel_lower:
+            if "backend/retrieval/search/searcher.py" in rel_lower:
                 return False
             if symbol in {"retry_session_v1", "index_latest_session_v1"}:
                 return False
@@ -1021,7 +1021,7 @@ def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], c
                     or "get_latest_evaluation_report" in content
                     or symbol == "get_latest_evaluation_report_v1"
                 )
-            if rel_lower.endswith("backend/retrieval/eval_reports.py") or "backend/retrieval/eval_reports.py" in rel_lower:
+            if rel_lower.endswith("backend/retrieval/support/eval_reports.py") or "backend/retrieval/support/eval_reports.py" in rel_lower:
                 return (
                     symbol == "get_latest_evaluation_report"
                     or "safe evaluation report" in content_lower
@@ -1275,15 +1275,15 @@ def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], c
 
 
 def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[dict]) -> str:
-    from retrieval.query_processor import _extract_symbols
-    from retrieval.searcher import (
+    from retrieval.query.query_processor import _extract_symbols
+    from retrieval.search.searcher import (
         classify_source_role,
         match_code_topic_route,
         path_matches_topic_route,
         query_explicitly_requests_non_implementation_artifacts,
         symbol_matches_topic_route,
     )
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.search.source_filter import apply_query_negative_filters
     from collections import defaultdict
     import re
 
@@ -1317,7 +1317,7 @@ def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[
         if route_id == "evaluation_report_api":
             rel_lower = rel_path.lower()
             content_lower = content.lower()
-            if "backend/retrieval/searcher.py" in rel_lower:
+            if "backend/retrieval/search/searcher.py" in rel_lower:
                 return False
             if symbol in {"retry_session_v1", "index_latest_session_v1"}:
                 return False
@@ -1327,7 +1327,7 @@ def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[
                     or "get_latest_evaluation_report" in content
                     or symbol == "get_latest_evaluation_report_v1"
                 )
-            if rel_lower.endswith("backend/retrieval/eval_reports.py") or "backend/retrieval/eval_reports.py" in rel_lower:
+            if rel_lower.endswith("backend/retrieval/support/eval_reports.py") or "backend/retrieval/support/eval_reports.py" in rel_lower:
                 return (
                     symbol == "get_latest_evaluation_report"
                     or "safe evaluation report" in content_lower
@@ -1663,7 +1663,7 @@ def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[
 
 
 def route_filesystem_sources_for_query(raw_query: str) -> list[dict]:
-    from retrieval.searcher import match_code_topic_route
+    from retrieval.search.searcher import match_code_topic_route
 
     matched_code_topic_route = match_code_topic_route(raw_query, "CODE_REQUEST")
     if not matched_code_topic_route:
@@ -1687,7 +1687,7 @@ def filesystem_exact_symbol_sources_for_query(
     raw_query: str,
     candidate_items: list[dict],
 ) -> list[dict]:
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
 
     exact_targets = {sym.lower() for sym in _extract_symbols(raw_query) if sym.strip()}
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw_query):
@@ -2045,7 +2045,7 @@ def build_explanation_answer(raw_query: str, sources: list[dict], chunks: list[d
 
 
 def _is_indexing_explanation(raw_query: str) -> bool:
-    from retrieval.query_intent import is_indexing_explanation_query
+    from retrieval.query.query_intent import is_indexing_explanation_query
 
     return is_indexing_explanation_query(raw_query)
 
@@ -2251,7 +2251,7 @@ def rank_follow_up_sources_for_explanation(sources: list[dict], raw_query: str) 
     ``main`` or route handlers, and larger public implementations over tiny
     helpers. Keeps the current file family intact; it only reorders the list.
     """
-    from retrieval.query_processor import _extract_symbols
+    from retrieval.query.query_processor import _extract_symbols
 
     query_lower = raw_query.lower()
     exact_query_symbols = {
@@ -2438,7 +2438,7 @@ def _preferred_overview_sources(raw_query: str, sources: list[dict]) -> list[dic
             int(item.get("start_line", 0)),
         ),
     )[:8]
-    from retrieval.source_filter import refine_overview_display_sources
+    from retrieval.search.source_filter import refine_overview_display_sources
     return refine_overview_display_sources(raw_query, selected, sources, target_count=8)
 
 
@@ -2517,7 +2517,7 @@ def _preferred_architecture_sources(raw_query: str, sources: list[dict], chunks:
         selected_keys.add(key)
         if relative_path:
             selected_paths.add(relative_path)
-    from retrieval.source_filter import refine_overview_display_sources
+    from retrieval.search.source_filter import refine_overview_display_sources
     return refine_overview_display_sources(raw_query, selected, candidates, target_count=8)
 
 
@@ -2857,10 +2857,10 @@ def _auth_filesystem_sources(route: dict) -> list[dict]:
         ("backend/retrieval/api_service.py", "_require_auth"),
         ("backend/retrieval/api_service.py", "_current_auth_user"),
         ("backend/retrieval/api_service.py", "_require_auth_user"),
-        ("backend/retrieval/auth_store.py", "create_auth_session"),
-        ("backend/retrieval/auth_store.py", "get_user_for_session_token"),
-        ("backend/retrieval/auth_store.py", "upsert_github_user"),
-        ("backend/retrieval/auth_store.py", "delete_auth_session"),
+        ("backend/retrieval/stores/auth_store.py", "create_auth_session"),
+        ("backend/retrieval/stores/auth_store.py", "get_user_for_session_token"),
+        ("backend/retrieval/stores/auth_store.py", "upsert_github_user"),
+        ("backend/retrieval/stores/auth_store.py", "delete_auth_session"),
     ]
     results: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -2962,7 +2962,7 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
                         }
                     )
 
-    report_path = _resolve_repo_file("backend/retrieval/eval_reports.py")
+    report_path = _resolve_repo_file("backend/retrieval/support/eval_reports.py")
     if report_path is not None:
         try:
             report_lines = report_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -2974,7 +2974,7 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
                 start_line, end_line = rng
                 results.append(
                     {
-                        "relative_path": "backend/retrieval/eval_reports.py",
+                        "relative_path": "backend/retrieval/support/eval_reports.py",
                         "symbol_name": "get_latest_evaluation_report",
                         "chunk_type": "function",
                         "start_line": start_line,
@@ -2988,14 +2988,14 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
 
 def _retrieval_internals_filesystem_sources(route: dict) -> list[dict]:
     targets = [
-        ("backend/retrieval/searcher.py", "_rerank_with_query_tokens"),
-        ("backend/retrieval/searcher.py", "_merge_results"),
-        ("backend/retrieval/searcher.py", "feature_specific_routing_boost"),
-        ("backend/retrieval/searcher.py", "artifact_penalty_for_intent"),
-        ("backend/retrieval/searcher.py", "symbol_definition_boost"),
-        ("backend/retrieval/searcher.py", "content_exact_match_boost"),
-        ("backend/retrieval/searcher.py", "classify_source_role"),
-        ("backend/retrieval/source_filter.py", "apply_query_negative_filters"),
+        ("backend/retrieval/search/searcher.py", "_rerank_with_query_tokens"),
+        ("backend/retrieval/search/searcher.py", "_merge_results"),
+        ("backend/retrieval/search/searcher.py", "feature_specific_routing_boost"),
+        ("backend/retrieval/search/searcher.py", "artifact_penalty_for_intent"),
+        ("backend/retrieval/search/searcher.py", "symbol_definition_boost"),
+        ("backend/retrieval/search/searcher.py", "content_exact_match_boost"),
+        ("backend/retrieval/search/searcher.py", "classify_source_role"),
+        ("backend/retrieval/search/source_filter.py", "apply_query_negative_filters"),
     ]
     results: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -3821,10 +3821,10 @@ def _architecture_module_points(sources: list[dict]) -> list[str]:
             points.append("`rag_ingestion/main.py` runs the ingestion pipeline that parses files, generates chunks, embeds them, and stores them.")
         elif "evals/run_safe_evals.py" in lower:
             points.append("`evals/run_safe_evals.py` drives safe eval execution, cleanup, step orchestration, and report writing.")
-        elif "retrieval/searcher.py" in lower:
-            points.append("`retrieval/searcher.py` handles evidence retrieval, result fusion, and overview-candidate injection.")
-        elif "retrieval/code_answers.py" in lower:
-            points.append("`retrieval/code_answers.py` renders deterministic overview, architecture, flow, and explanation answers.")
+        elif "retrieval/search/searcher.py" in lower:
+            points.append("`retrieval/search/searcher.py` handles evidence retrieval, result fusion, and overview-candidate injection.")
+        elif "retrieval/generation/code_answers.py" in lower:
+            points.append("`retrieval/generation/code_answers.py` renders deterministic overview, architecture, flow, and explanation answers.")
         elif lower.endswith(("api_service.py", "main.py", "app.py")):
             points.append(f"{relative_path} provides an application/API entrypoint through `{symbol}`.")
         elif "session_indexer.py" in lower:
@@ -4294,14 +4294,14 @@ def _overview_source_priority(source: dict) -> int:
     elif any(
         relative_path.endswith(path)
         for path in (
-            "retrieval/searcher.py",
-            "retrieval/code_answers.py",
-            "retrieval/query_processor.py",
-            "retrieval/assembler.py",
-            "retrieval/llm.py",
-            "retrieval/source_filter.py",
-            "retrieval/answer_validation.py",
-            "retrieval/follow_up_memory.py",
+            "retrieval/search/searcher.py",
+            "retrieval/generation/code_answers.py",
+            "retrieval/query/query_processor.py",
+            "retrieval/generation/assembler.py",
+            "retrieval/generation/llm.py",
+            "retrieval/search/source_filter.py",
+            "retrieval/generation/answer_validation.py",
+            "retrieval/memory/follow_up_memory.py",
             "retrieval/db.py",
         )
     ):
@@ -4386,13 +4386,13 @@ def _architecture_source_priority(source: dict) -> int:
     elif any(
         relative_path.endswith(path)
         for path in (
-            "retrieval/searcher.py",
-            "retrieval/query_processor.py",
-            "retrieval/code_answers.py",
-            "retrieval/llm.py",
-            "retrieval/source_filter.py",
-            "retrieval/answer_validation.py",
-            "retrieval/follow_up_memory.py",
+            "retrieval/search/searcher.py",
+            "retrieval/query/query_processor.py",
+            "retrieval/generation/code_answers.py",
+            "retrieval/generation/llm.py",
+            "retrieval/search/source_filter.py",
+            "retrieval/generation/answer_validation.py",
+            "retrieval/memory/follow_up_memory.py",
             "retrieval/db.py",
         )
     ):
@@ -4643,7 +4643,7 @@ def build_source_location_answer(
         is_weak = evidence_confidence.get("level") in ("weak", "partial")
     else:
         try:
-            from retrieval.source_filter import score_evidence_confidence
+            from retrieval.search.source_filter import score_evidence_confidence
             conf = score_evidence_confidence(raw_query, sources, query_info)
             is_weak = conf.get("level") in ("weak", "partial")
         except Exception:
@@ -4684,8 +4684,8 @@ def build_source_location_answer(
         or "searcher.py" in q
     ):
         preferred_paths = (
-            "backend/retrieval/searcher.py",
-            "backend/retrieval/source_filter.py",
+            "backend/retrieval/search/searcher.py",
+            "backend/retrieval/search/source_filter.py",
         )
         preferred = []
         seen = set()
@@ -4702,10 +4702,10 @@ def build_source_location_answer(
                     break
         if preferred:
             explanation = (
-                "Reranking is mainly handled in backend/retrieval/searcher.py :: _rerank_with_query_tokens. "
+                "Reranking is mainly handled in backend/retrieval/search/searcher.py :: _rerank_with_query_tokens. "
                 "_merge_results merges dense, lexical, metadata, exact-entity, dependency, history, and injected candidates before final scoring. "
                 "feature_specific_routing_boost, artifact_penalty_for_intent, symbol_definition_boost, content_exact_match_boost, and classify_source_role influence the final score, "
-                "and backend/retrieval/source_filter.py :: apply_query_negative_filters removes unrelated candidates before the answer is selected."
+                "and backend/retrieval/search/source_filter.py :: apply_query_negative_filters removes unrelated candidates before the answer is selected."
             )
             ordered = preferred + [src for src in sources if str(src.get("relative_path", "")).strip() not in seen]
             return _format_source_location_target_shape(ordered, explanation, is_weak, keep_primary_searcher=True)
@@ -4719,7 +4719,7 @@ def build_source_location_answer(
     ):
         preferred_paths = (
             "backend/retrieval/api_service.py",
-            "backend/retrieval/eval_reports.py",
+            "backend/retrieval/support/eval_reports.py",
         )
         preferred = []
         seen = set()
@@ -4737,7 +4737,7 @@ def build_source_location_answer(
         if preferred:
             explanation = (
                 "The implementation is in backend/retrieval/api_service.py :: get_latest_evaluation_report_v1 "
-                "and backend/retrieval/eval_reports.py :: get_latest_evaluation_report. "
+                "and backend/retrieval/support/eval_reports.py :: get_latest_evaluation_report. "
                 "The API wrapper authenticates and checks session visibility, then calls the report loader to return the latest evaluation report data."
             )
             ordered = preferred + [src for src in sources if str(src.get("relative_path", "")).strip() not in seen]
@@ -4782,10 +4782,10 @@ def _format_source_location_target_shape(
                     break
 
     # Do not display code_answers.py/searcher.py as the main implementation source if other files exist
-    if not keep_primary_searcher and sources and sources[0].get("relative_path", "") in {"backend/retrieval/code_answers.py", "backend/retrieval/searcher.py"}:
+    if not keep_primary_searcher and sources and sources[0].get("relative_path", "") in {"backend/retrieval/generation/code_answers.py", "backend/retrieval/search/searcher.py"}:
         for idx, src in enumerate(sources):
             s_path = src.get("relative_path", "")
-            if s_path and s_path not in {"backend/retrieval/code_answers.py", "backend/retrieval/searcher.py"}:
+            if s_path and s_path not in {"backend/retrieval/generation/code_answers.py", "backend/retrieval/search/searcher.py"}:
                 sources = [src] + [s for i, s in enumerate(sources) if i != idx]
                 break
 

@@ -8,11 +8,11 @@ class RetrievalEvalScoringTests(unittest.TestCase):
     def test_expected_file_score_matches_relative_paths(self) -> None:
         items = [
             {"relative_path": "README.md"},
-            {"relative_path": "backend/retrieval/searcher.py"},
+            {"relative_path": "backend/retrieval/search/searcher.py"},
         ]
 
         self.assertEqual(
-            retrieval_eval._expected_file_score(items, ["README.md", "backend/retrieval/searcher.py"]),
+            retrieval_eval._expected_file_score(items, ["README.md", "backend/retrieval/search/searcher.py"]),
             1.0,
         )
         self.assertEqual(retrieval_eval._expected_file_score(items, ["missing.py"]), 0.0)

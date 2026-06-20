@@ -2,7 +2,7 @@ import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from retrieval.searcher import (
+from retrieval.search.searcher import (
     _inject_previous_files_candidates,
     _rerank_with_query_tokens,
     search,
@@ -24,17 +24,17 @@ def test_unrelated_new_query_skips_previous_candidate_injection() -> None:
         "conversation_state": {"previous_files": ["backend/retrieval/api_service.py"]},
     }
 
-    with patch("retrieval.searcher._dense_search", return_value=[]), \
-         patch("retrieval.searcher._metadata_search", return_value=[]), \
-         patch("retrieval.searcher._exact_entity_search", return_value=[]), \
-         patch("retrieval.searcher._dependency_search", return_value=[]), \
-         patch("retrieval.searcher._local_content_match_candidates", return_value=[]), \
-         patch("retrieval.searcher._inject_previous_files_candidates", return_value=([], "blocked_intent_or_new_entity")) as inject_prev, \
-         patch("retrieval.searcher._inject_direct_topics_candidates", return_value=[]), \
-         patch("retrieval.searcher._inject_code_topic_routing_candidates", return_value=[]), \
-         patch("retrieval.searcher._merge_results", return_value=[]), \
-         patch("retrieval.searcher._inject_import_backing_candidates", side_effect=lambda _q, c: c), \
-         patch("retrieval.searcher._rerank_with_query_tokens", return_value=[]):
+    with patch("retrieval.search.searcher._dense_search", return_value=[]), \
+         patch("retrieval.search.searcher._metadata_search", return_value=[]), \
+         patch("retrieval.search.searcher._exact_entity_search", return_value=[]), \
+         patch("retrieval.search.searcher._dependency_search", return_value=[]), \
+         patch("retrieval.search.searcher._local_content_match_candidates", return_value=[]), \
+         patch("retrieval.search.searcher._inject_previous_files_candidates", return_value=([], "blocked_intent_or_new_entity")) as inject_prev, \
+         patch("retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]), \
+         patch("retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]), \
+         patch("retrieval.search.searcher._merge_results", return_value=[]), \
+         patch("retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda _q, c: c), \
+         patch("retrieval.search.searcher._rerank_with_query_tokens", return_value=[]):
         results = search(query_info)
 
     assert results == []
@@ -56,9 +56,9 @@ def test_previous_candidate_injection_is_capped_and_tagged_for_followup() -> Non
         "followup_hint": "backend/retrieval/api_service.py::sym0",
     }
 
-    with patch("retrieval.searcher._get_client") as get_client, \
-         patch("retrieval.searcher.get_collection_name", return_value="test_collection"), \
-         patch("retrieval.searcher._qdrant_call", side_effect=lambda fn: fn()):
+    with patch("retrieval.search.searcher._get_client") as get_client, \
+         patch("retrieval.search.searcher.get_collection_name", return_value="test_collection"), \
+         patch("retrieval.search.searcher._qdrant_call", side_effect=lambda fn: fn()):
         get_client.return_value.scroll.return_value = response
         results, reason = _inject_previous_files_candidates(
             ["backend/retrieval/api_service.py"],

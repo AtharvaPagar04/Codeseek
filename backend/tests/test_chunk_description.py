@@ -83,7 +83,7 @@ class ChunkDescriptionTests(unittest.TestCase):
         
         with patch("rag_ingestion.stages.description.ENABLE_LLM_CHUNK_DESCRIPTIONS", True), \
              patch("rag_ingestion.stages.description._resolve_active_llm_config", return_value=provider_config), \
-             patch("retrieval.llm._chat_completion_request", return_value={
+             patch("retrieval.generation.llm._chat_completion_request", return_value={
                  "choices": [{"message": {"content": "Generates a foo function."}}]
              }):
             
@@ -99,7 +99,7 @@ class ChunkDescriptionTests(unittest.TestCase):
         
         with patch("rag_ingestion.stages.description.ENABLE_LLM_CHUNK_DESCRIPTIONS", True), \
              patch("rag_ingestion.stages.description._resolve_active_llm_config", return_value=provider_config), \
-             patch("retrieval.llm._chat_completion_request", side_effect=RuntimeError("LLM offline")):
+             patch("retrieval.generation.llm._chat_completion_request", side_effect=RuntimeError("LLM offline")):
             
             result = describe_chunks(chunks)
             # Should fallback to summary

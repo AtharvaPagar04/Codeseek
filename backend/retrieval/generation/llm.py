@@ -7,7 +7,7 @@ from typing import Any, Iterator
 import httpx
 import json
 
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     is_code_request,
     is_explanation_request,
     is_overview_request,
@@ -28,7 +28,7 @@ from retrieval.config import (
     RETRIEVAL_RETRY_ATTEMPTS,
     RETRIEVAL_RETRY_BACKOFF_SECONDS,
 )
-from retrieval.local_llm_runtime import (
+from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     get_provider_runtime_state,
     wait_for_model_ready,

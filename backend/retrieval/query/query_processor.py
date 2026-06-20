@@ -3,7 +3,7 @@
 import re
 
 from retrieval.config import ENABLE_SCORED_INTENT
-from retrieval.path_utils import extract_file_reference_tokens
+from retrieval.support.path_utils import extract_file_reference_tokens
 
 DEPENDENCY_PATTERNS = [
     r"\bcalls\b",
@@ -177,7 +177,7 @@ LOOKUP_PHRASES = (
 def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
     """Call active LLM provider to classify the query intent."""
     import os
-    from retrieval.llm import _chat_completion_request
+    from retrieval.generation.llm import _chat_completion_request
     from retrieval.config import (
         LOCAL_LLM_BASE_URL,
         LOCAL_LLM_PRIMARY_MODEL,
@@ -218,7 +218,7 @@ def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
         max_tokens=max_tokens,
     )
     
-    from retrieval.llm import _extract_message_content
+    from retrieval.generation.llm import _extract_message_content
     result = _extract_message_content(response).strip().upper()
     return result
 
@@ -293,7 +293,7 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
         classifier_latency_ms = (time.perf_counter() - t0) * 1000.0
 
     primary_intent = max(intent_scores, key=intent_scores.get)
-    from retrieval.query_intent import classify_response_mode, classify_source_intent
+    from retrieval.query.query_intent import classify_response_mode, classify_source_intent
 
     confidence = float(intent_scores.get(primary_intent, 0.0))
     response_mode = classify_response_mode(query)
@@ -345,7 +345,7 @@ def _inject_flow_symbols(query: str, entities: dict) -> None:
 
 
 def _inject_domain_boosts(query: str, entities: dict) -> None:
-    from retrieval.query_intent import extract_domain_hints
+    from retrieval.query.query_intent import extract_domain_hints
     hints = extract_domain_hints(query)
     if hints:
         boosts = list(entities.get("boost_labels") or [])
@@ -371,7 +371,7 @@ def _inject_architecture_files(query: str, entities: dict, active_index_paths: s
 def _inject_source_contract_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:
     if active_index_paths is None:
         return
-    from retrieval.query_intent import classify_source_intent, preferred_source_paths_for_intent
+    from retrieval.query.query_intent import classify_source_intent, preferred_source_paths_for_intent
 
     source_intent = classify_source_intent(query)
     preferred_files = preferred_source_paths_for_intent(source_intent)
@@ -605,7 +605,7 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     overview_markers = _has_overview_markers(lower)
     architecture_markers = _has_architecture_markers(lower)
     tech_stack_markers = _has_tech_stack_markers(lower)
-    from retrieval.query_intent import classify_source_intent
+    from retrieval.query.query_intent import classify_source_intent
 
     source_intent = classify_source_intent(query)
 
@@ -769,12 +769,12 @@ def _has_tech_stack_markers(lower: str) -> bool:
 
 
 def _has_followup_markers(lower: str) -> bool:
-    from retrieval.query_intent import regex_match_explicit_followup_terms
+    from retrieval.query.query_intent import regex_match_explicit_followup_terms
     return regex_match_explicit_followup_terms(lower)
 
 
 def _has_code_request_markers(lower: str) -> bool:
-    from retrieval.query_intent import is_code_request_query
+    from retrieval.query.query_intent import is_code_request_query
     return is_code_request_query(lower)
 
 

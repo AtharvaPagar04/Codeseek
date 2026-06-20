@@ -194,7 +194,7 @@ def validate_generated_answer(
 
     if "```" in cleaned_answer:
         has_exact = any(src.get("exact_retrieval_hit") for src in (final_sources or allowed_sources))
-        from retrieval.query_intent import is_code_request_query
+        from retrieval.query.query_intent import is_code_request_query
         asked_for_code = is_code_request_query(raw_query)
         
         has_unsupported_code = False
@@ -371,7 +371,7 @@ def _validate_docs_summary(
     final_sources: list[dict],
     reasons: list[str],
 ) -> dict:
-    from retrieval.code_answers import build_docs_summary_answer, preferred_docs_summary_sources
+    from retrieval.generation.code_answers import build_docs_summary_answer, preferred_docs_summary_sources
 
     docs_sources = preferred_docs_summary_sources(final_sources or allowed_sources)
     if not docs_sources:
@@ -429,7 +429,7 @@ def _validate_code_snippet(
 
     candidate_sources = repaired_sources or _prune_code_sources(allowed_sources, allowed_sources)
     if candidate_sources:
-        from retrieval.code_answers import build_code_snippet_answer
+        from retrieval.generation.code_answers import build_code_snippet_answer
 
         rebuilt = build_code_snippet_answer(raw_query, candidate_sources, candidate_sources)
         if rebuilt and "```" in rebuilt:
@@ -465,7 +465,7 @@ def _validate_source_location(
             "reasons": reasons + ["low_context"],
         }
 
-    from retrieval.code_answers import build_source_location_answer
+    from retrieval.generation.code_answers import build_source_location_answer
 
     repaired_answer = build_source_location_answer(raw_query, preferred_sources, query_info=None)
     repaired_sources = _prune_sources_to_allowed(preferred_sources, _source_paths(preferred_sources))
@@ -492,7 +492,7 @@ def _validate_flow_summary(
 
     if not repaired_sources or not _answer_mentions_allowed_paths(cleaned_answer, allowed_paths):
         if repaired_sources:
-            from retrieval.code_answers import build_flow_answer
+            from retrieval.generation.code_answers import build_flow_answer
 
             rebuilt = build_flow_answer(raw_query, repaired_sources, repaired_sources)
             if isinstance(rebuilt, tuple):
@@ -702,8 +702,8 @@ def _preferred_source_location_sources(sources: list[dict], raw_query: str) -> l
     impl_sources = [src for src in sources if is_impl(src)]
     if impl_sources and not allow_docs_tests:
         try:
-            from retrieval.searcher import classify_source_role
-            from retrieval.searcher import match_code_topic_route
+            from retrieval.search.searcher import classify_source_role
+            from retrieval.search.searcher import match_code_topic_route
         except Exception:
             classify_source_role = None
             match_code_topic_route = None

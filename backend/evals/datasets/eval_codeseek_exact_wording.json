@@ -25,7 +25,7 @@
       "query": "Which code invalidates the lexical index after ingestion?",
       "expected_sources": [
         {"relative_path": "retrieval/session_indexer.py", "symbol_name": "_index_job"},
-        {"relative_path": "retrieval/searcher.py", "symbol_name": "invalidate_lexical_index"}
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "invalidate_lexical_index"}
       ],
       "expected_symbols": [
         "invalidate_lexical_index"

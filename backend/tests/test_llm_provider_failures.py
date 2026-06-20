@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import httpx
 
-from retrieval.llm import LlmProviderError, generate_answer
+from retrieval.generation.llm import LlmProviderError, generate_answer
 
 
 def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
@@ -15,7 +15,7 @@ def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
 class LlmProviderFailureTests(unittest.TestCase):
     def test_invalid_provider_key_raises_structured_error(self) -> None:
         with patch(
-            "retrieval.llm._chat_completion_request",
+            "retrieval.generation.llm._chat_completion_request",
             side_effect=_http_status_error(401),
         ):
             with self.assertRaises(LlmProviderError) as ctx:
@@ -35,7 +35,7 @@ class LlmProviderFailureTests(unittest.TestCase):
 
     def test_provider_rate_limit_raises_429(self) -> None:
         with patch(
-            "retrieval.llm._chat_completion_request",
+            "retrieval.generation.llm._chat_completion_request",
             side_effect=_http_status_error(429),
         ):
             with self.assertRaises(LlmProviderError) as ctx:

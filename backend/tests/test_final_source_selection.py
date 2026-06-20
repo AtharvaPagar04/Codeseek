@@ -1,5 +1,5 @@
 import pytest
-from retrieval.source_filter import prioritize_final_sources
+from retrieval.search.source_filter import prioritize_final_sources
 
 def test_express_app_initialization_final_source():
     raw_query = "Where is the Express app initialized?"

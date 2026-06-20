@@ -9,7 +9,7 @@ from rag_ingestion.config import (
 )
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
-from retrieval.path_utils import path_metadata
+from retrieval.support.path_utils import path_metadata
 
 CONTENT_EXCERPT_CHARS = 12000
 

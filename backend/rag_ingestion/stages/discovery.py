@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rag_ingestion.models.file import FileRecord
 from rag_ingestion.utils.counters import PipelineCounters
-from retrieval.path_utils import resolve_repo_relative_path
+from retrieval.support.path_utils import resolve_repo_relative_path
 
 
 def discover_files(

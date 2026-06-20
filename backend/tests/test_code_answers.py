@@ -23,7 +23,7 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_code_answer,
     build_explanation_answer,
@@ -37,9 +37,9 @@ from retrieval.code_answers import (
     is_flow_explanation_request,
     is_overview_request,
 )
-from retrieval.llm import _build_prompt
+from retrieval.generation.llm import _build_prompt
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 class CodeAnswerTests(unittest.TestCase):
@@ -673,7 +673,7 @@ class CodeAnswerTests(unittest.TestCase):
             from unittest.mock import MagicMock
             mock_client = MagicMock()
             mock_client.scroll.return_value = ([], None)
-            with patch("retrieval.code_answers.get_repo_root", return_value=str(repo_root)), patch("retrieval.code_answers._get_architecture_qdrant_client", return_value=mock_client):
+            with patch("retrieval.generation.code_answers.get_repo_root", return_value=str(repo_root)), patch("retrieval.generation.code_answers._get_architecture_qdrant_client", return_value=mock_client):
                 answer, selected_sources = build_architecture_answer(
                     "How is this codebase structured?",
                     shown_sources,
@@ -751,7 +751,7 @@ class CodeAnswerTests(unittest.TestCase):
             },
         ]
 
-        with patch("retrieval.code_answers._architecture_indexed_bucket_fallbacks", return_value=indexed_fallbacks):
+        with patch("retrieval.generation.code_answers._architecture_indexed_bucket_fallbacks", return_value=indexed_fallbacks):
             answer, selected_sources = build_architecture_answer(
                 "Give me a high-level architecture overview of this codebase.",
                 shown_sources,
@@ -858,7 +858,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "start_line": 100,
                 "end_line": 128,
@@ -866,7 +866,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "start_line": 130,
                 "end_line": 154,
@@ -874,7 +874,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "delete_auth_session",
                 "start_line": 157,
                 "end_line": 164,
@@ -913,7 +913,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "start_line": 100,
                 "end_line": 128,
@@ -921,7 +921,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/auth_store.py",
+                "relative_path": "retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "start_line": 130,
                 "end_line": 154,
@@ -941,8 +941,8 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(
             [
                 "retrieval/api_service.py",
-                "retrieval/auth_store.py",
-                "retrieval/auth_store.py",
+                "retrieval/stores/auth_store.py",
+                "retrieval/stores/auth_store.py",
             ],
             [source["relative_path"] for source in selected],
         )
@@ -1111,7 +1111,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "create_provider_credential",
                 "start_line": 62,
                 "end_line": 116,
@@ -1119,7 +1119,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "set_active_provider_credential",
                 "start_line": 119,
                 "end_line": 140,
@@ -1127,7 +1127,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "delete_provider_credential",
                 "start_line": 143,
                 "end_line": 152,
@@ -1135,7 +1135,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "get_active_provider_credential",
                 "start_line": 45,
                 "end_line": 59,
@@ -1212,7 +1212,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/provider_store.py",
+                    "relative_path": "retrieval/stores/provider_store.py",
                     "symbol_name": "create_provider_credential",
                     "start_line": 1,
                     "end_line": 5,
@@ -1220,7 +1220,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/provider_store.py",
+                    "relative_path": "retrieval/stores/provider_store.py",
                     "symbol_name": "set_active_provider_credential",
                     "start_line": 7,
                     "end_line": 11,
@@ -1287,7 +1287,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "create_auth_session",
                     "start_line": 1,
                     "end_line": 5,
@@ -1295,7 +1295,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "get_user_for_session_token",
                     "start_line": 7,
                     "end_line": 12,
@@ -1303,7 +1303,7 @@ class CodeAnswerTests(unittest.TestCase):
                     "expansion_type": "primary",
                 },
                 {
-                    "relative_path": "retrieval/auth_store.py",
+                    "relative_path": "retrieval/stores/auth_store.py",
                     "symbol_name": "delete_auth_session",
                     "start_line": 14,
                     "end_line": 15,
@@ -1676,7 +1676,7 @@ class CodeAnswerTests(unittest.TestCase):
             "expansion_type": "primary",
         }
         reasoning_only_source = {
-            "relative_path": "retrieval/thread_store.py",
+            "relative_path": "retrieval/stores/thread_store.py",
             "symbol_name": "ensure_default_thread",
             "start_line": 20,
             "end_line": 40,
@@ -1689,9 +1689,12 @@ class CodeAnswerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
-            (repo_root / "retrieval").mkdir(parents=True)
+            (repo_root / "retrieval" / "stores").mkdir(parents=True)
             (repo_root / "retrieval/api_service.py").write_text("def _query_impl():\n    pass\n", encoding="utf-8")
-            (repo_root / "retrieval/thread_store.py").write_text("def ensure_default_thread():\n    pass\n", encoding="utf-8")
+            (repo_root / "retrieval/stores/thread_store.py").write_text(
+                "def ensure_default_thread():\n    pass\n",
+                encoding="utf-8",
+            )
 
             with patch.dict(
                 os.environ,
@@ -1853,7 +1856,7 @@ class CodeAnswerTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/query_processor.py",
+                "relative_path": "backend/retrieval/query/query_processor.py",
                 "symbol_name": "_has_architecture_markers",
                 "chunk_type": "function",
                 "start_line": 664,

@@ -1,4 +1,4 @@
-from retrieval.source_filter import select_sources_for_display, split_sources_two_layer
+from retrieval.search.source_filter import select_sources_for_display, split_sources_two_layer
 
 
 def _src(path: str, symbol: str = "", *, score: float = 0.5, expansion_type: str = "primary") -> dict:
@@ -66,8 +66,8 @@ def test_source_cards_location_prefers_frontend_rendering_sources() -> None:
     selected = select_sources_for_display(
         "where are source cards rendered",
         [
-            _src("backend/retrieval/answer_validation.py", "validate_generated_answer", score=0.99),
-            _src("backend/retrieval/follow_up_memory.py", "extract_cited_entities", score=0.8),
+            _src("backend/retrieval/generation/answer_validation.py", "validate_generated_answer", score=0.99),
+            _src("backend/retrieval/memory/follow_up_memory.py", "extract_cited_entities", score=0.8),
             _src("frontend/src/components/MessageBubble.jsx", "MessageBubble", score=0.55),
             _src("frontend/src/components/SourceCard.jsx", "SourceCard", score=0.5),
         ],
@@ -235,7 +235,7 @@ def test_failure_recovery_sources_are_grounded_not_speculative_helpers() -> None
 # Task 5: Tests/eval/report demotion for normal queries
 # ---------------------------------------------------------------------------
 
-from retrieval.source_filter import source_excluded_for_query
+from retrieval.search.source_filter import source_excluded_for_query
 
 
 def test_eval_report_json_demoted_for_normal_query() -> None:

@@ -3,7 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 def _source(path: str, symbol: str, score: float = 0.2) -> dict:
@@ -21,7 +21,7 @@ def _source(path: str, symbol: str, score: float = 0.2) -> dict:
 
 def test_weak_non_exact_retrieval_returns_structured_low_confidence_response() -> None:
     memory = ConversationMemory(max_turns=2)
-    candidate = _source("backend/retrieval/provider_health.py", "_check_ollama_available", score=0.21)
+    candidate = _source("backend/retrieval/support/provider_health.py", "_check_ollama_available", score=0.21)
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch.dict(
@@ -60,9 +60,9 @@ def test_weak_non_exact_retrieval_returns_structured_low_confidence_response() -
 
     assert "I could not find sufficiently relevant code context for this query." in answer
     assert "Closest matches found:" in answer
-    assert "backend/retrieval/provider_health.py" in answer
+    assert "backend/retrieval/support/provider_health.py" in answer
     assert "Try using:" in answer
-    assert sources[0]["relative_path"] == "backend/retrieval/provider_health.py"
+    assert sources[0]["relative_path"] == "backend/retrieval/support/provider_health.py"
     assert token_count == 12
     assert meta["response_mode"] == "low_context"
     assert meta["memory_diagnostics"]["retrieval"]["low_confidence_gate"] is True

@@ -20,9 +20,10 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval import chat_store, session_indexer
+from retrieval.stores import chat_store
+from retrieval import session_indexer
 from retrieval.main import run_query, LOW_CONTEXT_FALLBACK
-from retrieval.memory import ConversationMemory, SessionConversationMemory
+from retrieval.memory.memory import ConversationMemory, SessionConversationMemory
 
 
 class RetrievalFollowUpResolutionTests(unittest.TestCase):

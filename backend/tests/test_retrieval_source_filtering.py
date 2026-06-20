@@ -2,7 +2,7 @@
 
 import unittest
 
-from retrieval.source_filter import select_sources_for_display, split_sources_two_layer
+from retrieval.search.source_filter import select_sources_for_display, split_sources_two_layer
 
 
 class SourceFilteringTests(unittest.TestCase):
@@ -160,14 +160,14 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/llm.py",
+                "relative_path": "backend/retrieval/generation/llm.py",
                 "symbol_name": "LlmProviderError",
                 "start_line": 1,
                 "end_line": 40,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/query_processor.py",
+                "relative_path": "backend/retrieval/query/query_processor.py",
                 "symbol_name": "_llm_classify_intent",
                 "start_line": 1,
                 "end_line": 40,
@@ -289,7 +289,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/llm.py",
+                "relative_path": "backend/retrieval/generation/llm.py",
                 "symbol_name": "LlmProviderError",
                 "start_line": 1,
                 "end_line": 40,
@@ -315,21 +315,21 @@ class SourceFilteringTests(unittest.TestCase):
         query = "Give me a repository overview."
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_is_overview_query",
                 "start_line": 1259,
                 "end_line": 1288,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/source_filter.py",
+                "relative_path": "backend/retrieval/search/source_filter.py",
                 "symbol_name": "query_is_overview_summary",
                 "start_line": 529,
                 "end_line": 549,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/code_answers.py",
+                "relative_path": "backend/retrieval/generation/code_answers.py",
                 "symbol_name": "build_overview_answer",
                 "start_line": 607,
                 "end_line": 627,
@@ -364,14 +364,14 @@ class SourceFilteringTests(unittest.TestCase):
         query = "What are the core modules in this codebase?"
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_is_overview_query",
                 "start_line": 1259,
                 "end_line": 1288,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/code_answers.py",
+                "relative_path": "backend/retrieval/generation/code_answers.py",
                 "symbol_name": "_architecture_module_points",
                 "start_line": 1645,
                 "end_line": 1665,
@@ -619,14 +619,14 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "create_provider_credential",
                 "start_line": 62,
                 "end_line": 116,
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "retrieval/provider_store.py",
+                "relative_path": "retrieval/stores/provider_store.py",
                 "symbol_name": "get_active_provider_credential",
                 "start_line": 45,
                 "end_line": 59,

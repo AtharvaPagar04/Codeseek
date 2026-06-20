@@ -24,7 +24,7 @@ class IngestionNonCodeFilesTests(unittest.TestCase):
         self.assertTrue(is_repo_summary_evidence_path("docker-compose.yml"))
         self.assertTrue(is_repo_summary_evidence_path("Dockerfile"))
         self.assertTrue(is_repo_summary_evidence_path(".env.example"))
-        self.assertFalse(is_repo_summary_evidence_path("retrieval/searcher.py"))
+        self.assertFalse(is_repo_summary_evidence_path("retrieval/search/searcher.py"))
 
     def test_incremental_pipeline_refreshes_repo_summary_evidence_files(self) -> None:
         import tempfile

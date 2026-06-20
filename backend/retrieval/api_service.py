@@ -18,14 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from retrieval.auth_store import (
+from retrieval.stores.auth_store import (
     create_auth_session,
     delete_auth_session,
     get_user_for_session_token,
     upsert_github_user,
     get_or_create_system_user,
 )
-from retrieval.chat_store import (
+from retrieval.stores.chat_store import (
     append_message,
     append_thread_message,
     clear_session_messages,
@@ -34,14 +34,14 @@ from retrieval.chat_store import (
     list_thread_messages,
 )
 from retrieval.config import get_collection_name, get_repo_root
-from retrieval.crypto_store import has_explicit_app_encryption_key
+from retrieval.stores.crypto_store import has_explicit_app_encryption_key
 from retrieval.db import init_db
-from retrieval.github_store import get_github_credential, upsert_github_credential
-from retrieval.isolation import validate_collection_binding
+from retrieval.stores.github_store import get_github_credential, upsert_github_credential
+from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
-from retrieval.llm import LlmProviderError
-from retrieval.observability import (
+from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
+from retrieval.generation.llm import LlmProviderError
+from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
     new_request_id,
@@ -50,7 +50,7 @@ from retrieval.observability import (
     render_prometheus_metrics,
     sanitize_for_log,
 )
-from retrieval.provider_store import (
+from retrieval.stores.provider_store import (
     SUPPORTED_PROVIDER_TYPES,
     create_provider_credential,
     delete_provider_credential,
@@ -58,16 +58,16 @@ from retrieval.provider_store import (
     list_provider_credentials,
     set_active_provider_credential,
 )
-from retrieval.local_llm_runtime import (
+from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     get_provider_runtime_state,
 )
-from retrieval.provider_health import (
+from retrieval.support.provider_health import (
     ProviderNotConfiguredError,
     ProviderNotReadyError,
     require_llm_ready_for_user,
 )
-from retrieval.searcher import dependency_health
+from retrieval.search.searcher import dependency_health
 from retrieval.session_indexer import (
     create_session,
     delete_session,
@@ -75,13 +75,13 @@ from retrieval.session_indexer import (
     list_sessions,
     retry_indexing,
 )
-from retrieval.submission_crypto import (
+from retrieval.support.submission_crypto import (
     decrypt_submission_secret,
     get_submission_key_id,
     get_submission_public_key_pem,
 )
-from retrieval.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
-from retrieval.indexing_events import (
+from retrieval.stores.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
+from retrieval.support.indexing_events import (
     get_indexing_events,
     subscribe_indexing_events,
 )
@@ -150,7 +150,7 @@ import sqlite3
 
 @app.exception_handler(sqlite3.OperationalError)
 def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     if "no such table" in str(exc).lower():
         try:
             from retrieval.db import init_db
@@ -174,7 +174,7 @@ from fastapi.exceptions import RequestValidationError
 
 @app.exception_handler(HTTPException)
 def http_exception_handler(request: Request, exc: HTTPException):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     sanitized_detail = sanitize_credentials_in_string(str(exc.detail))
     return JSONResponse(
         status_code=exc.status_code,
@@ -185,7 +185,7 @@ def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 def validation_exception_handler(request: Request, exc: RequestValidationError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     import json
     try:
         raw_errors_str = json.dumps(exc.errors())
@@ -267,7 +267,7 @@ app.add_middleware(
 )
 
 
-from retrieval.crypto_store import master_key_override_var
+from retrieval.stores.crypto_store import master_key_override_var
 
 @app.middleware("http")
 async def app_encryption_key_middleware(request: Request, call_next):
@@ -1639,7 +1639,7 @@ def get_latest_evaluation_report_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report(session_id)
 
 
@@ -1675,7 +1675,7 @@ def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth_user(session_token)
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report()
 
 

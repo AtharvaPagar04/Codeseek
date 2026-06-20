@@ -3,7 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 def test_run_query_emits_step1_memory_diagnostics() -> None:

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from retrieval.source_filter import split_sources_two_layer, select_sources_for_display
-from retrieval.assembler import assemble, assemble_for_reasoning, intent_context_budget
+from retrieval.search.source_filter import split_sources_two_layer, select_sources_for_display
+from retrieval.generation.assembler import assemble, assemble_for_reasoning, intent_context_budget
 from retrieval.config import (
     DISPLAY_SOURCES_CAP,
     REASONING_SOURCES_CAP,

@@ -1,6 +1,6 @@
 import unittest
 
-from retrieval.llm import SYSTEM_PROMPT, _build_prompt
+from retrieval.generation.llm import SYSTEM_PROMPT, _build_prompt
 
 
 class LlmPromptTests(unittest.TestCase):

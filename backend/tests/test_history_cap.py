@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from retrieval.assembler import intent_history_cap, intent_context_budget
+from retrieval.generation.assembler import intent_history_cap, intent_context_budget
 from retrieval.config import (
     HISTORY_TOKEN_CAP,
     INTENT_HISTORY_CAPS,
     INTENT_CONTEXT_BUDGETS,
 )
-from retrieval.memory import ConversationMemory, _cap_history_block, _token_count
+from retrieval.memory.memory import ConversationMemory, _cap_history_block, _token_count
 
 
 # ---------------------------------------------------------------------------

@@ -9,14 +9,14 @@ Use this doc as the current-state reference and the parent roadmap above as the 
 Primary implementation files:
 
 - `retrieval/main.py`
-- `retrieval/query_processor.py`
-- `retrieval/searcher.py`
-- `retrieval/expander.py`
-- `retrieval/assembler.py`
-- `retrieval/source_filter.py`
-- `retrieval/code_answers.py`
-- `retrieval/llm.py`
-- `retrieval/memory.py`
+- `retrieval/query/query_processor.py`
+- `retrieval/search/searcher.py`
+- `retrieval/search/expander.py`
+- `retrieval/generation/assembler.py`
+- `retrieval/search/source_filter.py`
+- `retrieval/generation/code_answers.py`
+- `retrieval/generation/llm.py`
+- `retrieval/memory/memory.py`
 - `rag_ingestion/stages/language.py`
 - `rag_ingestion/stages/chunker.py`
 
@@ -203,7 +203,7 @@ The end-to-end retrieval request starts in `retrieval/main.py`.
 
 ### 4.1 Memory models
 
-There are three memory implementations in `retrieval/memory.py`:
+There are three memory implementations in `retrieval/memory/memory.py`:
 
 - `ConversationMemory`
 - `SessionConversationMemory`
@@ -246,7 +246,7 @@ When rewriting is triggered, the previous resolved query is prepended to the cur
 
 ## 5. Query Understanding
 
-`retrieval/query_processor.py` classifies the query and extracts entities using bounded heuristics. It still preserves the legacy `intent` field for compatibility, but now also emits a scored intent contract for downstream retrieval and source-gating work.
+`retrieval/query/query_processor.py` classifies the query and extracts entities using bounded heuristics. It still preserves the legacy `intent` field for compatibility, but now also emits a scored intent contract for downstream retrieval and source-gating work.
 
 ### 5.1 Legacy intent classes
 
@@ -323,7 +323,7 @@ This stage is still rule-based. There is no learned intent classifier and no str
 
 ## 6. Retrieval Stage
 
-`retrieval/searcher.py` is the main search implementation.
+`retrieval/search/searcher.py` is the main search implementation.
 
 ### 6.1 Dense vector search
 
@@ -547,7 +547,7 @@ Current behavior:
 
 ## 9. Expansion Stage
 
-`retrieval/expander.py` attaches structurally related chunks.
+`retrieval/search/expander.py` attaches structurally related chunks.
 
 ### 9.1 Expansion types
 
@@ -578,7 +578,7 @@ There is a config flag for sibling expansion, but it is not currently implemente
 
 ## 10. Context Assembly
 
-`retrieval/assembler.py` converts selected chunks into the final LLM context.
+`retrieval/generation/assembler.py` converts selected chunks into the final LLM context.
 
 ### 10.1 Budgeting
 
@@ -641,7 +641,7 @@ Primary chunks can be truncated to fit the remaining budget. Non-primary chunks 
 
 ## 11. Source Filtering and Evidence Gating
 
-`retrieval/source_filter.py` and `retrieval/assembler.py` together control which sources reach the user and how much context the LLM receives.
+`retrieval/search/source_filter.py` and `retrieval/generation/assembler.py` together control which sources reach the user and how much context the LLM receives.
 
 ### 11.1 Two-layer source model
 
@@ -708,7 +708,7 @@ Before any LLM call, `retrieval/main.py` decides whether to answer deterministic
 
 ### 12.1 Code mode
 
-Triggered by `retrieval.code_answers.is_code_request()`.
+Triggered by `retrieval.generation.code_answers.is_code_request()`.
 
 Signals include phrases like:
 
@@ -884,7 +884,7 @@ Deterministic answer paths (code/overview/flow/architecture/explanation) are **n
 
 ## 13. LLM Prompting Strategy
 
-When the query is not handled by deterministic answer builders, `retrieval/llm.py` constructs the prompt.
+When the query is not handled by deterministic answer builders, `retrieval/generation/llm.py` constructs the prompt.
 
 ### 13.1 System prompt
 

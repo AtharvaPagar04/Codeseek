@@ -18,7 +18,7 @@
     "query": "What are the main backend modules?",
     "category": "Overview",
     "intent": "general_context",
-    "files": ["backend/retrieval/session_indexer.py", "backend/retrieval/code_answers.py"]
+    "files": ["backend/retrieval/session_indexer.py", "backend/retrieval/generation/code_answers.py"]
   },
   {
     "id": 4,
@@ -32,7 +32,7 @@
     "query": "provide me the auth function code",
     "category": "Code Snippet",
     "intent": "code_snippet",
-    "files": ["backend/retrieval/api_service.py", "backend/retrieval/auth_store.py"]
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/stores/auth_store.py"]
   },
   {
     "id": 6,
@@ -46,7 +46,7 @@
     "query": "show me the evaluation report API endpoint code",
     "category": "Code Snippet",
     "intent": "code_snippet",
-    "files": ["backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"]
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"]
   },
   {
     "id": 8,
@@ -81,14 +81,14 @@
     "query": "How does the retrieval pipeline work?",
     "category": "Technical Explanation",
     "intent": "technical_explanation",
-    "files": ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/searcher.py"]
+    "files": ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/search/searcher.py"]
   },
   {
     "id": 13,
     "query": "Where is reranking handled in searcher.py?",
     "category": "Source Location",
     "intent": "code_location",
-    "files": ["backend/retrieval/searcher.py"]
+    "files": ["backend/retrieval/search/searcher.py"]
   },
   {
     "id": 14,
@@ -102,7 +102,7 @@
     "query": "Who wrote code_answers.py?",
     "category": "Source Location",
     "intent": "general_context",
-    "files": ["backend/retrieval/code_answers.py"]
+    "files": ["backend/retrieval/generation/code_answers.py"]
   },
   {
     "id": 16,

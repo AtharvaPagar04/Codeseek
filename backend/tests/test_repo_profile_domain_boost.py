@@ -1,5 +1,5 @@
 import unittest
-from retrieval.repo_profile import (
+from retrieval.support.repo_profile import (
     RepoProfile,
     compute_dynamic_boosts_and_penalties,
     build_diagnostics,
@@ -91,7 +91,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
 
     def test_compute_dynamic_boosts_and_penalties(self):
         # Mock global cache by updating _profile_cache directly
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         # 1. Implementation Query: login_user in backend/auth/auth_service.py
@@ -122,7 +122,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertEqual(penalty, 0.0)
 
     def test_feature_phrase_normalization_boost(self):
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         item_storage = self.mock_payloads[1] # has code_intent "qdrant upsert stages"
@@ -134,7 +134,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("qdrant upsert", details["matched_features"])
 
     def test_build_diagnostics(self):
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         entities = {"boost_labels": ["domain:auth", "domain:storage"]}
@@ -155,9 +155,9 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("tests", diags["source_kind_penalties"])
 
     def test_feature_location_gate_source_filtering(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "symbol_name": "source_filter"},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "symbol_name": "source_filter"},
             {"relative_path": "frontend/src/components/SourceCard.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("Where is source filtering done?", sources)
@@ -165,7 +165,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("frontend/src/components/SourceCard.jsx", diag["demoted_paths"])
         
     def test_feature_location_gate_exact_hit_protection(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
             {"relative_path": "backend/retrieval/search/source_selection.py", "expansion_type": "primary", "summary": "exact file hits"},
             {"relative_path": "backend/evals/metrics.py", "expansion_type": "primary"}
@@ -175,9 +175,9 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("backend/evals/metrics.py", diag["demoted_paths"])
         
     def test_feature_location_gate_exact_context_pruning(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "summary": "exact file context pruning"},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "summary": "exact file context pruning"},
             {"relative_path": "frontend/src/components/EvaluationPanel.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("Where is exact file context pruning implemented?", sources)
@@ -185,9 +185,9 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("frontend/src/components/EvaluationPanel.jsx", diag["demoted_paths"])
         
     def test_feature_location_gate_semantic_targeting(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/semantic_targeting.py", "expansion_type": "primary"},
+            {"relative_path": "backend/retrieval/query/semantic_targeting.py", "expansion_type": "primary"},
             {"relative_path": "frontend/src/components/EvaluationPanel.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("How does component semantic targeting work?", sources)
@@ -195,18 +195,18 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("frontend/src/components/EvaluationPanel.jsx", diag["demoted_paths"])
         
     def test_feature_location_gate_frontend_exception(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "summary": "source cards"},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "summary": "source cards"},
             {"relative_path": "frontend/src/components/SourceCard.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("How are source cards displayed in the frontend?", sources)
         self.assertNotIn("frontend/src/components/SourceCard.jsx", diag.get("demoted_paths", []))
         
     def test_feature_location_gate_eval_exception(self):
-        from retrieval.source_filter import apply_feature_location_gate
+        from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "summary": "exact hit preservation"},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "summary": "exact hit preservation"},
             {"relative_path": "backend/evals/metrics.py", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("Where is exact hit preservation audited?", sources)

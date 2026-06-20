@@ -1,6 +1,6 @@
 import pytest
-from retrieval.repo_profile import RepoProfile
-from retrieval.query_intent import classify_source_intent
+from retrieval.support.repo_profile import RepoProfile
+from retrieval.query.query_intent import classify_source_intent
 
 def test_express_app_initialization_intent():
     intent = classify_source_intent("Where is the Express app initialized?")

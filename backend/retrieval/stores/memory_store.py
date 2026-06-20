@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import json
 
 from retrieval.db import db_cursor
-from retrieval.thread_store import ensure_default_thread
+from retrieval.stores.thread_store import ensure_default_thread
 
 
 def _now() -> str:

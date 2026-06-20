@@ -255,7 +255,7 @@ def test_remote_provider_still_uses_chat_completion_request():
     chunk = Chunk(chunk_id="1", relative_path="README.md", chunk_type="file", token_count=100, content="Readme content here")
     provider_config = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
 
-    with patch("retrieval.llm._chat_completion_request") as mock_remote:
+    with patch("retrieval.generation.llm._chat_completion_request") as mock_remote:
         mock_remote.return_value = {
             "choices": [
                 {
@@ -411,7 +411,7 @@ def test_description_eligibility_for_high_value_pipeline_functions():
 
 def test_description_eligibility_for_generate_answer():
     chunk = Chunk(
-        relative_path="backend/retrieval/llm.py",
+        relative_path="backend/retrieval/generation/llm.py",
         chunk_type="function",
         symbol_name="generate_answer",
         token_count=160,

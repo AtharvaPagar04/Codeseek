@@ -6,7 +6,7 @@ from pathlib import Path
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.models.file import FileRecord
 from rag_ingestion.models.parsed import ParsedFile
-from retrieval.source_truth import analyze_source_truth
+from retrieval.search.source_truth import analyze_source_truth
 
 
 def _extract_imported_symbols(imports: list[str]) -> list[str]:

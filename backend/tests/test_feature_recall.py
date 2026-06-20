@@ -1,13 +1,13 @@
 import unittest
-from retrieval.repo_profile import discover_feature_recall_candidates, RepoProfile
-from retrieval.source_filter import apply_feature_location_gate
+from retrieval.support.repo_profile import discover_feature_recall_candidates, RepoProfile
+from retrieval.search.source_filter import apply_feature_location_gate
 
 class TestFeatureRecall(unittest.TestCase):
     def setUp(self):
         self.mock_payloads = [
             {
                 "chunk_id": "c1",
-                "relative_path": "backend/retrieval/source_filter.py",
+                "relative_path": "backend/retrieval/search/source_filter.py",
                 "language": "python",
                 "labels": ["backend"],
                 "symbol_name": "source_filter",
@@ -56,9 +56,9 @@ class TestFeatureRecall(unittest.TestCase):
 
     def test_feature_recall_discovers_source_filtering_implementation(self):
         candidates = discover_feature_recall_candidates("Where is source filtering done?", self.profile)
-        self.assertTrue(any(c["relative_path"] == "backend/retrieval/source_filter.py" for c in candidates))
+        self.assertTrue(any(c["relative_path"] == "backend/retrieval/search/source_filter.py" for c in candidates))
         
-        backend_cand = next(c for c in candidates if c["relative_path"] == "backend/retrieval/source_filter.py")
+        backend_cand = next(c for c in candidates if c["relative_path"] == "backend/retrieval/search/source_filter.py")
         sources = [
             {"relative_path": "frontend/src/components/SourceCard.jsx", "expansion_type": "primary"},
             backend_cand
@@ -73,7 +73,7 @@ class TestFeatureRecall(unittest.TestCase):
         
     def test_frontend_exception_still_works(self):
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "feature_recall_hit": True},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "feature_recall_hit": True},
             {"relative_path": "frontend/src/components/SourceCard.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("How are source cards displayed in the frontend?", sources)
@@ -81,7 +81,7 @@ class TestFeatureRecall(unittest.TestCase):
 
     def test_eval_exception_still_works(self):
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "feature_recall_hit": True},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "feature_recall_hit": True},
             {"relative_path": "backend/evals/metrics.py", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("Where is exact hit preservation audited?", sources)
@@ -89,8 +89,8 @@ class TestFeatureRecall(unittest.TestCase):
 
     def test_exact_hits_still_win(self):
         sources = [
-            {"relative_path": "backend/retrieval/source_filter.py", "expansion_type": "primary", "exact_retrieval_hit": True},
+            {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "exact_retrieval_hit": True},
             {"relative_path": "frontend/src/components/SourceCard.jsx", "expansion_type": "primary"}
         ]
-        gated, diag = apply_feature_location_gate("Show me backend/retrieval/source_filter.py", sources)
+        gated, diag = apply_feature_location_gate("Show me backend/retrieval/search/source_filter.py", sources)
         self.assertFalse(diag["enabled"])

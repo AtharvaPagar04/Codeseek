@@ -20,7 +20,7 @@ conversations:
         expected_reranker_intent: "SYMBOL"
         expected_files:
           - "backend/retrieval/api_service.py"
-          - "backend/retrieval/auth_store.py"
+          - "backend/retrieval/stores/auth_store.py"
         expected_symbols:
           - "_auth_key"
           - "_require_auth"

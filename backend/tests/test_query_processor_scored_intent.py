@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from retrieval import query_processor
+from retrieval.query import query_processor
 
 
 class QueryProcessorScoredIntentTests(unittest.TestCase):
@@ -85,7 +85,7 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertIn("domain:auth", result["entities"]["boost_labels"])
 
     def test_scored_intent_flag_still_emits_contract_in_legacy_mode(self) -> None:
-        with patch("retrieval.query_processor.ENABLE_SCORED_INTENT", False):
+        with patch("retrieval.query.query_processor.ENABLE_SCORED_INTENT", False):
             result = query_processor.process_query("where is create_session")
 
         self.assertEqual(result["intent"], "SYMBOL")

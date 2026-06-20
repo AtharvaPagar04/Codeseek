@@ -2,7 +2,7 @@
 
 import unittest
 
-from retrieval.source_filter import select_sources_for_display
+from retrieval.search.source_filter import select_sources_for_display
 
 
 class SourceFilteringIntegrationTests(unittest.TestCase):

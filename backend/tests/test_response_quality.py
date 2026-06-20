@@ -1,5 +1,5 @@
-from retrieval.code_answers import build_explanation_answer, build_overview_answer
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.code_answers import build_explanation_answer, build_overview_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 from retrieval.main import post_process_answer_and_sources
 
 
@@ -99,7 +99,7 @@ def test_runtime_components_answer_does_not_present_helpers_as_components() -> N
 def test_failure_recovery_validation_rejects_unsupported_speculation_shape() -> None:
     answer = (
         "The system could potentially recover by re-running failed stages and using partial "
-        "state from the previous run.\n\nSources:\n- backend/retrieval/query_processor.py"
+        "state from the previous run.\n\nSources:\n- backend/retrieval/query/query_processor.py"
     )
     sources = [
         _src("backend/retrieval/session_indexer.py", "run_incremental_reindex"),
@@ -118,6 +118,6 @@ def test_failure_recovery_validation_rejects_unsupported_speculation_shape() -> 
 
     repaired = validation["repaired_answer"]
     assert "Sources:" not in repaired
-    assert "backend/retrieval/query_processor.py" not in repaired
+    assert "backend/retrieval/query/query_processor.py" not in repaired
     assert "could potentially" not in repaired.lower()
     assert "unimplemented recovery behavior" in repaired

@@ -21,8 +21,8 @@
       "id": "cs-flow-002",
       "query": "explain the auth session lifecycle flow",
       "expected_sources": [
-        {"relative_path": "retrieval/auth_store.py", "symbol_name": "create_auth_session"},
-        {"relative_path": "retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"}
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"}
       ],
       "expected_symbols": ["create_auth_session", "get_user_for_session_token"],
       "expected_response_mode": "flow_summary",
@@ -36,9 +36,9 @@
       "id": "cs-flow-002b",
       "query": "how does authentication cookie lifecycle work",
       "expected_sources": [
-        {"relative_path": "retrieval/auth_store.py", "symbol_name": "create_auth_session"},
-        {"relative_path": "retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"},
-        {"relative_path": "retrieval/auth_store.py", "symbol_name": "delete_auth_session"}
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "delete_auth_session"}
       ],
       "expected_symbols": ["create_auth_session", "get_user_for_session_token", "delete_auth_session"],
       "expected_response_mode": "flow_summary",
@@ -85,8 +85,8 @@
       "expected_sources": [
         {"relative_path": "retrieval/api_service.py", "symbol_name": "list_provider_credentials_v1"},
         {"relative_path": "retrieval/api_service.py", "symbol_name": "create_provider_credential_v1"},
-        {"relative_path": "retrieval/provider_store.py", "symbol_name": "create_provider_credential"},
-        {"relative_path": "retrieval/provider_store.py", "symbol_name": "get_active_provider_credential"}
+        {"relative_path": "retrieval/stores/provider_store.py", "symbol_name": "create_provider_credential"},
+        {"relative_path": "retrieval/stores/provider_store.py", "symbol_name": "get_active_provider_credential"}
       ],
       "expected_symbols": [
         "list_provider_credentials_v1",

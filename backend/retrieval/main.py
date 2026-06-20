@@ -6,8 +6,8 @@ import re
 import time
 from typing import Any
 
-from retrieval.assembler import assemble, assemble_for_reasoning, intent_history_cap
-from retrieval.code_answers import (
+from retrieval.generation.assembler import assemble, assemble_for_reasoning, intent_history_cap
+from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_docs_summary_answer,
     build_explanation_answer,
@@ -30,7 +30,7 @@ from retrieval.code_answers import (
     route_filesystem_sources_for_query,
     rank_follow_up_sources_for_explanation,
 )
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
     DISPLAY_SOURCES_CAP,
@@ -42,8 +42,8 @@ from retrieval.config import (
     get_collection_name,
     get_repo_root,
 )
-from retrieval.expander import expand
-from retrieval.follow_up_memory import (
+from retrieval.search.expander import expand
+from retrieval.memory.follow_up_memory import (
     analyze_topic_shift,
     build_recent_entity_set,
     extract_cited_entities,
@@ -51,19 +51,19 @@ from retrieval.follow_up_memory import (
     latest_rendered_entity_set,
     rewrite_follow_up_query,
 )
-from retrieval.llm import generate_answer, generate_answer_stream
-from retrieval.memory import ConversationMemory, prepare_history_block
-from retrieval.observability import StageMetrics, log_event, new_request_id
-from retrieval.query_processor import process_query
-from retrieval.isolation import validate_collection_binding
-from retrieval.query_intent import is_source_location_query
-from retrieval.searcher import (
+from retrieval.generation.llm import generate_answer, generate_answer_stream
+from retrieval.memory.memory import ConversationMemory, prepare_history_block
+from retrieval.support.observability import StageMetrics, log_event, new_request_id
+from retrieval.query.query_processor import process_query
+from retrieval.support.isolation import validate_collection_binding
+from retrieval.query.query_intent import is_source_location_query
+from retrieval.search.searcher import (
     _content_looks_like_symbol_definition,
     _content_looks_like_symbol_usage_only,
     query_explicitly_requests_non_implementation_artifacts,
     search,
 )
-from retrieval.source_filter import (
+from retrieval.search.source_filter import (
     explain_source_filter_decision,
     score_evidence_confidence,
     has_strong_source_location_evidence,
@@ -604,7 +604,7 @@ class PostProcessingMemoryProxy:
         self.last_sources = final_sources
 
         # 3. Re-calculate entities using the final pruned sources
-        from retrieval.follow_up_memory import extract_cited_entities
+        from retrieval.memory.follow_up_memory import extract_cited_entities
         new_entities = extract_cited_entities(final_sources)
 
         # 4. Save to target memory/database
@@ -628,15 +628,15 @@ def post_process_answer_and_sources(
     primary_intent: str | None = None,
 ) -> tuple[str, list[dict]]:
     import re
-    from retrieval.searcher import (
+    from retrieval.search.searcher import (
         match_code_topic_route,
         path_matches_topic_route,
         query_explicitly_requests_non_implementation_artifacts,
         query_explicitly_requests_searcher_internals,
         symbol_matches_topic_route,
     )
-    from retrieval.code_answers import route_filesystem_sources_for_query
-    from retrieval.source_filter import apply_query_negative_filters
+    from retrieval.generation.code_answers import route_filesystem_sources_for_query
+    from retrieval.search.source_filter import apply_query_negative_filters
 
     def _dedupe_sources(items: list[dict]) -> list[dict]:
         seen = set()
@@ -893,7 +893,7 @@ def post_process_answer_and_sources(
     )
 
     # 5. Code request post-processing
-    from retrieval.query_intent import is_explanation_query
+    from retrieval.query.query_intent import is_explanation_query
     is_code_req = ((primary_intent == "CODE_REQUEST") or is_code_request(raw_query)) and not is_explanation_query(raw_query)
     if is_code_req:
         # Strip manual Sources footer (case-insensitive)
@@ -930,7 +930,7 @@ def post_process_answer_and_sources(
         # Replace old intro if present
         old_intro = "Code snippets from retrieved context:"
         if old_intro in answer:
-            from retrieval.query_processor import _extract_symbols
+            from retrieval.query.query_processor import _extract_symbols
             extracted_symbols = _extract_symbols(raw_query)
             
             is_broad_auth = False
@@ -972,7 +972,7 @@ def post_process_answer_and_sources(
         
         # Let's check code availability
         code_available = False
-        from retrieval.code_answers import _read_source_excerpt
+        from retrieval.generation.code_answers import _read_source_excerpt
         for src in final_sources:
             if src.get("relative_path") and src.get("symbol_name"):
                 if _read_source_excerpt(src).strip():
@@ -981,7 +981,7 @@ def post_process_answer_and_sources(
                     
         if not has_fenced_code and final_sources:
             if code_available:
-                from retrieval.code_answers import build_code_snippet_answer
+                from retrieval.generation.code_answers import build_code_snippet_answer
                 answer = build_code_snippet_answer(raw_query, final_sources, final_sources)
             else:
                 answer = "I found a matching function reference, but the function body was not included in the retrieved context."
@@ -1103,7 +1103,7 @@ def _run_query_impl(
     recent_turns = memory.recent_turn_entities(max_turns=8) if hasattr(memory, "recent_turn_entities") else []
     active_index_paths = None
     try:
-        from retrieval.searcher import _get_lexical_index
+        from retrieval.search.searcher import _get_lexical_index
         idx = _get_lexical_index(get_collection_name())
         active_index_paths = {doc.payload.get("relative_path") for doc in idx.documents if doc.payload.get("relative_path")}
     except Exception:
@@ -1185,7 +1185,7 @@ def _run_query_impl(
             if "query_intent.py" not in (c.get("relative_path") or "")
         ]
 
-    from retrieval.source_filter import prune_exact_file_context
+    from retrieval.search.source_filter import prune_exact_file_context
     expanded, pruning_diag = prune_exact_file_context(raw_query, query_info, expanded)
     meta["exact_file_context_pruning"] = pruning_diag
 
@@ -1217,7 +1217,7 @@ def _run_query_impl(
     if gate_diagnostics["enabled"]:
         meta["feature_source_gate"] = gate_diagnostics
         
-    from retrieval.source_filter import apply_wrong_evidence_guard, prioritize_final_sources
+    from retrieval.search.source_filter import apply_wrong_evidence_guard, prioritize_final_sources
     sources, guard_diag = apply_wrong_evidence_guard(raw_query, sources, query_info)
     if "framework_routing" in query_info:
         query_info["framework_routing"]["wrong_evidence_guard_applied"] = guard_diag.get("guard_applied", False)
@@ -1601,7 +1601,7 @@ def _run_query_impl(
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     meta["display_sources"] = list(display_sources)
     meta["reasoning_sources"] = list(reasoning_sources)
-    from retrieval.code_answers import is_file_summary_request, build_file_summary_answer
+    from retrieval.generation.code_answers import is_file_summary_request, build_file_summary_answer
     if is_file_summary_request(raw_query):
         started = time.perf_counter()
         answer = build_file_summary_answer(raw_query, shown_sources, expanded)
@@ -1665,7 +1665,7 @@ def _run_query_impl(
         return answer, shown_sources, token_count
     elif is_code_request(raw_query):
         started = time.perf_counter()
-        from retrieval.searcher import match_code_topic_route
+        from retrieval.search.searcher import match_code_topic_route
         matched_code_topic_route = match_code_topic_route(raw_query, primary_intent)
         route_support_sources = route_filesystem_sources_for_query(raw_query) if matched_code_topic_route else []
         exact_symbol_support_sources = filesystem_exact_symbol_sources_for_query(
@@ -1965,7 +1965,7 @@ def _run_query_impl(
 
     # Phase 2.5: source-location queries with strong evidence
     if is_source_location_query(raw_query):
-        from retrieval.searcher import match_code_topic_route, path_matches_topic_route
+        from retrieval.search.searcher import match_code_topic_route, path_matches_topic_route
 
         matched_route = match_code_topic_route(raw_query, primary_intent)
         if matched_route and matched_route.get("id") in {"evaluation_report_api", "retrieval_internals"}:
@@ -2359,7 +2359,7 @@ def _run_query_impl(
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
     
-    from retrieval.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
+    from retrieval.generation.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
     exact_val = query_info.get("exact_value_grounding")
     is_exact_val = bool(exact_val and exact_val.get("enabled"))
     if is_exact_val:
@@ -2552,7 +2552,7 @@ def _resolve_query_info(
     query_info["topic_shift_reason"] = str(topic_analysis.get("reason") or "")
 
     # Calculate is_followup and is_low_context using state
-    from retrieval.query_intent import identify_followup_or_low_context
+    from retrieval.query.query_intent import identify_followup_or_low_context
     followup_entity_set = latest_entity_set or recent_entity_set
     conversation_state = {
         "previous_files": followup_entity_set.get("files", []),
@@ -2567,8 +2567,8 @@ def _resolve_query_info(
 
     query_info["is_followup"] = bool(is_followup_detected and not topic_shift)
     query_info["conversation_state"] = conversation_state
-    from retrieval.code_answers import is_code_request
-    from retrieval.query_intent import is_explanation_query, is_source_location_query
+    from retrieval.generation.code_answers import is_code_request
+    from retrieval.query.query_intent import is_explanation_query, is_source_location_query
     if is_explanation_query(raw_query):
         query_info["primary_intent"] = "EXPLANATION"
         if "intent" in query_info:

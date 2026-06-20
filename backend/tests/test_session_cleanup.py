@@ -17,7 +17,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from retrieval import session_indexer, auth_store
+from retrieval import session_indexer
+from retrieval.stores import auth_store
 from retrieval.db import (
     init_db,
     db_cursor,

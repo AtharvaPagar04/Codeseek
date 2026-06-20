@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from retrieval import session_indexer, auth_store
+from retrieval import session_indexer
+from retrieval.stores import auth_store
 
 
 class SessionIndexPreviewTests(unittest.TestCase):

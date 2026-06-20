@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from retrieval.searcher import _rerank_with_query_tokens
-from retrieval.code_answers import build_overview_answer
+from retrieval.search.searcher import _rerank_with_query_tokens
+from retrieval.generation.code_answers import build_overview_answer
 
 class TestRetrievalTuning(unittest.TestCase):
     def test_environment_variable_query_boost(self) -> None:
@@ -20,7 +20,7 @@ class TestRetrievalTuning(unittest.TestCase):
         # Candidate 2: query_intent.py (generic parser file)
         candidate_parser = {
             "chunk_id": "c2",
-            "relative_path": "backend/retrieval/query_intent.py",
+            "relative_path": "backend/retrieval/query/query_intent.py",
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher dense score
             "content": "def classify_query_intent(query): ...",
@@ -70,7 +70,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher vector score
             "content": "def _check_ollama_available(): ...",
@@ -105,7 +105,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",
@@ -145,7 +145,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",

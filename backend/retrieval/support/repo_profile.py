@@ -232,7 +232,7 @@ def get_repo_profile(collection: str) -> RepoProfile:
         return _profile_cache[collection]
     
     # We import searcher helper to scroll payloads
-    from retrieval.searcher import _scroll_collection_payloads
+    from retrieval.search.searcher import _scroll_collection_payloads
     logger.info(f"Building repo profile for collection: {collection}")
     payloads = _scroll_collection_payloads(collection)
     profile = RepoProfile(payloads)

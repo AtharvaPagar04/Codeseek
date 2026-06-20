@@ -12,7 +12,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import cleanup_expired_auth_sessions as ceas  # noqa: E402
-from retrieval import auth_store  # noqa: E402
+from retrieval.stores import auth_store  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

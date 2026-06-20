@@ -1,5 +1,5 @@
 import pytest
-from retrieval.source_filter import apply_wrong_evidence_guard
+from retrieval.search.source_filter import apply_wrong_evidence_guard
 
 def test_wrong_evidence_guard_blocks_frontend():
     raw_query = "Is task deletion soft delete or hard delete?"

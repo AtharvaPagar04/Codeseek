@@ -15,9 +15,9 @@ from qdrant_client import QdrantClient
 from rag_ingestion.main import run_pipeline
 from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_PORT
 from retrieval.db import db_cursor, init_db
-from retrieval.isolation import expected_collection_name
-from retrieval.searcher import invalidate_lexical_index
-from retrieval.thread_store import ensure_default_thread
+from retrieval.support.isolation import expected_collection_name
+from retrieval.search.searcher import invalidate_lexical_index
+from retrieval.stores.thread_store import ensure_default_thread
 
 WORKSPACE_ROOT = Path(
     os.getenv("CODESEEK_REPO_WORKSPACE", "/tmp/codeseek_repo_workspace")
@@ -242,7 +242,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
                 # 8. repo_sessions
                 cursor.execute("DELETE FROM repo_sessions WHERE id = ?", (session_id,))
         except Exception as db_exc:
-            from retrieval.observability import sanitize_credentials_in_string
+            from retrieval.support.observability import sanitize_credentials_in_string
             warnings.append(sanitize_credentials_in_string(f"DB cleanup partial failure: {db_exc}"))
 
         # Clean up in-memory per-session state
@@ -255,7 +255,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
         if collection:
             # Safety: only delete if collection name is session-specific
             # (contains session_id or is not a shared/default name)
-            from retrieval.isolation import expected_collection_name
+            from retrieval.support.isolation import expected_collection_name
             repo_root = session_to_delete.get("repo_root", "")
             expected = expected_collection_name(repo_root) if repo_root else ""
             is_safe = (
@@ -274,7 +274,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
                     client.delete_collection(collection_name=collection)
                     qdrant_collection_deleted = True
                 except Exception as qe:
-                    from retrieval.observability import sanitize_credentials_in_string
+                    from retrieval.support.observability import sanitize_credentials_in_string
                     qdrant_collection_deleted = False
                     warnings.append(
                         sanitize_credentials_in_string(
@@ -638,7 +638,7 @@ def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> 
 
 
 def _index_job(session_id: str) -> None:
-    from retrieval.indexing_events import emit_indexing_event
+    from retrieval.support.indexing_events import emit_indexing_event
     from retrieval.db import create_indexing_job, update_indexing_job, mark_indexing_job_cancelled
 
     session = get_session(session_id)
@@ -717,7 +717,7 @@ def _index_job(session_id: str) -> None:
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)
@@ -783,7 +783,7 @@ def _index_job(session_id: str) -> None:
             if repo_root.exists():
                 shutil.rmtree(repo_root, ignore_errors=True)
             
-            from retrieval.searcher import _get_client
+            from retrieval.search.searcher import _get_client
             client = _get_client()
             if client:
                 try:
@@ -1234,7 +1234,7 @@ def _index_incremental_job(session_id: str, user_id: str, job_id: str) -> None:
 
 
 def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) -> None:
-    from retrieval.indexing_events import emit_indexing_event
+    from retrieval.support.indexing_events import emit_indexing_event
 
     session = get_session(session_id)
     if not session:
@@ -1324,7 +1324,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)
             except Exception as e:
@@ -1568,7 +1568,7 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
     else: # unknown
         can_index_latest = has_git
 
-    from retrieval.indexing_events import get_indexing_events
+    from retrieval.support.indexing_events import get_indexing_events
     events = get_indexing_events(session_id)
     current_stage = ""
     if events:
@@ -2192,7 +2192,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
     """
     Executes a guarded backend-only incremental reindexing job for a session.
     """
-    from retrieval.indexing_events import emit_indexing_event
+    from retrieval.support.indexing_events import emit_indexing_event
     from rag_ingestion.main import run_incremental_pipeline
 
     session = get_session(session_id)
@@ -2273,7 +2273,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)

@@ -20,7 +20,7 @@ fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
 from retrieval.main import run_query, LOW_CONTEXT_FALLBACK
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 class RetrievalNoEvidenceGuardTests(unittest.TestCase):

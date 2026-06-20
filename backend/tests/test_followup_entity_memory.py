@@ -40,14 +40,14 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval.follow_up_memory import (
+from retrieval.memory.follow_up_memory import (
     build_recent_entity_set,
     detect_topic_shift,
     extract_cited_entities,
     _most_salient_entity,
     rewrite_follow_up_query,
 )
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +59,11 @@ class TestExtractCitedEntities(unittest.TestCase):
     def test_extracts_files_and_symbols(self) -> None:
         sources = [
             {"relative_path": "backend/retrieval/main.py", "symbol_name": "run_query"},
-            {"relative_path": "backend/retrieval/searcher.py", "symbol_name": "search"},
+            {"relative_path": "backend/retrieval/search/searcher.py", "symbol_name": "search"},
         ]
         result = extract_cited_entities(sources)
         self.assertIn("backend/retrieval/main.py", result["files"])
-        self.assertIn("backend/retrieval/searcher.py", result["files"])
+        self.assertIn("backend/retrieval/search/searcher.py", result["files"])
         self.assertIn("run_query", result["symbols"])
         self.assertIn("search", result["symbols"])
 
@@ -153,7 +153,7 @@ class TestDetectTopicShift(unittest.TestCase):
     def test_followup_phrase_what_about_is_not_a_shift(self) -> None:
         turns = [self._turn(symbols=["auth_github"])]
         with patch(
-            "retrieval.follow_up_memory._query_similarity_details",
+            "retrieval.memory.follow_up_memory._query_similarity_details",
             return_value={"score": 0.84, "keyword_overlap": 0.25, "method": "embedding"},
         ):
             self.assertFalse(
@@ -363,8 +363,8 @@ class TestSessionEntityPersistence(unittest.TestCase):
         session_indexer._enqueue_index_job = original_enqueue
 
     def test_entity_rows_are_persisted_per_turn(self) -> None:
-        from retrieval.memory import SessionConversationMemory
-        from retrieval.memory_store import list_session_turn_entities
+        from retrieval.memory.memory import SessionConversationMemory
+        from retrieval.stores.memory_store import list_session_turn_entities
 
         with TemporaryDirectory() as tmp:
             orig_db, orig_ws, orig_enq, si = self._setup_env(tmp)
@@ -407,7 +407,7 @@ class TestSessionEntityPersistence(unittest.TestCase):
                 self._teardown_env(orig_db, orig_ws, orig_enq, si)
 
     def test_recent_turn_entities_returns_db_rows(self) -> None:
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.memory.memory import SessionConversationMemory
 
         with TemporaryDirectory() as tmp:
             orig_db, orig_ws, orig_enq, si = self._setup_env(tmp)
@@ -419,7 +419,7 @@ class TestSessionEntityPersistence(unittest.TestCase):
                     "explain search()",
                     "search() retrieves chunks from Qdrant.",
                     entities={
-                        "files": ["retrieval/searcher.py"],
+                        "files": ["retrieval/search/searcher.py"],
                         "symbols": ["search"],
                         "routes": [], "env_keys": [], "services": [],
                     },
@@ -432,9 +432,9 @@ class TestSessionEntityPersistence(unittest.TestCase):
                 self._teardown_env(orig_db, orig_ws, orig_enq, si)
 
     def test_clearing_messages_also_clears_entity_rows(self) -> None:
-        from retrieval import chat_store
-        from retrieval.memory import SessionConversationMemory
-        from retrieval.memory_store import list_session_turn_entities
+        from retrieval.stores import chat_store
+        from retrieval.memory.memory import SessionConversationMemory
+        from retrieval.stores.memory_store import list_session_turn_entities
 
         with TemporaryDirectory() as tmp:
             orig_db, orig_ws, orig_enq, si = self._setup_env(tmp)
@@ -486,7 +486,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
     def test_vague_pronoun_resolves_to_recent_symbol(self) -> None:
         memory = self._make_memory_with_entities("run_query", "retrieval/main.py")
 
-        from retrieval.follow_up_memory import (
+        from retrieval.memory.follow_up_memory import (
             build_recent_entity_set,
             rewrite_follow_up_query,
         )

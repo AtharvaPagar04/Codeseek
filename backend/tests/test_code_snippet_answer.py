@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
-from retrieval.code_answers import build_code_snippet_answer, _compact_code_snippet
+from retrieval.generation.code_answers import build_code_snippet_answer, _compact_code_snippet
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def setUp(self):
@@ -24,7 +24,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 22,
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "create_auth_session",
                 "chunk_type": "function",
                 "content": "def create_auth_session():\n    return 'session'",
@@ -48,7 +48,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 38,
             },
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "chunk_type": "function",
                 "content": "def get_user_for_session_token():\n    return 'user'",
@@ -93,7 +93,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 1225,
             },
             {
-                "relative_path": "backend/retrieval/eval_reports.py",
+                "relative_path": "backend/retrieval/support/eval_reports.py",
                 "symbol_name": "get_latest_evaluation_report",
                 "chunk_type": "function",
                 "content": "def get_latest_evaluation_report(session_id=None):\n    report_path = backend_root.parent / 'evals' / 'reports' / 'safe_eval_latest' / 'safe_eval_summary.json'\n    return result",
@@ -127,7 +127,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 2,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_rerank_with_query_tokens",
                 "chunk_type": "function",
                 "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -175,7 +175,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("    body_line = True", compacted)
         self.assertIn("# ... omitted for brevity ...", compacted)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_broad_auth_code_request_includes_core_functions(self, mock_read):
         mock_read.side_effect = lambda src: src.get("content", "")
         ans = build_code_snippet_answer(
@@ -187,11 +187,11 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("def _auth_key", ans)
         self.assertIn("def create_auth_session", ans)
         self.assertIn("backend/retrieval/api_service.py", ans)
-        self.assertIn("backend/retrieval/auth_store.py", ans)
+        self.assertIn("backend/retrieval/stores/auth_store.py", ans)
         self.assertNotIn("Summary of Authentication Flow", ans)
         self.assertNotIn("Sources:", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_exact_create_auth_session_query_is_narrow(self, mock_read):
         mock_read.side_effect = lambda src: src.get("content", "")
         ans = build_code_snippet_answer(
@@ -204,7 +204,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("def _auth_key", ans)
         self.assertNotIn("def _require_auth", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_exact_require_auth_query_is_narrow(self, mock_read):
         mock_read.side_effect = lambda src: src.get("content", "")
         ans = build_code_snippet_answer(
@@ -216,7 +216,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("def _require_auth", ans)
         self.assertNotIn("def create_auth_session", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_exact_require_auth_query_does_not_fall_back_to_file_level_excerpt(self, mock_read):
         mock_read.side_effect = lambda src: src.get("content", "")
         polluted = list(self.sources) + [
@@ -250,7 +250,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         from tempfile import TemporaryDirectory
 
         from retrieval import session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.memory.memory import SessionConversationMemory
 
         file_level_source = {
             "relative_path": "backend/retrieval/api_service.py",
@@ -330,7 +330,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             self.assertIn("backend/retrieval/api_service.py", ans)
             self.assertNotIn("```python", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_broad_auth_code_filters_unrelated_sources(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=2)
@@ -344,9 +344,9 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("provide me the auth function code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
-        self.assertNotIn("backend/retrieval/searcher.py", paths)
+        self.assertNotIn("backend/retrieval/search/searcher.py", paths)
         self.assertFalse(any(src.get("symbol_name") == "<file>" for src in final_srcs))
         self.assertEqual(len(final_srcs), len({(
             src.get("relative_path", ""),
@@ -360,7 +360,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("store_chunks", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_runner_code_routes_correctly(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=2)
@@ -384,12 +384,12 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/evals/run_safe_evals.py", ans)
         self.assertIn("def main", ans)
         self.assertIn("# ... omitted for brevity ...", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
         self.assertNotIn("store_chunks", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_runner_route_with_only_file_level_chunks_renders_real_file(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         file_only = [
@@ -430,7 +430,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("eval_policy_summary.py", full_answer)
         self.assertGreater(len(full_answer.splitlines()), len(normal_answer.splitlines()))
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_runner_after_auth_does_not_render_auth_snippets(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=5)
@@ -449,9 +449,9 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("_current_auth_user", ans)
         self.assertNotIn("create_auth_session", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_runner_after_qdrant_code_does_not_return_low_context(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=5)
@@ -474,8 +474,9 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from retrieval import chat_store, session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.stores import chat_store
+        from retrieval import session_indexer
+        from retrieval.memory.memory import SessionConversationMemory
 
         safe_eval_sources = list(self.safe_eval_sources)
         stale_sources = [
@@ -588,15 +589,16 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 session_indexer.WORKSPACE_ROOT = original_workspace_root
                 session_indexer._enqueue_index_job = original_enqueue
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_follow_up_after_auth_stays_on_latest_source_through_run_query(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         import os
         from pathlib import Path
         from tempfile import TemporaryDirectory
 
-        from retrieval import chat_store, session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.stores import chat_store
+        from retrieval import session_indexer
+        from retrieval.memory.memory import SessionConversationMemory
 
         auth_sources = list(self.sources)
         safe_eval_sources = list(self.safe_eval_sources)
@@ -746,7 +748,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 session_indexer.WORKSPACE_ROOT = original_workspace_root
                 session_indexer._enqueue_index_job = original_enqueue
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_qdrant_upsert_code_returns_store_chunks_and_not_low_context(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=3)
@@ -772,10 +774,10 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("# ... omitted for brevity ...", ans)
         self.assertNotIn("I could not find strong evidence", ans)
         self.assertNotIn("backend/retrieval/api_service.py", ans)
-        self.assertNotIn("backend/retrieval/auth_store.py", ans)
-        self.assertNotIn("backend/retrieval/searcher.py", ans)
+        self.assertNotIn("backend/retrieval/stores/auth_store.py", ans)
+        self.assertNotIn("backend/retrieval/search/searcher.py", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_qdrant_upsert_code_after_safe_eval_keeps_topic_isolation(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=6)
@@ -803,7 +805,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("I could not find strong evidence", ans2)
         self.assertNotIn("I could not find strong evidence", ans4)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_auth_code_after_qdrant_keeps_preferred_auth_helper_order(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=4)
@@ -817,7 +819,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             run_query("show me the Qdrant upsert code", memory)
             ans, final_srcs, _ = run_query("provide me the auth function code", memory)
         self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/api_service.py" for src in final_srcs))
-        self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/auth_store.py" for src in final_srcs))
+        self.assertTrue(any(src.get("relative_path", "") == "backend/retrieval/stores/auth_store.py" for src in final_srcs))
         for symbol in [
             "_require_auth",
             "_auth_key",
@@ -832,7 +834,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertLess(ans.index("_auth_key"), ans.index("delete_auth_session"))
         self.assertLess(ans.index("_current_auth_user"), ans.index("delete_auth_session"))
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_session_validation_after_qdrant_excludes_storage(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=4)
@@ -847,17 +849,17 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("provide me the session validation function code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertIn("backend/retrieval/api_service.py", paths)
-        self.assertIn("backend/retrieval/auth_store.py", paths)
+        self.assertIn("backend/retrieval/stores/auth_store.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
         self.assertIn("get_user_for_session_token", ans)
         self.assertIn("_current_auth_user", ans)
         self.assertIn("_require_auth_user", ans)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_explicit_searcher_internals_query_allows_searcher(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         source = {
-            "relative_path": "backend/retrieval/searcher.py",
+            "relative_path": "backend/retrieval/search/searcher.py",
             "symbol_name": "_rerank_with_query_tokens",
             "chunk_type": "function",
             "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -869,15 +871,15 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             sources=[source],
             chunks=[source],
         )
-        self.assertIn("backend/retrieval/searcher.py", answer)
+        self.assertIn("backend/retrieval/search/searcher.py", answer)
         self.assertIn("_rerank_with_query_tokens", answer)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_explicit_searcher_internals_query_includes_reranking_helpers(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         sources = [
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_rerank_with_query_tokens",
                 "chunk_type": "function",
                 "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
@@ -885,7 +887,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 2,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "_merge_results",
                 "chunk_type": "function",
                 "content": "def _merge_results(a, b):\n    return a + b",
@@ -893,7 +895,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 4,
             },
             {
-                "relative_path": "backend/retrieval/searcher.py",
+                "relative_path": "backend/retrieval/search/searcher.py",
                 "symbol_name": "feature_specific_routing_boost",
                 "chunk_type": "function",
                 "content": "def feature_specific_routing_boost(path, query):\n    return 0.0",
@@ -901,7 +903,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 6,
             },
             {
-                "relative_path": "backend/retrieval/source_filter.py",
+                "relative_path": "backend/retrieval/search/source_filter.py",
                 "symbol_name": "apply_query_negative_filters",
                 "chunk_type": "function",
                 "content": "def apply_query_negative_filters(sources, raw_query, **kwargs):\n    return sources",
@@ -923,14 +925,14 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             sources=sources,
             chunks=sources,
         )
-        self.assertIn("backend/retrieval/searcher.py", answer)
+        self.assertIn("backend/retrieval/search/searcher.py", answer)
         self.assertIn("_rerank_with_query_tokens", answer)
         self.assertIn("_merge_results", answer)
         self.assertIn("feature_specific_routing_boost", answer)
         self.assertNotIn("backend/scripts/lexical_layer_benchmark.py", answer)
         self.assertNotIn("Low confidence", answer)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_evaluation_report_api_endpoint_routes_correctly(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=2)
@@ -944,7 +946,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("show me the evaluation report API endpoint code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertEqual(
-            {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"},
+            {"backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"},
             set(paths),
         )
         self.assertEqual(len(final_srcs), len({(
@@ -953,7 +955,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             int(src.get("start_line", 0) or 0),
             int(src.get("end_line", 0) or 0),
         ) for src in final_srcs}))
-        self.assertNotIn("backend/retrieval/searcher.py", paths)
+        self.assertNotIn("backend/retrieval/search/searcher.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
         self.assertNotIn("backend/tests/test_eval_reports.py", paths)
         self.assertIn("get_latest_evaluation_report_v1", ans)
@@ -963,13 +965,13 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("index_latest_session_v1", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
         self.assertIn("backend/retrieval/api_service.py", ans)
-        self.assertIn("backend/retrieval/eval_reports.py", ans)
+        self.assertIn("backend/retrieval/support/eval_reports.py", ans)
         self.assertEqual(
             {"get_latest_evaluation_report_v1", "get_latest_evaluation_report"},
             {src.get("symbol_name", "") for src in final_srcs},
         )
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_evaluation_report_api_endpoint_does_not_render_unrelated_api_handlers(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         answer = build_code_snippet_answer(
@@ -983,7 +985,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("retry_session_v1", answer)
         self.assertNotIn("index_latest_session_v1", answer)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_safe_eval_runner_route_uses_filesystem_when_only_auth_snippets_exist(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         answer = build_code_snippet_answer(
@@ -996,7 +998,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("_current_auth_user", answer)
         self.assertNotIn("create_auth_session", answer)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_topic_switching_across_broad_code_requests(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=5)
@@ -1022,7 +1024,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("# ... omitted for brevity ...", ans1)
 
     def test_safe_eval_source_location_prefers_implementation(self) -> None:
-        from retrieval.searcher import _rerank_with_query_tokens
+        from retrieval.search.searcher import _rerank_with_query_tokens
         candidates = [
             {
                 "chunk_id": "doc-1",
@@ -1054,7 +1056,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         )
         self.assertEqual("backend/evals/run_safe_evals.py", ranked[0]["relative_path"])
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_explicit_tests_request_still_allows_tests(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         answer = build_code_snippet_answer(
@@ -1065,11 +1067,11 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertIn("backend/tests/test_eval_reports.py", answer)
 
     def test_explicit_docs_request_still_allows_safe_eval_docs(self) -> None:
-        from retrieval.searcher import query_explicitly_requests_non_implementation_artifacts
+        from retrieval.search.searcher import query_explicitly_requests_non_implementation_artifacts
         self.assertTrue(query_explicitly_requests_non_implementation_artifacts("what does safe_eval_runner.md document?"))
         self.assertFalse(query_explicitly_requests_non_implementation_artifacts("show me the evaluation report API endpoint code"))
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_no_duplicate_source_footer(self, mock_read):
         mock_read.side_effect = lambda src: src.get("content", "")
         ans = build_code_snippet_answer(
@@ -1106,7 +1108,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_explanation_overrides_previous_code_request_intent(self) -> None:
         from retrieval.main import _resolve_query_info
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         
         memory = ConversationMemory(max_turns=5)
         memory.add(
@@ -1120,7 +1122,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_code_request_not_inherited_without_markers(self) -> None:
         from retrieval.main import _resolve_query_info
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         
         memory = ConversationMemory(max_turns=5)
         memory.add(
@@ -1132,12 +1134,12 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         resolved = _resolve_query_info("what is it used for", memory)
         self.assertNotEqual(resolved["primary_intent"], "CODE_REQUEST")
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_sequence_code_to_explanation(self, mock_read) -> None:
         # F.1 Sequence: "show me _require_auth code" then "explain how auth works"
         mock_read.side_effect = lambda src: src.get("content", "")
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
         
         # Turn 1: code request
@@ -1158,12 +1160,12 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             self.assertNotIn("```", ans2)
             self.assertIn("The flow appears to be:", ans2)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_sequence_code_to_source_location(self, mock_read) -> None:
         # F.2 Sequence: "show me _require_auth code" then "where is auth implemented?"
         mock_read.side_effect = lambda src: src.get("content", "")
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
         
         # Turn 1: code request
@@ -1183,7 +1185,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             self.assertNotIn("```", ans2)
             self.assertIn("backend/retrieval/api_service.py", ans2)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_formatting_no_intro_or_sources_footer(self, mock_read) -> None:
         # F.3 Formatting: code_snippet answer must not contain "Code snippets from retrieved context" or manual "Sources:"
         mock_read.side_effect = lambda src: src.get("content", "")
@@ -1198,11 +1200,11 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def test_pollution_does_not_return_query_intent_py(self) -> None:
         # F.4 Pollution: "show me the Qdrant upsert code" must not return query_intent.py
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=2)
         pollution_sources = self.sources + [
             {
-                "relative_path": "backend/retrieval/query_intent.py",
+                "relative_path": "backend/retrieval/query/query_intent.py",
                 "symbol_name": "is_code_request_query",
                 "chunk_type": "function",
                 "content": "def is_code_request_query():\n    pass",
@@ -1222,9 +1224,9 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_query_endpoint_code_routing(self) -> None:
         # F.5 Query endpoint: "show me the query endpoint code" routes to _query_impl
-        from retrieval.searcher import _inject_auth_routing_candidates
+        from retrieval.search.searcher import _inject_auth_routing_candidates
         # Since _inject_auth_routing_candidates queries Qdrant with _get_client(), let's patch _qdrant_call
-        with patch("retrieval.searcher._qdrant_call") as mock_call:
+        with patch("retrieval.search.searcher._qdrant_call") as mock_call:
             from qdrant_client.models import Record
             mock_call.return_value = ([
                 Record(id="1", payload={"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_query_impl"})
@@ -1234,11 +1236,11 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_session_validation_routing(self) -> None:
         # F.6 Session validation: "provide me the session validation function code" returns get_user_for_session_token etc.
-        from retrieval.searcher import _inject_auth_routing_candidates
-        with patch("retrieval.searcher._qdrant_call") as mock_call:
+        from retrieval.search.searcher import _inject_auth_routing_candidates
+        with patch("retrieval.search.searcher._qdrant_call") as mock_call:
             from qdrant_client.models import Record
             mock_call.side_effect = lambda *args, **kwargs: ([
-                Record(id="1", payload={"relative_path": "backend/retrieval/auth_store.py", "symbol_name": "get_user_for_session_token"}),
+                Record(id="1", payload={"relative_path": "backend/retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"}),
                 Record(id="2", payload={"relative_path": "backend/retrieval/api_service.py", "symbol_name": "_current_auth_user"})
             ], None)
             res = _inject_auth_routing_candidates("provide me the session validation function code", "CODE_REQUEST")
@@ -1247,7 +1249,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             self.assertIn("_current_auth_user", symbols)
             self.assertNotIn("delete_auth_session", symbols)
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_exact_symbols_order(self, mock_read) -> None:
         # F.7 Exact symbols returned first
         mock_read.side_effect = lambda src: src.get("content", "")
@@ -1263,7 +1265,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_multi_turn_source_footer_cleanup(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
 
         sources_turn1 = [
@@ -1284,7 +1286,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.expand", return_value=sources_turn1), \
              patch("retrieval.main.assemble", return_value=("context", sources_turn1, 0)), \
              patch("retrieval.main.select_sources_for_display", return_value=sources_turn1), \
-             patch("retrieval.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
+             patch("retrieval.generation.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
             ans1, srcs1, _ = run_query("show me the Qdrant upsert code", memory)
             self.assertIn("store_chunks", ans1)
             self.assertTrue(any("storage.py" in s.get("relative_path", "") for s in srcs1))
@@ -1317,7 +1319,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.expand", return_value=sources_turn2), \
              patch("retrieval.main.assemble", return_value=("context", sources_turn2, 0)), \
              patch("retrieval.main.select_sources_for_display", return_value=sources_turn2), \
-             patch("retrieval.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
+             patch("retrieval.generation.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
             ans2, srcs2, _ = run_query("show me _require_auth code", memory)
             self.assertIn("_require_auth", ans2)
             self.assertTrue(any("api_service.py" in s.get("relative_path", "") for s in srcs2))
@@ -1325,7 +1327,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_session_validation_source_cleanup(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
 
         sources_turn1 = [
@@ -1346,13 +1348,13 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.expand", return_value=sources_turn1), \
              patch("retrieval.main.assemble", return_value=("context", sources_turn1, 0)), \
              patch("retrieval.main.select_sources_for_display", return_value=sources_turn1), \
-             patch("retrieval.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
+             patch("retrieval.generation.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
             run_query("show me the Qdrant upsert code", memory)
 
         # Query 2 (provide me the session validation function code)
         sources_turn2 = [
             {
-                "relative_path": "backend/retrieval/auth_store.py",
+                "relative_path": "backend/retrieval/stores/auth_store.py",
                 "symbol_name": "get_user_for_session_token",
                 "chunk_type": "function",
                 "content": "def get_user_for_session_token():\n    pass",
@@ -1377,7 +1379,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.expand", return_value=sources_turn2), \
              patch("retrieval.main.assemble", return_value=("context", sources_turn2, 0)), \
              patch("retrieval.main.select_sources_for_display", return_value=sources_turn2), \
-             patch("retrieval.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
+             patch("retrieval.generation.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
             ans2, srcs2, _ = run_query("provide me the session validation function code", memory)
             self.assertIn("get_user_for_session_token", ans2)
             self.assertTrue(any("auth_store.py" in s.get("relative_path", "") for s in srcs2))
@@ -1404,7 +1406,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_exact_symbol_source_list(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=2)
 
         sources = [
@@ -1434,7 +1436,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.expand", return_value=sources), \
              patch("retrieval.main.assemble", return_value=("context", sources, 0)), \
              patch("retrieval.main.select_sources_for_display", return_value=sources), \
-             patch("retrieval.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
+             patch("retrieval.generation.code_answers._read_source_excerpt", side_effect=lambda src: src.get("content", "")):
             ans, srcs, _ = run_query("show me _require_auth code", memory)
             self.assertIn("_require_auth", ans)
             self.assertTrue(any(s.get("symbol_name") == "_require_auth" for s in srcs))
