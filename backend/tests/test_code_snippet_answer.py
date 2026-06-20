@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 from retrieval.generation.code_answers import build_code_snippet_answer, _compact_code_snippet
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def setUp(self):
@@ -250,7 +250,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         from tempfile import TemporaryDirectory
 
         from retrieval import session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.memory.memory import SessionConversationMemory
 
         file_level_source = {
             "relative_path": "backend/retrieval/api_service.py",
@@ -476,7 +476,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
         from retrieval.stores import chat_store
         from retrieval import session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.memory.memory import SessionConversationMemory
 
         safe_eval_sources = list(self.safe_eval_sources)
         stale_sources = [
@@ -598,7 +598,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
         from retrieval.stores import chat_store
         from retrieval import session_indexer
-        from retrieval.memory import SessionConversationMemory
+        from retrieval.memory.memory import SessionConversationMemory
 
         auth_sources = list(self.sources)
         safe_eval_sources = list(self.safe_eval_sources)
@@ -1108,7 +1108,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_explanation_overrides_previous_code_request_intent(self) -> None:
         from retrieval.main import _resolve_query_info
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         
         memory = ConversationMemory(max_turns=5)
         memory.add(
@@ -1122,7 +1122,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_code_request_not_inherited_without_markers(self) -> None:
         from retrieval.main import _resolve_query_info
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         
         memory = ConversationMemory(max_turns=5)
         memory.add(
@@ -1139,7 +1139,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         # F.1 Sequence: "show me _require_auth code" then "explain how auth works"
         mock_read.side_effect = lambda src: src.get("content", "")
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
         
         # Turn 1: code request
@@ -1165,7 +1165,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         # F.2 Sequence: "show me _require_auth code" then "where is auth implemented?"
         mock_read.side_effect = lambda src: src.get("content", "")
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
         
         # Turn 1: code request
@@ -1200,7 +1200,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def test_pollution_does_not_return_query_intent_py(self) -> None:
         # F.4 Pollution: "show me the Qdrant upsert code" must not return query_intent.py
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=2)
         pollution_sources = self.sources + [
             {
@@ -1265,7 +1265,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_multi_turn_source_footer_cleanup(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
 
         sources_turn1 = [
@@ -1327,7 +1327,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_session_validation_source_cleanup(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=5)
 
         sources_turn1 = [
@@ -1406,7 +1406,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
 
     def test_exact_symbol_source_list(self) -> None:
         from retrieval.main import run_query
-        from retrieval.memory import ConversationMemory
+        from retrieval.memory.memory import ConversationMemory
         memory = ConversationMemory(max_turns=2)
 
         sources = [

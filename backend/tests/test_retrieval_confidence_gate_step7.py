@@ -3,7 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 def _source(path: str, symbol: str, score: float = 0.2) -> dict:

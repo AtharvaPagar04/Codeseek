@@ -10,7 +10,7 @@ from retrieval.config import (
     INTENT_HISTORY_CAPS,
     INTENT_CONTEXT_BUDGETS,
 )
-from retrieval.memory import ConversationMemory, _cap_history_block, _token_count
+from retrieval.memory.memory import ConversationMemory, _cap_history_block, _token_count
 
 
 # ---------------------------------------------------------------------------

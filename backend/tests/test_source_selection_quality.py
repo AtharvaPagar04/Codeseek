@@ -67,7 +67,7 @@ def test_source_cards_location_prefers_frontend_rendering_sources() -> None:
         "where are source cards rendered",
         [
             _src("backend/retrieval/generation/answer_validation.py", "validate_generated_answer", score=0.99),
-            _src("backend/retrieval/follow_up_memory.py", "extract_cited_entities", score=0.8),
+            _src("backend/retrieval/memory/follow_up_memory.py", "extract_cited_entities", score=0.8),
             _src("frontend/src/components/MessageBubble.jsx", "MessageBubble", score=0.55),
             _src("frontend/src/components/SourceCard.jsx", "SourceCard", score=0.5),
         ],

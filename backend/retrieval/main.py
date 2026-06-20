@@ -43,7 +43,7 @@ from retrieval.config import (
     get_repo_root,
 )
 from retrieval.search.expander import expand
-from retrieval.follow_up_memory import (
+from retrieval.memory.follow_up_memory import (
     analyze_topic_shift,
     build_recent_entity_set,
     extract_cited_entities,
@@ -52,7 +52,7 @@ from retrieval.follow_up_memory import (
     rewrite_follow_up_query,
 )
 from retrieval.generation.llm import generate_answer, generate_answer_stream
-from retrieval.memory import ConversationMemory, prepare_history_block
+from retrieval.memory.memory import ConversationMemory, prepare_history_block
 from retrieval.support.observability import StageMetrics, log_event, new_request_id
 from retrieval.query.query_processor import process_query
 from retrieval.support.isolation import validate_collection_binding
@@ -604,7 +604,7 @@ class PostProcessingMemoryProxy:
         self.last_sources = final_sources
 
         # 3. Re-calculate entities using the final pruned sources
-        from retrieval.follow_up_memory import extract_cited_entities
+        from retrieval.memory.follow_up_memory import extract_cited_entities
         new_entities = extract_cited_entities(final_sources)
 
         # 4. Save to target memory/database

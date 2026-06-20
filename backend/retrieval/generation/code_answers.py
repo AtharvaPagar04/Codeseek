@@ -4301,7 +4301,7 @@ def _overview_source_priority(source: dict) -> int:
             "retrieval/generation/llm.py",
             "retrieval/search/source_filter.py",
             "retrieval/generation/answer_validation.py",
-            "retrieval/follow_up_memory.py",
+            "retrieval/memory/follow_up_memory.py",
             "retrieval/db.py",
         )
     ):
@@ -4392,7 +4392,7 @@ def _architecture_source_priority(source: dict) -> int:
             "retrieval/generation/llm.py",
             "retrieval/search/source_filter.py",
             "retrieval/generation/answer_validation.py",
-            "retrieval/follow_up_memory.py",
+            "retrieval/memory/follow_up_memory.py",
             "retrieval/db.py",
         )
     ):

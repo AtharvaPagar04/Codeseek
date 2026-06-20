@@ -16,7 +16,7 @@ Primary implementation files:
 - `retrieval/search/source_filter.py`
 - `retrieval/generation/code_answers.py`
 - `retrieval/generation/llm.py`
-- `retrieval/memory.py`
+- `retrieval/memory/memory.py`
 - `rag_ingestion/stages/language.py`
 - `rag_ingestion/stages/chunker.py`
 
@@ -203,7 +203,7 @@ The end-to-end retrieval request starts in `retrieval/main.py`.
 
 ### 4.1 Memory models
 
-There are three memory implementations in `retrieval/memory.py`:
+There are three memory implementations in `retrieval/memory/memory.py`:
 
 - `ConversationMemory`
 - `SessionConversationMemory`

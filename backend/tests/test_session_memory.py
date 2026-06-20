@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 from retrieval.stores import chat_store, memory_store
 from retrieval import session_indexer
-from retrieval.memory import SessionConversationMemory
+from retrieval.memory.memory import SessionConversationMemory
 
 
 class SessionMemoryTests(unittest.TestCase):

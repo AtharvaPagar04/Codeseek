@@ -39,7 +39,7 @@ from retrieval.db import init_db
 from retrieval.stores.github_store import get_github_credential, upsert_github_credential
 from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
+from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.generation.llm import LlmProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,

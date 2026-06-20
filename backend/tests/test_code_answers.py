@@ -39,7 +39,7 @@ from retrieval.generation.code_answers import (
 )
 from retrieval.generation.llm import _build_prompt
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 class CodeAnswerTests(unittest.TestCase):

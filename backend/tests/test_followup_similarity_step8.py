@@ -3,7 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from retrieval.main import _resolve_query_info
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 
 
 def _base_query_info(raw_query: str, *, primary_intent: str = "FOLLOWUP") -> dict:
@@ -51,7 +51,7 @@ def test_resolve_query_info_keeps_pronoun_followup_with_valid_referent() -> None
             "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
-            "retrieval.follow_up_memory._query_similarity_details",
+            "retrieval.memory.follow_up_memory._query_similarity_details",
             return_value={"score": 0.18, "keyword_overlap": 0.0, "method": "embedding"},
         ):
             info = _resolve_query_info("explain it", memory, memory.recent_turn_entities(max_turns=8))
@@ -88,7 +88,7 @@ def test_resolve_query_info_marks_short_unrelated_query_as_new_topic() -> None:
             "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
-            "retrieval.follow_up_memory._query_similarity_details",
+            "retrieval.memory.follow_up_memory._query_similarity_details",
             return_value={"score": 0.09, "keyword_overlap": 0.0, "method": "embedding"},
         ):
             info = _resolve_query_info("explain decorators", memory, memory.recent_turn_entities(max_turns=8))
@@ -119,7 +119,7 @@ def test_resolve_query_info_blocks_pronoun_followup_without_referent() -> None:
             "retrieval.query.query_intent.identify_followup_or_low_context",
             return_value=(True, False),
         ), patch(
-            "retrieval.follow_up_memory._query_similarity_details",
+            "retrieval.memory.follow_up_memory._query_similarity_details",
             return_value={"score": 0.74, "keyword_overlap": 0.2, "method": "embedding"},
         ):
             info = _resolve_query_info("explain it", memory, memory.recent_turn_entities(max_turns=8))

@@ -7,7 +7,7 @@ import tempfile
 from unittest.mock import patch
 
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 from retrieval.search.source_filter import select_sources_for_display
 
 class SourceLocationQueriesTests(unittest.TestCase):

@@ -1288,7 +1288,7 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
             "backend/retrieval/generation/llm.py",
             "backend/retrieval/search/source_filter.py",
             "backend/retrieval/generation/answer_validation.py",
-            "backend/retrieval/follow_up_memory.py",
+            "backend/retrieval/memory/follow_up_memory.py",
             "backend/retrieval/db.py",
         )
     ):
@@ -1316,7 +1316,7 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
         "backend/retrieval/generation/llm.py",
         "backend/retrieval/search/source_filter.py",
         "backend/retrieval/generation/answer_validation.py",
-        "backend/retrieval/follow_up_memory.py",
+        "backend/retrieval/memory/follow_up_memory.py",
         "backend/retrieval/db.py",
         "backend/docs/retrieval_docs",
     )
