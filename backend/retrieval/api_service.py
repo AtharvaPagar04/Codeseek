@@ -41,6 +41,7 @@ from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.generation.llm import LlmProviderError
+from retrieval.support.embedding_provider import EmbeddingProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -344,6 +345,19 @@ def _thread_visible_to_user(thread: dict, auth_user: dict | None) -> bool:
 
 
 def _resolve_query_session(session_id: str | None, auth_user: dict | None = None) -> dict | None:
+    def _enforce_queryable_session(session: dict) -> None:
+        freshness = (session.get("repo_status") or {}).get("status", "")
+        if freshness == "embedding_config_changed":
+            raise HTTPException(
+                status_code=409,
+                detail="This session was indexed with a different embedding provider/model/dimensions. Run a full reindex before querying.",
+            )
+        if freshness == "embedding_config_invalid":
+            raise HTTPException(
+                status_code=503,
+                detail="The current embedding provider configuration is invalid. Fix the embedding settings and run a full reindex.",
+            )
+
     if session_id:
         session = get_session(session_id)
         if not session:
@@ -355,10 +369,12 @@ def _resolve_query_session(session_id: str | None, auth_user: dict | None = None
                 status_code=409,
                 detail=f"Session is not ready (status={session.get('status')})",
             )
+        _enforce_queryable_session(session)
         return session
 
     ready_sessions = [session for session in _ready_sessions() if _session_visible_to_user(session, auth_user)]
     if len(ready_sessions) == 1:
+        _enforce_queryable_session(ready_sessions[0])
         return ready_sessions[0]
     return None
 
@@ -487,6 +503,8 @@ def _health_payload() -> dict[str, str]:
         "collection": get_collection_name(),
         "repo_root": get_repo_root(),
         "embedding_model": dep.get("embedding_model", "unknown"),
+        "embedding_provider": dep.get("embedding_provider", ""),
+        "embedding_selected_model": dep.get("embedding_selected_model", ""),
         "qdrant": dep.get("qdrant", "unknown"),
         "startup_errors": "; ".join(_startup_errors) if _startup_errors else "",
     }
@@ -914,6 +932,18 @@ def _query_impl(
             total_latency_ms=total_ms,
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except EmbeddingProviderError as exc:
+        total_ms = int((time.perf_counter() - started) * 1000)
+        observe_api_request(path, "503", total_ms)
+        RETRIEVAL_ERRORS_TOTAL.labels(error_type="provider").inc()
+        log_event(
+            "api.query.error",
+            request_id,
+            error=str(exc),
+            status_code=503,
+            total_latency_ms=total_ms,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, "error", total_ms)

@@ -257,6 +257,8 @@ def run_pipeline(
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
+        embedding_metadata = getattr(counters, "embedding_provider_metadata", {})
+        embedding_dimensions = int(embedding_metadata.get("embedding_dimensions", 0) or 0)
 
         emit("embedding",
              f"Generated embeddings for {counters.embeddings_generated} chunks.",
@@ -279,6 +281,7 @@ def run_pipeline(
             counters,
             collection_name=selected_collection,
             recreate_collection=should_recreate_collection,
+            embedding_dimensions=embedding_dimensions,
         )
         emit("storage",
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
@@ -555,6 +558,8 @@ def run_incremental_pipeline(
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
+        embedding_metadata = getattr(counters, "embedding_provider_metadata", {})
+        embedding_dimensions = int(embedding_metadata.get("embedding_dimensions", 0) or 0)
         emit("embedding", f"Generated embeddings for {counters.embeddings_generated} chunks.")
 
     # --- Qdrant Deletion Pre-fetch ---
@@ -588,6 +593,7 @@ def run_incremental_pipeline(
             counters,
             collection_name=selected_collection,
             recreate_collection=False,
+            embedding_dimensions=embedding_dimensions,
         )
 
     # --- Qdrant Deletion ---
@@ -657,4 +663,3 @@ def run_incremental_pipeline(
 
 if __name__ == "__main__":
     main()
-

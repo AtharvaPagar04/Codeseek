@@ -2,7 +2,6 @@
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
-    EMBEDDING_DIM,
     QDRANT_HOST,
     QDRANT_PORT,
     RECREATE_COLLECTION_EACH_RUN,
@@ -19,17 +18,21 @@ def store_chunks(
     counters: PipelineCounters,
     collection_name: str | None = None,
     recreate_collection: bool | None = None,
+    embedding_dimensions: int | None = None,
 ) -> None:
     """Ensure the collection exists and upsert chunks by deterministic IDs."""
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
     collection = collection_name or COLLECTION_NAME
+    vector_size = _resolve_embedding_dimensions(chunks, embedding_dimensions)
+    if vector_size <= 0:
+        raise RuntimeError("Embedding dimensions could not be determined before Qdrant upsert.")
     client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
     _ensure_collection(
         client=client,
         collection_name=collection,
-        vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         recreate_collection=recreate_collection,
     )
 
@@ -92,7 +95,17 @@ def _ensure_collection(
         return
 
     try:
-        client.get_collection(collection_name)
+        existing = client.get_collection(collection_name)
+        existing_size = _collection_vector_size(existing)
+        requested_size = int(getattr(vectors_config, "size", 0) or 0)
+        if existing_size and requested_size and existing_size != requested_size:
+            raise RuntimeError(
+                f"Qdrant collection '{collection_name}' has vector size {existing_size}, "
+                f"but the current embedding provider returned size {requested_size}. "
+                "Run a full reindex with collection recreation."
+            )
+    except RuntimeError:
+        raise
     except Exception:
         client.create_collection(
             collection_name=collection_name,
@@ -187,3 +200,29 @@ def delete_vectors_by_ids(
         collection_name=collection,
         points_selector=PointIdsList(points=vector_ids),
     )
+
+
+def _resolve_embedding_dimensions(
+    chunks: list[Chunk],
+    embedding_dimensions: int | None,
+) -> int:
+    if embedding_dimensions and embedding_dimensions > 0:
+        return int(embedding_dimensions)
+    for chunk in chunks:
+        if chunk.embedding:
+            return len(chunk.embedding)
+    return 0
+
+
+def _collection_vector_size(collection_info) -> int:
+    config = getattr(collection_info, "config", None)
+    params = getattr(config, "params", None)
+    vectors = getattr(params, "vectors", None)
+    size = getattr(vectors, "size", None)
+    if size:
+        return int(size)
+    if isinstance(vectors, dict):
+        first = next(iter(vectors.values()), None)
+        if first is not None:
+            return int(getattr(first, "size", 0) or 0)
+    return 0

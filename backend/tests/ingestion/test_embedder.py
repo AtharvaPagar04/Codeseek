@@ -176,18 +176,18 @@ def test_embed_chunks_batching_and_cleanup():
     ]
     counters = PipelineCounters()
     
-    mock_model = MagicMock()
+    mock_provider = MagicMock()
     
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 2), \
          patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch") as mock_cleanup:
-         
-        # Since chunks are embedded in batches of size 2, mock_model.encode will be called twice:
-        # first time with 2 inputs, second time with 1 input.
-        import numpy as np
-        mock_model.encode.side_effect = [
-            np.array([[0.1]*384, [0.2]*384]),
-            np.array([[0.3]*384])
+
+        mock_provider.embed_texts.side_effect = [
+            [[0.1] * 384, [0.2] * 384],
+            [[0.3] * 384],
         ]
         
         result = embed_chunks(chunks, counters)
@@ -210,10 +210,13 @@ def test_embed_chunks_fails_cleanly_on_exception():
     chunks = [Chunk(relative_path="file1.py", content="def a(): pass")]
     counters = PipelineCounters()
     
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = RuntimeError("CUDA out of memory")
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = RuntimeError("CUDA out of memory")
     
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 16):
          
         with pytest.raises(RuntimeError) as exc_info:
@@ -231,14 +234,17 @@ def test_embedding_cooldown_triggers_after_300(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -260,14 +266,17 @@ def test_embedding_cooldown_explicit_default_sleep_duration(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(350)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -289,14 +298,17 @@ def test_embedding_cooldown_disabled_with_every_zero(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 0), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -318,14 +330,17 @@ def test_embedding_cooldown_disabled_with_seconds_zero(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 0), \
@@ -347,14 +362,17 @@ def test_embedding_cooldown_does_not_sleep_after_final_batch(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(300)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -376,8 +394,8 @@ def test_embedding_cooldown_cleanup_before_sleep():
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     actions = []
 
@@ -387,7 +405,10 @@ def test_embedding_cooldown_cleanup_before_sleep():
     def fake_sleep(secs):
         actions.append("sleep")
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -408,10 +429,13 @@ def test_embedding_cooldown_log_message_contents(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(350)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 30), \
@@ -432,14 +456,17 @@ def test_embedding_cooldown_variable_batch_sizes(capsys):
     chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(1000)]
     counters = PipelineCounters()
 
-    mock_model = MagicMock()
-    mock_model.encode.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384))
+    mock_provider = MagicMock()
+    mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: np.zeros((len(inputs), 384)).tolist()
 
     sleep_calls = []
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.embedder._get_model", return_value=mock_model), \
+    with patch(
+        "rag_ingestion.stages.embedder._get_provider",
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+    ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 400), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_SECONDS", 15), \
