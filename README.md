@@ -123,8 +123,8 @@ Source (local path or GitHub URL)
 └──────┬──────┘    e.g. "Function: verify_token\nParameters: token\nDocstring: ..."
        ▼
 ┌─────────────┐
-│  embedder   │  SentenceTransformer BAAI/bge-small-en-v1.5 (384-dim)
-└──────┬──────┘    Batch size 128; query prefix "query: " at retrieval time
+│  embedder   │  Local SentenceTransformer by default; OpenAI-compatible cloud embeddings optional
+└──────┬──────┘    Dimensions tracked in session metadata; query prefix "query: " at retrieval time
        ▼
 ┌─────────────┐
 │   storage   │  Qdrant upsert — vector + full metadata payload
@@ -150,6 +150,32 @@ Each stored chunk carries:
 ### 3.3 Incremental Ingestion
 
 The backend tracks ingestion state in `.rag_ingestion_state.json`. On re-index, unmodified files are skipped (`INGESTION_ENABLE_INCREMENTAL_FILE_SKIP=1`). A full re-index is forced with `QDRANT_RECREATE_COLLECTION=1`.
+
+### 3.4 Cloud Embedding Provider
+
+Embeddings default to the existing local `SentenceTransformer` path:
+
+```env
+CODESEEK_EMBEDDING_PROVIDER=local
+```
+
+For deployments that should avoid CPU-heavy local embedding generation, CodeSeek can use an OpenAI-compatible embeddings API instead:
+
+```env
+CODESEEK_EMBEDDING_PROVIDER=openai_compatible
+CODESEEK_EMBEDDING_BASE_URL=https://api.aicredits.in/v1
+CODESEEK_EMBEDDING_API_KEY=...
+CODESEEK_EMBEDDING_MODEL=text-embedding-3-small
+# Optional if your provider/model requires it:
+# CODESEEK_EMBEDDING_DIMENSIONS=1536
+```
+
+Notes:
+
+- The request shape is OpenAI-compatible `POST {base_url}/embeddings`.
+- `CODESEEK_EMBEDDING_MODEL` is fully configurable, including provider-prefixed model names such as `openai/text-embedding-3-small`.
+- CodeSeek records embedding provider/model/base URL/dimensions metadata for indexed sessions.
+- Changing the embedding provider, model, or dimensions requires a full reindex before querying that session again.
 
 ---
 
@@ -433,6 +459,17 @@ Adds: Prometheus (`:9090`), Alertmanager (`:9093`), postgres_exporter (`:9187`).
 | `CODESEEK_ALLOW_PLAINTEXT_SECRET_SUBMISSION` | Set `0` |
 
 Full variable reference: [`backend/docs/deployment_runbook.md`](backend/docs/deployment_runbook.md).
+
+Embedding provider variables for deployment:
+
+| Variable | Purpose |
+|---|---|
+| `CODESEEK_EMBEDDING_PROVIDER` | `local` or `openai_compatible` |
+| `CODESEEK_EMBEDDING_BASE_URL` | OpenAI-compatible API root such as `https://api.aicredits.in/v1` |
+| `CODESEEK_EMBEDDING_API_KEY` | Embedding provider secret (never stored in session metadata) |
+| `CODESEEK_EMBEDDING_MODEL` | Embedding model name; provider-specific prefixes are allowed |
+| `CODESEEK_EMBEDDING_DIMENSIONS` | Optional explicit vector size if required by the provider/model |
+| `CODESEEK_EMBEDDING_TIMEOUT_SECONDS` | Request timeout for cloud embedding calls |
 
 ### 10.4 Cleanup Jobs (cron)
 
