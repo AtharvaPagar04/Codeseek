@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS user_provider_credentials (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS user_embedding_configs (
+    user_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    base_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    encrypted_api_key TEXT NOT NULL DEFAULT '',
+    dimensions INTEGER NOT NULL DEFAULT 0,
+    timeout_seconds REAL NOT NULL DEFAULT 60.0,
+    batch_size INTEGER NOT NULL DEFAULT 64,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS chat_threads (
     id TEXT PRIMARY KEY,
     user_id TEXT DEFAULT NULL,

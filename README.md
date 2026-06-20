@@ -163,7 +163,7 @@ For deployments that should avoid CPU-heavy local embedding generation, CodeSeek
 
 ```env
 CODESEEK_EMBEDDING_PROVIDER=openai_compatible
-CODESEEK_EMBEDDING_BASE_URL=https://api.aicredits.in/v1
+CODESEEK_EMBEDDING_BASE_URL=https://api.example.com/v1
 CODESEEK_EMBEDDING_API_KEY=...
 CODESEEK_EMBEDDING_MODEL=text-embedding-3-small
 # Optional if your provider/model requires it:
@@ -174,8 +174,9 @@ Notes:
 
 - The request shape is OpenAI-compatible `POST {base_url}/embeddings`.
 - `CODESEEK_EMBEDDING_MODEL` is fully configurable, including provider-prefixed model names such as `openai/text-embedding-3-small`.
+- Embedding configuration can also be set or overridden per-user via the **CodeSeek Frontend UI** (in the Configurations menu). This overrides the environment-level defaults.
 - CodeSeek records embedding provider/model/base URL/dimensions metadata for indexed sessions.
-- Changing the embedding provider, model, or dimensions requires a full reindex before querying that session again.
+- **IMPORTANT**: Changing the embedding provider, model, or dimensions (either via env variables or the frontend UI) requires a full reindex of existing sessions before you can query them again, as the new embedding vectors will be incompatible with the old ones.
 
 ---
 

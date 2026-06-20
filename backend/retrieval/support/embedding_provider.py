@@ -249,6 +249,75 @@ class OpenAICompatibleEmbeddingProvider:
         return vectors
 
 
+def _fetch_saved_embedding_config() -> dict | None:
+    try:
+        from retrieval.db import db_cursor
+        from retrieval.stores.crypto_store import decrypt_secret
+        with db_cursor() as (_conn, cursor):
+            row = cursor.execute("SELECT * FROM user_embedding_configs ORDER BY created_at ASC LIMIT 1").fetchone()
+            if row:
+                return {
+                    "provider": row["provider"],
+                    "base_url": row["base_url"],
+                    "model": row["model"],
+                    "api_key": decrypt_secret(row["encrypted_api_key"]) if row["encrypted_api_key"] else "",
+                    "dimensions": row["dimensions"],
+                    "timeout_seconds": row["timeout_seconds"],
+                    "batch_size": row["batch_size"],
+                }
+    except Exception:
+        pass
+    return None
+
+
+def resolve_embedding_config() -> EmbeddingProviderConfig:
+    """
+    Return effective embedding config from:
+    1. saved setting if configured
+    2. env
+    3. local defaults
+    """
+    saved = _fetch_saved_embedding_config()
+    
+    local_model = os.getenv("INGESTION_EMBEDDING_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL).strip() or DEFAULT_LOCAL_EMBEDDING_MODEL
+    local_dimensions = _env_positive_int("INGESTION_EMBEDDING_DIM", DEFAULT_LOCAL_EMBEDDING_DIMENSIONS)
+    local_device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
+
+    if saved:
+        provider = saved["provider"]
+        if provider not in SUPPORTED_EMBEDDING_PROVIDERS:
+            provider = DEFAULT_EMBEDDING_PROVIDER
+            
+        config = EmbeddingProviderConfig(
+            provider=provider,
+            base_url=normalize_embedding_base_url(saved.get("base_url", "")),
+            api_key=saved.get("api_key", ""),
+            model=saved.get("model", ""),
+            batch_size=saved.get("batch_size") if saved.get("batch_size") else _env_positive_int("CODESEEK_EMBEDDING_BATCH_SIZE", DEFAULT_EMBEDDING_BATCH_SIZE),
+            timeout_seconds=saved.get("timeout_seconds") if saved.get("timeout_seconds") else _env_positive_float("CODESEEK_EMBEDDING_TIMEOUT_SECONDS", DEFAULT_EMBEDDING_TIMEOUT_SECONDS),
+            dimensions=saved.get("dimensions") if saved.get("dimensions") else (local_dimensions if provider == "local" else 0),
+            local_model=local_model,
+            local_device=local_device,
+        )
+    else:
+        config = get_embedding_provider_config()
+
+    if config.provider == "openai_compatible":
+        missing: list[str] = []
+        if not config.base_url:
+            missing.append("CODESEEK_EMBEDDING_BASE_URL (or saved base_url)")
+        if not config.api_key:
+            missing.append("CODESEEK_EMBEDDING_API_KEY (or saved api_key)")
+        if not config.model:
+            missing.append("CODESEEK_EMBEDDING_MODEL (or saved model)")
+        if missing:
+            raise EmbeddingConfigurationError(
+                "OpenAI-compatible embeddings require: " + ", ".join(missing)
+            )
+
+    return config
+
+
 def get_embedding_provider_config() -> EmbeddingProviderConfig:
     provider = os.getenv("CODESEEK_EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER).strip().lower()
     if not provider:
@@ -295,7 +364,7 @@ def get_embedding_provider_config() -> EmbeddingProviderConfig:
 
 
 def get_embedding_provider(config: EmbeddingProviderConfig | None = None) -> EmbeddingProvider:
-    resolved = config or get_embedding_provider_config()
+    resolved = config or resolve_embedding_config()
     if resolved.provider == "local":
         return LocalEmbeddingProvider(resolved)
     if resolved.provider == "openai_compatible":
@@ -326,7 +395,7 @@ def current_embedding_metadata(
     resolved_dimensions: int | None = None,
     dimensions_fallback: int | None = None,
 ) -> dict[str, object]:
-    config = get_embedding_provider_config()
+    config = resolve_embedding_config()
     dimensions = int(resolved_dimensions or 0)
     if dimensions <= 0:
         dimensions = int(config.dimensions or 0)
