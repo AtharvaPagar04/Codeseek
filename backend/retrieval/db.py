@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS repo_sessions (
     current_branch TEXT NOT NULL DEFAULT '',
     indexed_branch TEXT NOT NULL DEFAULT '',
     repo_dirty INTEGER NOT NULL DEFAULT 0,
+    embedding_provider TEXT NOT NULL DEFAULT '',
+    embedding_base_url TEXT NOT NULL DEFAULT '',
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_dimensions INTEGER NOT NULL DEFAULT 0,
+    embedding_config_hash TEXT NOT NULL DEFAULT '',
     repo_status_checked_at TEXT NOT NULL DEFAULT '',
     files_indexed INTEGER NOT NULL DEFAULT 0
 );
@@ -101,6 +106,20 @@ CREATE TABLE IF NOT EXISTS user_provider_credentials (
     encrypted_api_key TEXT NOT NULL,
     model TEXT NOT NULL DEFAULT '',
     is_active INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_embedding_configs (
+    user_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    base_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    encrypted_api_key TEXT NOT NULL DEFAULT '',
+    dimensions INTEGER NOT NULL DEFAULT 0,
+    timeout_seconds REAL NOT NULL DEFAULT 60.0,
+    batch_size INTEGER NOT NULL DEFAULT 64,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -329,6 +348,26 @@ def _init_sqlite(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN repo_dirty INTEGER NOT NULL DEFAULT 0"
             )
+        if "embedding_provider" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN embedding_provider TEXT NOT NULL DEFAULT ''"
+            )
+        if "embedding_base_url" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN embedding_base_url TEXT NOT NULL DEFAULT ''"
+            )
+        if "embedding_model" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
+            )
+        if "embedding_dimensions" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN embedding_dimensions INTEGER NOT NULL DEFAULT 0"
+            )
+        if "embedding_config_hash" not in repo_columns:
+            conn.execute(
+                "ALTER TABLE repo_sessions ADD COLUMN embedding_config_hash TEXT NOT NULL DEFAULT ''"
+            )
         if "repo_status_checked_at" not in repo_columns:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN repo_status_checked_at TEXT NOT NULL DEFAULT ''"
@@ -394,6 +433,26 @@ def _init_postgres(database_url: str) -> None:
             if not _postgres_has_column(cursor, "repo_sessions", "repo_dirty"):
                 cursor.execute(
                     "ALTER TABLE repo_sessions ADD COLUMN repo_dirty BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "embedding_provider"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN embedding_provider TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "embedding_base_url"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN embedding_base_url TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "embedding_model"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "embedding_dimensions"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN embedding_dimensions INTEGER NOT NULL DEFAULT 0"
+                )
+            if not _postgres_has_column(cursor, "repo_sessions", "embedding_config_hash"):
+                cursor.execute(
+                    "ALTER TABLE repo_sessions ADD COLUMN embedding_config_hash TEXT NOT NULL DEFAULT ''"
                 )
             if not _postgres_has_column(cursor, "repo_sessions", "repo_status_checked_at"):
                 cursor.execute(

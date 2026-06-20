@@ -41,6 +41,7 @@ from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.generation.llm import LlmProviderError
+from retrieval.support.embedding_provider import EmbeddingProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -297,6 +298,26 @@ class ProviderCredentialCreateRequest(BaseModel):
     is_active: bool | None = None
 
 
+class EmbeddingConfigUpdateRequest(BaseModel):
+    provider: str
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    encrypted_secret: dict | None = None
+    dimensions: int | None = None
+    timeout_seconds: float | None = None
+    batch_size: int | None = None
+
+
+class EmbeddingTestRequest(BaseModel):
+    provider: str
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    encrypted_secret: dict | None = None
+    dimensions: int | None = None
+
+
 class SessionCreateRequest(BaseModel):
     repo_full_name: str
     repo_url: str | None = None
@@ -344,6 +365,19 @@ def _thread_visible_to_user(thread: dict, auth_user: dict | None) -> bool:
 
 
 def _resolve_query_session(session_id: str | None, auth_user: dict | None = None) -> dict | None:
+    def _enforce_queryable_session(session: dict) -> None:
+        freshness = (session.get("repo_status") or {}).get("status", "")
+        if freshness == "embedding_config_changed":
+            raise HTTPException(
+                status_code=409,
+                detail="This session was indexed with a different embedding provider/model/dimensions. Run a full reindex before querying.",
+            )
+        if freshness == "embedding_config_invalid":
+            raise HTTPException(
+                status_code=503,
+                detail="The current embedding provider configuration is invalid. Fix the embedding settings and run a full reindex.",
+            )
+
     if session_id:
         session = get_session(session_id)
         if not session:
@@ -355,10 +389,12 @@ def _resolve_query_session(session_id: str | None, auth_user: dict | None = None
                 status_code=409,
                 detail=f"Session is not ready (status={session.get('status')})",
             )
+        _enforce_queryable_session(session)
         return session
 
     ready_sessions = [session for session in _ready_sessions() if _session_visible_to_user(session, auth_user)]
     if len(ready_sessions) == 1:
+        _enforce_queryable_session(ready_sessions[0])
         return ready_sessions[0]
     return None
 
@@ -487,6 +523,8 @@ def _health_payload() -> dict[str, str]:
         "collection": get_collection_name(),
         "repo_root": get_repo_root(),
         "embedding_model": dep.get("embedding_model", "unknown"),
+        "embedding_provider": dep.get("embedding_provider", ""),
+        "embedding_selected_model": dep.get("embedding_selected_model", ""),
         "qdrant": dep.get("qdrant", "unknown"),
         "startup_errors": "; ".join(_startup_errors) if _startup_errors else "",
     }
@@ -914,6 +952,18 @@ def _query_impl(
             total_latency_ms=total_ms,
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except EmbeddingProviderError as exc:
+        total_ms = int((time.perf_counter() - started) * 1000)
+        observe_api_request(path, "503", total_ms)
+        RETRIEVAL_ERRORS_TOTAL.labels(error_type="provider").inc()
+        log_event(
+            "api.query.error",
+            request_id,
+            error=str(exc),
+            status_code=503,
+            total_latency_ms=total_ms,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, "error", total_ms)
@@ -1183,6 +1233,201 @@ async def query_stream_v1(
                 os.environ["QDRANT_COLLECTION_NAME"] = previous_collection
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@v1.get("/embedding/options")
+def get_embedding_options_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth_user(session_token)
+    from retrieval.support.embedding_provider import get_openai_compatible_embedding_model_options
+    return {
+        "providers": [
+            {
+                "id": "local",
+                "label": "Local SentenceTransformer"
+            },
+            {
+                "id": "openai_compatible",
+                "label": "OpenAI-compatible / AICredits"
+            }
+        ],
+        "openai_compatible_models": get_openai_compatible_embedding_model_options(),
+    }
+
+
+@v1.get("/embedding/config")
+def get_embedding_config_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    user = _require_auth_user(session_token)
+    from retrieval.stores.embedding_store import get_embedding_config
+    from retrieval.support.embedding_provider import get_embedding_provider_config
+    
+    saved = get_embedding_config(user["id"])
+    if saved:
+        return {
+            "provider": saved["provider"],
+            "base_url": saved.get("base_url", ""),
+            "model": saved.get("model", ""),
+            "dimensions": saved.get("dimensions", 0),
+            "timeout_seconds": saved.get("timeout_seconds", 60),
+            "batch_size": saved.get("batch_size", 64),
+            "api_key_configured": bool(saved.get("api_key", "")),
+            "source": "stored",
+        }
+        
+    env_config = get_embedding_provider_config()
+    return {
+        "provider": env_config.provider,
+        "base_url": env_config.normalized_base_url,
+        "model": env_config.effective_model,
+        "dimensions": env_config.dimensions,
+        "timeout_seconds": env_config.timeout_seconds,
+        "batch_size": env_config.batch_size,
+        "api_key_configured": bool(env_config.api_key),
+        "source": "env",
+    }
+
+
+def _validate_openai_compatible_config(model: str, dimensions: int | None) -> None:
+    from retrieval.support.embedding_provider import OPENAI_COMPATIBLE_EMBEDDING_MODELS
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required for openai_compatible")
+    
+    if model not in OPENAI_COMPATIBLE_EMBEDDING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid embedding model for openai_compatible. Use one of: {', '.join(OPENAI_COMPATIBLE_EMBEDDING_MODELS.keys())}."
+        )
+        
+    model_info = OPENAI_COMPATIBLE_EMBEDDING_MODELS[model]
+    if dimensions and dimensions > 0:
+        if dimensions not in model_info["allowed_dimensions"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dimensions {dimensions} for model {model}. Allowed: {', '.join(map(str, model_info['allowed_dimensions']))} or 0 for auto."
+            )
+
+
+@v1.put("/embedding/config")
+def update_embedding_config_v1(
+    body: EmbeddingConfigUpdateRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    user = _require_auth_user(session_token)
+    from retrieval.stores.embedding_store import upsert_embedding_config, get_embedding_config
+    
+    provider = body.provider.strip().lower()
+    if provider not in {"local", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+        
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+    
+    if provider == "openai_compatible":
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+        
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
+        
+        # Keep existing key if empty
+        if not api_key:
+            existing = get_embedding_config(user["id"])
+            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
+                api_key = existing["api_key"]
+            else:
+                from retrieval.support.embedding_provider import get_embedding_provider_config
+                env_config = get_embedding_provider_config()
+                if env_config.api_key:
+                    api_key = env_config.api_key
+                else:
+                    raise HTTPException(status_code=400, detail="api_key is required")
+
+    record = upsert_embedding_config(
+        user["id"],
+        provider=provider,
+        base_url=(body.base_url or "").strip(),
+        model=(body.model or "").strip(),
+        api_key=api_key,
+        dimensions=body.dimensions or 0,
+        timeout_seconds=body.timeout_seconds or 60.0,
+        batch_size=body.batch_size or 64,
+    )
+    
+    log_event(
+        "api.embedding_config.updated",
+        new_request_id(),
+        user_id=user["id"],
+        provider=provider,
+    )
+    
+    return {
+        "provider": record["provider"],
+        "base_url": record.get("base_url", ""),
+        "model": record.get("model", ""),
+        "dimensions": record.get("dimensions", 0),
+        "timeout_seconds": record.get("timeout_seconds", 60),
+        "batch_size": record.get("batch_size", 64),
+        "api_key_configured": bool(record.get("api_key", "")),
+        "source": "stored",
+    }
+
+
+@v1.post("/embedding/test")
+def test_embedding_config_v1(
+    body: EmbeddingTestRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    user = _require_auth_user(session_token)
+    from retrieval.support.embedding_provider import EmbeddingProviderConfig, get_embedding_provider
+    from retrieval.stores.embedding_store import get_embedding_config
+
+    provider = body.provider.strip().lower()
+    if provider not in {"local", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+        
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+    if provider == "openai_compatible":
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+        
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
+        
+        if not api_key:
+            existing = get_embedding_config(user["id"])
+            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
+                api_key = existing["api_key"]
+            else:
+                from retrieval.support.embedding_provider import get_embedding_provider_config
+                env_config = get_embedding_provider_config()
+                if env_config.api_key:
+                    api_key = env_config.api_key
+                else:
+                    raise HTTPException(status_code=400, detail="api_key is required for test")
+
+    config = EmbeddingProviderConfig(
+        provider=provider,
+        base_url=(body.base_url or "").strip(),
+        api_key=api_key,
+        model=(body.model or "").strip(),
+        batch_size=1,
+        timeout_seconds=15.0,
+        dimensions=body.dimensions or 0,
+        local_model="BAAI/bge-small-en-v1.5",
+        local_device="cpu"
+    )
+
+    try:
+        provider_impl = get_embedding_provider(config)
+        vector = provider_impl.embed_query("health check")
+        return {
+            "ok": True,
+            "provider": provider_impl.provider_name,
+            "model": provider_impl.model_name,
+            "dimensions": provider_impl.dimensions,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @v1.get("/provider-credentials")

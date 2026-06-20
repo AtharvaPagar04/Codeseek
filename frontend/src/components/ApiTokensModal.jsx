@@ -4,6 +4,10 @@ import {
   createProviderCredential,
   deleteProviderCredential,
   listProviderCredentials,
+  getEmbeddingConfig,
+  saveEmbeddingConfig,
+  testEmbeddingConfig,
+  getEmbeddingOptions,
 } from '../utils/api';
 
 const PROVIDER_OPTIONS = [
@@ -59,23 +63,68 @@ export default function ApiTokensModal({ onClose }) {
   const [providerInput, setProviderInput] = useState(PROVIDER_OPTIONS[0].value);
   const [modelSelect, setModelSelect] = useState('default');
   const [error, setError] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  
+  // Tabs: 'llm' or 'embedding'
+  const [activeTab, setActiveTab] = useState('llm');
+
+  // Embedding state
+  const [embOptions, setEmbOptions] = useState(null);
+  const [embConfig, setEmbConfig] = useState(null);
+  const [embProvider, setEmbProvider] = useState('local');
+  const [embBaseUrl, setEmbBaseUrl] = useState('');
+  const [embModel, setEmbModel] = useState('text-embedding-3-small');
+  const [embApiKey, setEmbApiKey] = useState('');
+  const [embDims, setEmbDims] = useState('');
+  const [embTestSuccess, setEmbTestSuccess] = useState(false);
+  const [embTesting, setEmbTesting] = useState(false);
   const overlayRef = useRef(null);
   const formRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    const loadTokens = async () => {
+    const loadData = async () => {
       try {
-        const data = await listProviderCredentials();
-        if (!cancelled) setTokens(data);
+        const [llms, emb, options] = await Promise.all([
+          listProviderCredentials(),
+          getEmbeddingConfig().catch(() => null),
+          getEmbeddingOptions().catch(() => null)
+        ]);
+        if (!cancelled) {
+          setTokens(llms);
+          if (options) {
+            setEmbOptions(options);
+          }
+          if (emb) {
+            setEmbConfig(emb);
+            setEmbProvider(emb.provider || 'local');
+            setEmbBaseUrl(emb.base_url || '');
+            let loadedModel = emb.model;
+            let invalidSavedModel = false;
+            if (emb.provider === 'openai_compatible' && options?.openai_compatible_models) {
+              if (loadedModel && !options.openai_compatible_models.some(m => m.id === loadedModel)) {
+                invalidSavedModel = true;
+                loadedModel = 'text-embedding-3-small';
+              }
+            } else if (emb.provider !== 'openai_compatible') {
+              loadedModel = 'text-embedding-3-small';
+            }
+            setEmbModel(loadedModel || 'text-embedding-3-small');
+            setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
+            
+            if (invalidSavedModel) {
+              setError('The saved embedding model was invalid for OpenAI-compatible embeddings. Please save a supported model.');
+            }
+          }
+        }
       } catch (err) {
-        if (!cancelled) setError(err.message || 'Failed to load provider configurations.');
+        if (!cancelled) setError(err.message || 'Failed to load configurations.');
       }
     };
 
-    loadTokens();
+    loadData();
     return () => {
       cancelled = true;
     };
@@ -170,6 +219,86 @@ export default function ApiTokensModal({ onClose }) {
     }
   };
 
+  const validateCloudEmbeddingConfig = () => {
+    if (embProvider !== 'openai_compatible') return true;
+    
+    if (!embOptions?.openai_compatible_models) {
+      setError('Embedding options not loaded. Please try again.');
+      return false;
+    }
+    
+    const validModel = embOptions.openai_compatible_models.find(m => m.id === embModel);
+    if (!validModel) {
+      setError('Choose a supported embedding model before saving.');
+      return false;
+    }
+    
+    if (embDims) {
+      const dimInt = parseInt(embDims, 10);
+      if (dimInt > 0 && !validModel.allowed_dimensions.includes(dimInt)) {
+        setError(`Invalid dimension ${dimInt} for model ${embModel}.`);
+        return false;
+      }
+    }
+    
+    if (!embBaseUrl.trim()) {
+      setError('Base URL is required for cloud embeddings.');
+      return false;
+    }
+    
+    if (!embConfig?.api_key_configured && !embApiKey.trim()) {
+      setError('API key is required for new cloud embedding configurations.');
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleSaveEmbedding = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMsg(null);
+    if (!validateCloudEmbeddingConfig()) return;
+    try {
+      const payload = {
+        provider: embProvider,
+        baseUrl: embBaseUrl.trim(),
+        model: embModel.trim(),
+        apiKey: embApiKey.trim(),
+        dimensions: embDims ? parseInt(embDims, 10) : undefined,
+      };
+      const updated = await saveEmbeddingConfig(payload);
+      setEmbConfig(updated);
+      setSuccessMsg('Embedding configuration saved successfully. Note: changing these settings may require reindexing your sessions.');
+    } catch (err) {
+      setError(err.message || 'Failed to save embedding configuration.');
+    }
+  };
+
+  const handleTestEmbedding = async () => {
+    setError(null);
+    setSuccessMsg(null);
+    if (!validateCloudEmbeddingConfig()) return;
+    setEmbTestSuccess(false);
+    setEmbTesting(true);
+    try {
+      const payload = {
+        provider: embProvider,
+        baseUrl: embBaseUrl.trim(),
+        model: embModel.trim(),
+        apiKey: embApiKey.trim(),
+        dimensions: embDims ? parseInt(embDims, 10) : undefined,
+      };
+      const result = await testEmbeddingConfig(payload);
+      setEmbTestSuccess(true);
+      setSuccessMsg(`Test successful! Dimensions: ${result.dimensions}, Model: ${result.model}`);
+    } catch (err) {
+      setError(err.message || 'Test failed.');
+    } finally {
+      setEmbTesting(false);
+    }
+  };
+
   const activeToken = tokens.find((t) => t.isActive);
 
   return (
@@ -180,10 +309,10 @@ export default function ApiTokensModal({ onClose }) {
     >
       <div className="bg-surface-2 border border-border rounded-2xl w-full max-w-lg mx-4 shadow-xl animate-fadeIn flex flex-col max-h-[75vh] overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-4 pt-3 shrink-0">
           <span className="text-sm font-medium text-text-primary flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-online" />
-            LLM Provider Configurations
+            Configurations
           </span>
           <button
             onClick={onClose}
@@ -192,10 +321,34 @@ export default function ApiTokensModal({ onClose }) {
             ×
           </button>
         </div>
+        
+        {/* Tabs */}
+        <div className="flex px-4 border-b border-border mt-2 shrink-0">
+          <button
+            onClick={() => { setActiveTab('llm'); setError(null); setSuccessMsg(null); }}
+            className={`py-2 px-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-colors ${
+              activeTab === 'llm' ? 'border-text-primary text-text-primary' : 'border-transparent text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            LLM Models
+          </button>
+          <button
+            onClick={() => { setActiveTab('embedding'); setError(null); setSuccessMsg(null); }}
+            className={`py-2 px-3 text-xs font-mono uppercase tracking-wider border-b-2 transition-colors ${
+              activeTab === 'embedding' ? 'border-text-primary text-text-primary' : 'border-transparent text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            Embedding Provider
+          </button>
+        </div>
+
 
         {/* Content list */}
         <div className="overflow-y-auto flex-1 p-4 space-y-4">
-          <div>
+          
+          {activeTab === 'llm' && (
+            <>
+              <div>
             <h3 className="text-2xs font-mono text-text-secondary uppercase tracking-wider mb-2">
               Active Configuration
             </h3>
@@ -313,20 +466,156 @@ export default function ApiTokensModal({ onClose }) {
               </div>
             </div>
           )}
+          </>
+        )}
+
+        {activeTab === 'embedding' && (
+          <form onSubmit={handleSaveEmbedding} className="space-y-4">
+            <div className="bg-warning/10 border border-warning/20 p-3 rounded-xl text-xs text-warning/90 leading-relaxed font-mono">
+              <span className="font-semibold block mb-1">Important:</span>
+              Changing embedding settings requires reindexing all active sessions. Existing indexes will be incompatible with new embedding dimensions.
+            </div>
+            
+            <div className="flex flex-col gap-1">
+              <label className="text-2xs font-mono text-text-muted uppercase">Provider Type</label>
+              <select
+                value={embProvider}
+                onChange={(e) => {
+                  setEmbProvider(e.target.value);
+                  if (e.target.value === 'openai_compatible' && embModel === 'BAAI/bge-small-en-v1.5') {
+                    setEmbModel('');
+                  }
+                }}
+                className="bg-surface-3 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
+              >
+                <option value="local">Local (Default BGE Model)</option>
+                <option value="openai_compatible">Cloud / OpenAI Compatible</option>
+              </select>
+            </div>
+
+            {embProvider === 'openai_compatible' && (
+              <div className="space-y-3 bg-surface-3 border border-border p-3 rounded-xl">
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-mono text-text-muted uppercase">Base URL</label>
+                  <input
+                    type="text"
+                    value={embBaseUrl}
+                    onChange={(e) => setEmbBaseUrl(e.target.value)}
+                    placeholder="https://api.aicredits.in/v1"
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-mono text-text-muted uppercase">Model Name</label>
+                  {embOptions?.openai_compatible_models ? (
+                    <select
+                      value={embModel}
+                      onChange={(e) => {
+                        setEmbModel(e.target.value);
+                        setEmbDims('');
+                      }}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
+                      required
+                    >
+                      {embOptions.openai_compatible_models.map(m => (
+                        <option key={m.id} value={m.id}>{m.label} {m.recommended ? '(Recommended)' : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={embModel}
+                      onChange={(e) => setEmbModel(e.target.value)}
+                      placeholder="text-embedding-3-small"
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                      required
+                    />
+                  )}
+                  {embOptions?.openai_compatible_models && (!embOptions.openai_compatible_models.some(m => m.id === embModel)) && (
+                    <p className="text-[11px] leading-relaxed text-warning/90 mt-1">
+                      Warning: Invalid or unrecognized model. Please select a valid supported model.
+                    </p>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
+                    {embOptions?.openai_compatible_models?.find(m => m.id === embModel)?.notes || 'For AICredits embeddings, use plain OpenAI embedding model IDs.'}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-mono text-text-muted uppercase">API Key (Optional if unchanged)</label>
+                  <input
+                    type="password"
+                    value={embApiKey}
+                    onChange={(e) => setEmbApiKey(e.target.value)}
+                    placeholder={embConfig?.api_key_configured ? "•••••••• (Saved)" : "Enter API key"}
+                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                    required={!embConfig?.api_key_configured}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-2xs font-mono text-text-muted uppercase">Dimensions (Optional)</label>
+                  {embOptions?.openai_compatible_models?.find(m => m.id === embModel) ? (
+                    <select
+                      value={embDims}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
+                    >
+                      <option value="">Auto / infer default {embOptions.openai_compatible_models.find(m => m.id === embModel).default_dimensions}</option>
+                      {embOptions.openai_compatible_models.find(m => m.id === embModel).allowed_dimensions.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      value={embDims}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      placeholder="Leave empty for auto"
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                    />
+                  )}
+                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
+                    Auto is recommended. Dimension is used for expected vector size. AICredits response will still be validated/inferred.
+                  </p>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={handleTestEmbedding}
+                disabled={embTesting}
+                className="px-4 py-2 bg-surface-3 hover:bg-surface-2 border border-border rounded-lg text-xs font-mono text-text-primary transition-colors disabled:opacity-50"
+              >
+                {embTesting ? 'Testing...' : 'Test Connection'}
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-text-primary hover:bg-text-secondary text-base rounded-lg text-xs font-semibold font-mono tracking-wider transition-colors"
+                style={{ color: '#0a0a0a' }}
+              >
+                Save Configuration
+              </button>
+            </div>
+          </form>
+        )}
 
         </div>
 
-        {/* Error notification banner */}
-        {error && !showAddForm && (
-          <div className="bg-offline/10 border-t border-b border-offline/20 px-4 py-2.5 flex items-center justify-between gap-3 animate-fadeIn">
-            <p className="text-2xs text-offline/90 font-mono leading-relaxed flex-1">
-              ⚠ {error}
+        {/* Error/Success notification banner */}
+        {(error || successMsg) && (!showAddForm || activeTab !== 'llm') && (
+          <div className={`border-t border-b px-4 py-2.5 flex items-center justify-between gap-3 animate-fadeIn ${
+            error ? 'bg-offline/10 border-offline/20' : 'bg-online/10 border-online/20'
+          }`}>
+            <p className={`text-2xs font-mono leading-relaxed flex-1 ${error ? 'text-offline/90' : 'text-online/90'}`}>
+              {error ? `⚠ ${error}` : `✓ ${successMsg}`}
             </p>
             <button
               type="button"
-              onClick={() => setError(null)}
+              onClick={() => { setError(null); setSuccessMsg(null); }}
               className="text-text-muted hover:text-text-primary transition-colors text-sm font-bold leading-none shrink-0"
-              title="Dismiss error"
+              title="Dismiss"
             >
               ×
             </button>
@@ -334,7 +623,8 @@ export default function ApiTokensModal({ onClose }) {
         )}
 
         {/* Add API toggle button / Add new token form */}
-        <div className="border-t border-border shrink-0">
+        {activeTab === 'llm' && (
+          <div className="border-t border-border shrink-0">
           {!showAddForm ? (
             <button
               type="button"
@@ -467,6 +757,7 @@ export default function ApiTokensModal({ onClose }) {
             </form>
           )}
         </div>
+        )}
       </div>
     </div>
   );

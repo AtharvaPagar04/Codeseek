@@ -751,9 +751,83 @@ export const fetchIndexingJobHistory = async (sessionId, limit = 20) => {
       ),
     'Fetch indexing job history'
   );
-  if (!res.ok) await throwApiError('Fetch indexing job history', res);
   return res.json();
 };
 
+export const getEmbeddingConfig = async () => {
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/embedding/config`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      }),
+    'Get embedding config'
+  );
+  if (!res.ok) await throwApiError('Get embedding config', res);
+  return res.json();
+};
 
+export const saveEmbeddingConfig = async (payload) => {
+  const { provider, baseUrl, model, apiKey, dimensions, timeoutSeconds, batchSize } = payload;
+  let encryptedSecret = null;
+  if (apiKey) {
+    encryptedSecret = await encryptSecretForSubmission(apiKey);
+  }
+      
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/embedding/config`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          provider,
+          base_url: baseUrl,
+          model,
+          encrypted_secret: encryptedSecret || undefined,
+          dimensions,
+          timeout_seconds: timeoutSeconds,
+          batch_size: batchSize,
+        }),
+      }),
+    'Save embedding config'
+  );
+  if (!res.ok) await throwApiError('Save embedding config', res);
+  return res.json();
+};
 
+export const testEmbeddingConfig = async (payload) => {
+  const { provider, baseUrl, model, apiKey, dimensions } = payload;
+  let encryptedSecret = null;
+  if (apiKey) {
+    encryptedSecret = await encryptSecretForSubmission(apiKey);
+  }
+
+  const res = await withNetworkError(
+    () =>
+      fetch(`${API_BASE}/api/v1/embedding/test`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          provider,
+          base_url: baseUrl,
+          model,
+          encrypted_secret: encryptedSecret || undefined,
+          dimensions,
+        }),
+      }),
+    'Test embedding config'
+  );
+  if (!res.ok) await throwApiError('Test embedding config', res);
+  return res.json();
+};
+
+export const getEmbeddingOptions = async () => {
+  const res = await withNetworkError(
+    () => fetch(`${API_BASE}/api/v1/embedding/options`, { credentials: 'include', headers: authHeaders() }),
+    'Get embedding options'
+  );
+  if (!res.ok) await throwApiError('Get embedding options', res);
+  return res.json();
+};

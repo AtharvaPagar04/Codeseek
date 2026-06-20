@@ -10,12 +10,10 @@ import time
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
-from sentence_transformers import SentenceTransformer
 
 from retrieval.config import (
     ENABLE_DENSE_RETRIEVAL,
     ENABLE_LEXICAL_RETRIEVAL,
-    EMBEDDING_MODEL,
     HISTORY_INJECT_THRESHOLD,
     PREVIOUS_CANDIDATE_INJECTION_MIN_SCORE,
     PREVIOUS_CANDIDATE_MAX_COUNT,
@@ -38,6 +36,11 @@ from retrieval.config import (
 from retrieval.search.import_resolution import resolve_import_relative_path
 from retrieval.query.structural_hints import match_structural_hints
 from retrieval.search.source_truth import analyze_source_truth, is_source_truth_query
+from retrieval.support.embedding_provider import (
+    EmbeddingProviderError,
+    current_embedding_metadata,
+    get_embedding_provider,
+)
 from retrieval.query.query_intent import (
     classify_query_intent,
     classify_source_intent,
@@ -51,8 +54,6 @@ from retrieval.support.path_utils import (
 )
 
 _client = None
-_model = None
-_model_unavailable = False
 _qdrant_failures = 0
 _qdrant_circuit_open_until = 0.0
 _lexical_indexes: dict[str, "_LexicalIndex"] = {}
@@ -416,19 +417,6 @@ def _get_client():
             check_compatibility=False,
         )
     return _client
-
-
-def _get_model():
-    global _model, _model_unavailable
-    if _model_unavailable:
-        return None
-    if _model is None:
-        try:
-            _model = SentenceTransformer(EMBEDDING_MODEL)
-        except Exception:
-            _model_unavailable = True
-            return None
-    return _model
 
 
 def _qdrant_call(fn):
@@ -882,12 +870,10 @@ def _should_ignore_for_retrieval(relative_path: str) -> bool:
 def _dense_search(raw_query: str):
     if not ENABLE_DENSE_RETRIEVAL:
         return []
-    model = _get_model()
-    if model is None:
-        return []
+    provider = get_embedding_provider()
     client = _get_client()
     collection = get_collection_name()
-    query_vector = model.encode(QUERY_PREFIX + raw_query).tolist()
+    query_vector = provider.embed_query(raw_query, prefix=QUERY_PREFIX)
     
     # Query more points to account for filtered non-code documents
     limit = TOP_K_DENSE * 2
@@ -4430,8 +4416,11 @@ def dependency_health() -> dict[str, str]:
     if not ENABLE_DENSE_RETRIEVAL:
         model_status = "disabled"
     else:
-        model = _get_model()
-        if model is None:
+        try:
+            get_embedding_provider()
+        except EmbeddingProviderError:
+            model_status = "degraded"
+        except Exception:
             model_status = "degraded"
         else:
             model_status = "ok"
@@ -4439,4 +4428,13 @@ def dependency_health() -> dict[str, str]:
     client = _get_client()
     qdrant_ready = _qdrant_call(lambda: client.get_collections())
     qdrant_status = "ok" if qdrant_ready is not None else "degraded"
-    return {"embedding_model": model_status, "qdrant": qdrant_status}
+    try:
+        metadata = current_embedding_metadata()
+    except Exception:
+        metadata = {}
+    return {
+        "embedding_model": model_status,
+        "embedding_provider": str(metadata.get("embedding_provider") or ""),
+        "embedding_selected_model": str(metadata.get("embedding_model") or ""),
+        "qdrant": qdrant_status,
+    }
