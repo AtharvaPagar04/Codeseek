@@ -102,7 +102,7 @@ If `GITHUB_TOKEN` or `GH_TOKEN` is present, the clone URL is rewritten with an `
 
 ## 4. Collection Binding and Multi-Repo Isolation
 
-Before discovery starts, ingestion derives the target collection using `retrieval.isolation.expected_collection_name(...)` unless an explicit collection override is passed.
+Before discovery starts, ingestion derives the target collection using `retrieval.support.isolation.expected_collection_name(...)` unless an explicit collection override is passed.
 
 Then it validates that:
 

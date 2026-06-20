@@ -1,5 +1,5 @@
 import unittest
-from retrieval.repo_profile import (
+from retrieval.support.repo_profile import (
     RepoProfile,
     compute_dynamic_boosts_and_penalties,
     build_diagnostics,
@@ -91,7 +91,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
 
     def test_compute_dynamic_boosts_and_penalties(self):
         # Mock global cache by updating _profile_cache directly
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         # 1. Implementation Query: login_user in backend/auth/auth_service.py
@@ -122,7 +122,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertEqual(penalty, 0.0)
 
     def test_feature_phrase_normalization_boost(self):
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         item_storage = self.mock_payloads[1] # has code_intent "qdrant upsert stages"
@@ -134,7 +134,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertIn("qdrant upsert", details["matched_features"])
 
     def test_build_diagnostics(self):
-        from retrieval.repo_profile import _profile_cache
+        from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
         entities = {"boost_labels": ["domain:auth", "domain:storage"]}

@@ -43,7 +43,7 @@ from retrieval.query_intent import (
     classify_source_intent,
     compute_label_boost,
 )
-from retrieval.path_utils import (
+from retrieval.support.path_utils import (
     is_filename_only,
     normalize_repo_path,
     path_matches_candidate,
@@ -453,7 +453,7 @@ def _qdrant_call(fn):
 
 
 def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = None) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
+    from retrieval.support.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
     collection = get_collection_name()
     if query_info is not None:
         query_info.setdefault("domain_boost_retrieval", {
@@ -561,7 +561,7 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
     return results
 
 def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import discover_feature_recall_candidates, get_repo_profile
+    from retrieval.support.repo_profile import discover_feature_recall_candidates, get_repo_profile
     collection = get_collection_name()
     if not collection:
         return []
@@ -607,7 +607,7 @@ def _feature_recall_discovery(raw_query: str, query_info: dict) -> list[tuple[di
 
 
 def _framework_aware_discovery(raw_query: str, query_info: dict) -> list[tuple[dict, float, str]]:
-    from retrieval.repo_profile import get_repo_profile
+    from retrieval.support.repo_profile import get_repo_profile
     from retrieval.query_intent import classify_source_intent
     
     collection = get_collection_name()
@@ -851,7 +851,7 @@ def search(query_info: dict) -> list[dict]:
         ]
 
     if "feature_routing" in query_info:
-        from retrieval.repo_profile import FEATURE_PHRASE_NORMALIZATION
+        from retrieval.support.repo_profile import FEATURE_PHRASE_NORMALIZATION
         for m in merged:
             if m.get("feature_routing_hit"):
                 path = m.get("relative_path")
@@ -3572,7 +3572,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         dyn_penalty = 0.0
         collection = get_collection_name()
         if collection:
-            from retrieval.repo_profile import compute_dynamic_boosts_and_penalties
+            from retrieval.support.repo_profile import compute_dynamic_boosts_and_penalties
             dyn_boost, dyn_penalty, dyn_meta = compute_dynamic_boosts_and_penalties(
                 item, raw_query, extracted_entities or {}, collection
             )
@@ -3631,7 +3631,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             file_counts[rel_path] = count + 1
 
     if query_info is not None and collection:
-        from retrieval.repo_profile import build_diagnostics
+        from retrieval.support.repo_profile import build_diagnostics
         query_info["domain_boost_retrieval"] = build_diagnostics(
             diverse_results, raw_query, extracted_entities or {}, collection
         )

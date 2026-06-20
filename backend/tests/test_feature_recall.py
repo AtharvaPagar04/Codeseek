@@ -1,5 +1,5 @@
 import unittest
-from retrieval.repo_profile import discover_feature_recall_candidates, RepoProfile
+from retrieval.support.repo_profile import discover_feature_recall_candidates, RepoProfile
 from retrieval.source_filter import apply_feature_location_gate
 
 class TestFeatureRecall(unittest.TestCase):

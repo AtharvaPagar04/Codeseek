@@ -1,5 +1,5 @@
 import pytest
-from retrieval.repo_profile import RepoProfile
+from retrieval.support.repo_profile import RepoProfile
 from retrieval.query_intent import classify_source_intent
 
 def test_express_app_initialization_intent():

@@ -37,11 +37,11 @@ from retrieval.config import get_collection_name, get_repo_root
 from retrieval.stores.crypto_store import has_explicit_app_encryption_key
 from retrieval.db import init_db
 from retrieval.stores.github_store import get_github_credential, upsert_github_credential
-from retrieval.isolation import validate_collection_binding
+from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.llm import LlmProviderError
-from retrieval.observability import (
+from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
     new_request_id,
@@ -75,13 +75,13 @@ from retrieval.session_indexer import (
     list_sessions,
     retry_indexing,
 )
-from retrieval.submission_crypto import (
+from retrieval.support.submission_crypto import (
     decrypt_submission_secret,
     get_submission_key_id,
     get_submission_public_key_pem,
 )
 from retrieval.stores.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
-from retrieval.indexing_events import (
+from retrieval.support.indexing_events import (
     get_indexing_events,
     subscribe_indexing_events,
 )
@@ -150,7 +150,7 @@ import sqlite3
 
 @app.exception_handler(sqlite3.OperationalError)
 def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     if "no such table" in str(exc).lower():
         try:
             from retrieval.db import init_db
@@ -174,7 +174,7 @@ from fastapi.exceptions import RequestValidationError
 
 @app.exception_handler(HTTPException)
 def http_exception_handler(request: Request, exc: HTTPException):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     sanitized_detail = sanitize_credentials_in_string(str(exc.detail))
     return JSONResponse(
         status_code=exc.status_code,
@@ -185,7 +185,7 @@ def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 def validation_exception_handler(request: Request, exc: RequestValidationError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     import json
     try:
         raw_errors_str = json.dumps(exc.errors())

@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from retrieval.isolation import expected_collection_name, validate_collection_binding
+from retrieval.support.isolation import expected_collection_name, validate_collection_binding
 
 
 class IsolationPolicyTests(unittest.TestCase):

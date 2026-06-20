@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 import re
 
-from retrieval.path_utils import normalize_repo_path
+from retrieval.support.path_utils import normalize_repo_path
 
 _SKIP_DIRS = {
     ".git",

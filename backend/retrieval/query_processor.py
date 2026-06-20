@@ -3,7 +3,7 @@
 import re
 
 from retrieval.config import ENABLE_SCORED_INTENT
-from retrieval.path_utils import extract_file_reference_tokens
+from retrieval.support.path_utils import extract_file_reference_tokens
 
 DEPENDENCY_PATTERNS = [
     r"\bcalls\b",

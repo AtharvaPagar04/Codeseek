@@ -609,7 +609,7 @@ class SessionFreshnessTests(unittest.TestCase):
             embeddings_stored=242,
         )
 
-        from retrieval.indexing_events import emit_indexing_event
+        from retrieval.support.indexing_events import emit_indexing_event
         emit_indexing_event(session["id"], "chunking", "Chunking files...")
 
         res = api_service.get_session_freshness_v1(

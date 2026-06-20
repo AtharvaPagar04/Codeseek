@@ -83,7 +83,7 @@ def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
 
     # Mock pipeline operations requiring external services
     monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
-    monkeypatch.setattr("retrieval.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()
@@ -313,7 +313,7 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
 
     # Mock pipeline operations
     monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
-    monkeypatch.setattr("retrieval.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()
@@ -482,7 +482,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
 
     # Mock default pipeline operations
     monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters: chunks)
-    monkeypatch.setattr("retrieval.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()

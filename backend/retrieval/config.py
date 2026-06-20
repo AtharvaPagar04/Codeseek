@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from retrieval.isolation import expected_collection_name
+from retrieval.support.isolation import expected_collection_name
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)

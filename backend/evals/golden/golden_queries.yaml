@@ -74,7 +74,7 @@
   expected_intent: "code_location"
   expected_reranker_intent: "FILE"
   expected_files:
-    - "backend/retrieval/isolation.py"
+    - "backend/retrieval/support/isolation.py"
   expected_symbols:
     - "tenant_id"
   must_hit_top_k: 3
@@ -121,7 +121,7 @@
   expected_intent: "code_location"
   expected_reranker_intent: "FILE"
   expected_files:
-    - "backend/retrieval/isolation.py"
+    - "backend/retrieval/support/isolation.py"
   expected_symbols:
     - "expected_collection_name"
   must_hit_top_k: 3

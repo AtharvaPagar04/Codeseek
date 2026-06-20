@@ -8,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from retrieval.path_utils import normalize_repo_path
+from retrieval.support.path_utils import normalize_repo_path
 
 try:
     import psycopg
@@ -836,7 +836,7 @@ def update_indexing_job(
         updates.append("embeddings_stored = ?")
         params.append(embeddings_stored)
     if error is not None:
-        from retrieval.observability import sanitize_credentials_in_string
+        from retrieval.support.observability import sanitize_credentials_in_string
         updates.append("error = ?")
         params.append(sanitize_credentials_in_string(error))
     if completed_at is not None:
@@ -902,7 +902,7 @@ def is_indexing_job_cancel_requested(job_id: str) -> bool:
 def mark_indexing_job_cancelled(job_id: str, message: str = "Cancellation requested by user.") -> None:
     """Mark a job as cancelled with a terminal status."""
     from datetime import datetime, timezone
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     now_str = datetime.now(timezone.utc).isoformat()
     with db_cursor() as (conn, cursor):
         cursor.execute(

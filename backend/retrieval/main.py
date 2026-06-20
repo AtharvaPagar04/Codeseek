@@ -53,9 +53,9 @@ from retrieval.follow_up_memory import (
 )
 from retrieval.llm import generate_answer, generate_answer_stream
 from retrieval.memory import ConversationMemory, prepare_history_block
-from retrieval.observability import StageMetrics, log_event, new_request_id
+from retrieval.support.observability import StageMetrics, log_event, new_request_id
 from retrieval.query_processor import process_query
-from retrieval.isolation import validate_collection_binding
+from retrieval.support.isolation import validate_collection_binding
 from retrieval.query_intent import is_source_location_query
 from retrieval.searcher import (
     _content_looks_like_symbol_definition,

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrieval.indexing_events import (
+from retrieval.support.indexing_events import (
     clear_indexing_events,
     emit_indexing_event,
     get_indexing_events,
@@ -60,7 +60,7 @@ class TestEmitAndRetrieve:
         assert get_indexing_events("test-session") == []
 
     def test_max_events_cap(self):
-        from retrieval import indexing_events
+        from retrieval.support import indexing_events
         original = indexing_events.MAX_EVENTS_PER_SESSION
         try:
             indexing_events.MAX_EVENTS_PER_SESSION = 5

@@ -9,7 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from retrieval.isolation import expected_collection_name
+from retrieval.support.isolation import expected_collection_name
 
 HIT_RE = re.compile(r"^hit@\d+:\s*([0-9.]+)\s*$")
 MRR_RE = re.compile(r"^mrr@\d+:\s*([0-9.]+)\s*$")
