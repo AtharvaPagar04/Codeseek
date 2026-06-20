@@ -62,7 +62,7 @@ from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     get_provider_runtime_state,
 )
-from retrieval.provider_health import (
+from retrieval.support.provider_health import (
     ProviderNotConfiguredError,
     ProviderNotReadyError,
     require_llm_ready_for_user,
@@ -1639,7 +1639,7 @@ def get_latest_evaluation_report_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report(session_id)
 
 
@@ -1675,7 +1675,7 @@ def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth_user(session_token)
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report()
 
 

@@ -47,7 +47,7 @@
   expected_response_mode: "code_snippet"
   expected_files:
     - "backend/retrieval/api_service.py"
-    - "backend/retrieval/eval_reports.py"
+    - "backend/retrieval/support/eval_reports.py"
   expected_symbols:
     - "get_latest_evaluation_report_v1"
     - "get_latest_evaluation_report"

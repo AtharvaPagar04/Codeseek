@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from retrieval.provider_health import (
+from retrieval.support.provider_health import (
     ProviderNotConfiguredError,
     ProviderNotReadyError,
     require_llm_ready_for_user,
@@ -23,16 +23,16 @@ from retrieval.provider_health import (
 class TestRequireLlmReadyForUser:
 
     def test_no_active_credential_raises_not_configured(self):
-        with patch("retrieval.provider_health.get_active_provider_credential", return_value=None):
+        with patch("retrieval.support.provider_health.get_active_provider_credential", return_value=None):
             with pytest.raises(ProviderNotConfiguredError, match="No active LLM provider"):
                 require_llm_ready_for_user("user-123")
 
     def test_local_provider_does_not_require_api_key(self):
         cred = {"provider": "local", "model": "auto", "api_key": ""}
         with (
-            patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
-            patch("retrieval.provider_health._check_ollama_available"),  # assume reachable
-            patch("retrieval.provider_health._get_ollama_pulled_models", return_value=["qwen2.5-coder:3b"]),
+            patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred),
+            patch("retrieval.support.provider_health._check_ollama_available"),  # assume reachable
+            patch("retrieval.support.provider_health._get_ollama_pulled_models", return_value=["qwen2.5-coder:3b"]),
         ):
             result = require_llm_ready_for_user("user-123")
             assert result["provider"] == "local"
@@ -40,21 +40,21 @@ class TestRequireLlmReadyForUser:
     def test_remote_provider_requires_api_key(self):
         for provider in ("groq", "openai", "gemini", "openrouter"):
             cred = {"provider": provider, "model": "some-model", "api_key": ""}
-            with patch("retrieval.provider_health.get_active_provider_credential", return_value=cred):
+            with patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred):
                 with pytest.raises(ProviderNotConfiguredError, match="no API key"):
                     require_llm_ready_for_user("user-456")
 
     def test_remote_provider_with_api_key_succeeds(self):
         cred = {"provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-test"}
-        with patch("retrieval.provider_health.get_active_provider_credential", return_value=cred):
+        with patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred):
             result = require_llm_ready_for_user("user-789")
             assert result["provider"] == "openai"
 
     def test_ollama_unavailable_raises_not_ready(self):
         cred = {"provider": "local", "model": "auto", "api_key": ""}
         with (
-            patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
-            patch("retrieval.provider_health._check_ollama_available",
+            patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred),
+            patch("retrieval.support.provider_health._check_ollama_available",
                   side_effect=ProviderNotReadyError("Ollama not reachable")),
         ):
             with pytest.raises(ProviderNotReadyError, match="Ollama"):
@@ -63,9 +63,9 @@ class TestRequireLlmReadyForUser:
     def test_local_ingestion_model_not_available_raises_not_ready(self):
         cred = {"provider": "local", "model": "qwen2.5-coder:3b-8k", "api_key": ""}
         with (
-            patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
-            patch("retrieval.provider_health._check_ollama_available"),
-            patch("retrieval.provider_health._get_ollama_pulled_models",
+            patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred),
+            patch("retrieval.support.provider_health._check_ollama_available"),
+            patch("retrieval.support.provider_health._get_ollama_pulled_models",
                   return_value=["some-other-model"]),
         ):
             with pytest.raises(ProviderNotReadyError, match="is not available in Ollama.\nRun:\nollama pull"):
@@ -74,9 +74,9 @@ class TestRequireLlmReadyForUser:
     def test_local_ingestion_model_available_succeeds(self):
         cred = {"provider": "local", "model": "qwen2.5-coder:3b-8k", "api_key": ""}
         with (
-            patch("retrieval.provider_health.get_active_provider_credential", return_value=cred),
-            patch("retrieval.provider_health._check_ollama_available"),
-            patch("retrieval.provider_health._get_ollama_pulled_models",
+            patch("retrieval.support.provider_health.get_active_provider_credential", return_value=cred),
+            patch("retrieval.support.provider_health._check_ollama_available"),
+            patch("retrieval.support.provider_health._get_ollama_pulled_models",
                   return_value=["qwen2.5-coder:3b"]),
         ):
             result = require_llm_ready_for_user("user-123")

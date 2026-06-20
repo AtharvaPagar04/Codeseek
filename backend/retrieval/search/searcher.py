@@ -189,7 +189,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "target_paths": [
             "backend/retrieval/api_service.py",
-            "backend/retrieval/eval_reports.py",
+            "backend/retrieval/support/eval_reports.py",
         ],
         "target_symbols": [
             "get_latest_evaluation_report_v1",
@@ -197,7 +197,7 @@ CODE_REQUEST_TOPIC_ROUTES = (
         ],
         "symbol_path_hints": {
             "get_latest_evaluation_report_v1": "backend/retrieval/api_service.py",
-            "get_latest_evaluation_report": "backend/retrieval/eval_reports.py",
+            "get_latest_evaluation_report": "backend/retrieval/support/eval_reports.py",
         },
         "exclude_paths": [
             "backend/retrieval/search/searcher.py",
@@ -3126,7 +3126,7 @@ def feature_specific_routing_boost(relative_path: str, raw_query: str) -> float:
         or "evaluation diagnostics endpoint" in q
         or "where is evaluation report" in q
     ):
-        if path in {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"}:
+        if path in {"backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"}:
             return 1.0
     # 4. auth/session validation
     if "auth" in q or "session validation" in q or "validate session" in q or "session validate" in q or "login" in q or "token" in q:

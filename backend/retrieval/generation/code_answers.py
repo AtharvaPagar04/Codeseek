@@ -1021,7 +1021,7 @@ def collect_rendered_code_snippet_sources(raw_query: str, sources: list[dict], c
                     or "get_latest_evaluation_report" in content
                     or symbol == "get_latest_evaluation_report_v1"
                 )
-            if rel_lower.endswith("backend/retrieval/eval_reports.py") or "backend/retrieval/eval_reports.py" in rel_lower:
+            if rel_lower.endswith("backend/retrieval/support/eval_reports.py") or "backend/retrieval/support/eval_reports.py" in rel_lower:
                 return (
                     symbol == "get_latest_evaluation_report"
                     or "safe evaluation report" in content_lower
@@ -1327,7 +1327,7 @@ def build_code_snippet_answer(raw_query: str, sources: list[dict], chunks: list[
                     or "get_latest_evaluation_report" in content
                     or symbol == "get_latest_evaluation_report_v1"
                 )
-            if rel_lower.endswith("backend/retrieval/eval_reports.py") or "backend/retrieval/eval_reports.py" in rel_lower:
+            if rel_lower.endswith("backend/retrieval/support/eval_reports.py") or "backend/retrieval/support/eval_reports.py" in rel_lower:
                 return (
                     symbol == "get_latest_evaluation_report"
                     or "safe evaluation report" in content_lower
@@ -2962,7 +2962,7 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
                         }
                     )
 
-    report_path = _resolve_repo_file("backend/retrieval/eval_reports.py")
+    report_path = _resolve_repo_file("backend/retrieval/support/eval_reports.py")
     if report_path is not None:
         try:
             report_lines = report_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -2974,7 +2974,7 @@ def _evaluation_report_api_filesystem_sources(route: dict) -> list[dict]:
                 start_line, end_line = rng
                 results.append(
                     {
-                        "relative_path": "backend/retrieval/eval_reports.py",
+                        "relative_path": "backend/retrieval/support/eval_reports.py",
                         "symbol_name": "get_latest_evaluation_report",
                         "chunk_type": "function",
                         "start_line": start_line,
@@ -4719,7 +4719,7 @@ def build_source_location_answer(
     ):
         preferred_paths = (
             "backend/retrieval/api_service.py",
-            "backend/retrieval/eval_reports.py",
+            "backend/retrieval/support/eval_reports.py",
         )
         preferred = []
         seen = set()
@@ -4737,7 +4737,7 @@ def build_source_location_answer(
         if preferred:
             explanation = (
                 "The implementation is in backend/retrieval/api_service.py :: get_latest_evaluation_report_v1 "
-                "and backend/retrieval/eval_reports.py :: get_latest_evaluation_report. "
+                "and backend/retrieval/support/eval_reports.py :: get_latest_evaluation_report. "
                 "The API wrapper authenticates and checks session visibility, then calls the report loader to return the latest evaluation report data."
             )
             ordered = preferred + [src for src in sources if str(src.get("relative_path", "")).strip() not in seen]

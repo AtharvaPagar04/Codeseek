@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
-from retrieval.eval_reports import get_latest_evaluation_report
+from retrieval.support.eval_reports import get_latest_evaluation_report
 from retrieval.api_service import app
 
 def test_get_latest_evaluation_report_exists():
@@ -69,7 +69,7 @@ def test_api_endpoint_returns_report_fields():
     with patch("retrieval.api_service._require_auth_user", return_value={"id": "user-1"}), \
          patch("retrieval.api_service.get_session", return_value={"id": "session-123", "status": "ready"}), \
          patch("retrieval.api_service._session_visible_to_user", return_value=True), \
-         patch("retrieval.eval_reports.get_latest_evaluation_report", return_value=mock_result):
+         patch("retrieval.support.eval_reports.get_latest_evaluation_report", return_value=mock_result):
         
         response = client.get("/api/v1/sessions/session-123/evaluation/latest")
         assert response.status_code == 200
@@ -104,7 +104,7 @@ def test_api_endpoint_global_latest():
     }
     
     with patch("retrieval.api_service._require_auth_user", return_value={"id": "user-1"}), \
-         patch("retrieval.eval_reports.get_latest_evaluation_report", return_value=mock_result):
+         patch("retrieval.support.eval_reports.get_latest_evaluation_report", return_value=mock_result):
         
         response = client.get("/api/v1/evals/latest")
         assert response.status_code == 200

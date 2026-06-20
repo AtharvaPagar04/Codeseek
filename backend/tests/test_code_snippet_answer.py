@@ -93,7 +93,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 1225,
             },
             {
-                "relative_path": "backend/retrieval/eval_reports.py",
+                "relative_path": "backend/retrieval/support/eval_reports.py",
                 "symbol_name": "get_latest_evaluation_report",
                 "chunk_type": "function",
                 "content": "def get_latest_evaluation_report(session_id=None):\n    report_path = backend_root.parent / 'evals' / 'reports' / 'safe_eval_latest' / 'safe_eval_summary.json'\n    return result",
@@ -946,7 +946,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
             ans, final_srcs, _ = run_query("show me the evaluation report API endpoint code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertEqual(
-            {"backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"},
+            {"backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"},
             set(paths),
         )
         self.assertEqual(len(final_srcs), len({(
@@ -965,7 +965,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.assertNotIn("index_latest_session_v1", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
         self.assertIn("backend/retrieval/api_service.py", ans)
-        self.assertIn("backend/retrieval/eval_reports.py", ans)
+        self.assertIn("backend/retrieval/support/eval_reports.py", ans)
         self.assertEqual(
             {"get_latest_evaluation_report_v1", "get_latest_evaluation_report"},
             {src.get("symbol_name", "") for src in final_srcs},

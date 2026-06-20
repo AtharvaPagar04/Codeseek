@@ -717,7 +717,7 @@ def _index_job(session_id: str) -> None:
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)
@@ -1324,7 +1324,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)
             except Exception as e:
@@ -2273,7 +2273,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
         provider_config = _session_provider_configs.get(session_id)
         if not provider_config and bool(session.get("enable_chunk_descriptions")):
             try:
-                from retrieval.provider_health import require_llm_ready_for_user
+                from retrieval.support.provider_health import require_llm_ready_for_user
                 user_id = session.get("user_id", "")
                 if user_id:
                     provider_config = require_llm_ready_for_user(user_id)

@@ -320,7 +320,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "def get_latest_evaluation_report_v1():\n    pass",
         }
         report_loader_source = {
-            "relative_path": "backend/retrieval/eval_reports.py",
+            "relative_path": "backend/retrieval/support/eval_reports.py",
             "symbol_name": "get_latest_evaluation_report",
             "start_line": 1,
             "end_line": 40,
@@ -444,11 +444,11 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertEqual("", captured.get("assemble_history"))
         self.assertIn("The implementation is in:", report_answer)
         self.assertIn("backend/retrieval/api_service.py", report_answer)
-        self.assertIn("backend/retrieval/eval_reports.py", report_answer)
+        self.assertIn("backend/retrieval/support/eval_reports.py", report_answer)
         self.assertNotIn("docs describe", report_answer.lower())
         self.assertNotIn("Key points from the docs", report_answer)
         self.assertEqual("backend/retrieval/api_service.py", report_sources[0]["relative_path"])
-        self.assertEqual("backend/retrieval/eval_reports.py", report_sources[1]["relative_path"])
+        self.assertEqual("backend/retrieval/support/eval_reports.py", report_sources[1]["relative_path"])
         self.assertEqual("backend/docs/retrieval_docs/safe_eval_runner.md", sources[0]["relative_path"])
         self.assertIn("safe eval docs", answer.lower())
         self.assertIn("The safe eval docs describe the Safe Eval Runner.", answer)
@@ -486,7 +486,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 [
                     src("backend/docs/retrieval_docs/eval_report_api.md", "eval_report_api_md"),
                     src("backend/retrieval/api_service.py", "get_latest_evaluation_report_v1"),
-                    src("backend/retrieval/eval_reports.py", "get_latest_evaluation_report"),
+                    src("backend/retrieval/support/eval_reports.py", "get_latest_evaluation_report"),
                 ],
                 "backend/retrieval/api_service.py",
             ),
@@ -543,7 +543,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "retrieval_score": 0.90,
             },
             {
-                "relative_path": "backend/retrieval/eval_reports.py",
+                "relative_path": "backend/retrieval/support/eval_reports.py",
                 "symbol_name": "get_latest_evaluation_report",
                 "start_line": 1,
                 "end_line": 80,
@@ -585,10 +585,10 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 answer, sources, token_count = run_query("Where is evaluation report API implemented?", memory)
 
         self.assertIn("backend/retrieval/api_service.py", answer)
-        self.assertIn("backend/retrieval/eval_reports.py", answer)
+        self.assertIn("backend/retrieval/support/eval_reports.py", answer)
         self.assertNotIn("backend/scripts/retrieval_eval.py", answer)
         self.assertEqual("backend/retrieval/api_service.py", sources[0]["relative_path"])
-        self.assertEqual("backend/retrieval/eval_reports.py", sources[1]["relative_path"])
+        self.assertEqual("backend/retrieval/support/eval_reports.py", sources[1]["relative_path"])
         generate_answer.assert_not_called()
 
     @patch("retrieval.generation.code_answers._read_source_excerpt")

@@ -70,7 +70,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher vector score
             "content": "def _check_ollama_available(): ...",
@@ -105,7 +105,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",
@@ -145,7 +145,7 @@ class TestRetrievalTuning(unittest.TestCase):
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
-            "relative_path": "backend/retrieval/provider_health.py",
+            "relative_path": "backend/retrieval/support/provider_health.py",
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",

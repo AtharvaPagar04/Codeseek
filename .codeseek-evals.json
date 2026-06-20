@@ -46,7 +46,7 @@
     "query": "show me the evaluation report API endpoint code",
     "category": "Code Snippet",
     "intent": "code_snippet",
-    "files": ["backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"]
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"]
   },
   {
     "id": 8,
