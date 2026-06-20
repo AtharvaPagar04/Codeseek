@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from retrieval import api_service, session_indexer
+from retrieval.support.embedding_provider import build_embedding_config_hash
 from retrieval.stores import auth_store
 
 
@@ -139,6 +140,56 @@ class SessionFreshnessTests(unittest.TestCase):
         })
         self.assertEqual(status, "out_of_date")
 
+    def test_compute_repo_freshness_status_detects_embedding_config_change(self):
+        status = session_indexer.compute_repo_freshness_status({
+            "status": "ready",
+            "current_commit_sha": "abc",
+            "last_indexed_commit": "abc",
+            "repo_dirty": False,
+            "embeddings_stored": 12,
+            "embedding_provider": "local",
+            "embedding_base_url": "",
+            "embedding_model": "BAAI/bge-small-en-v1.5",
+            "embedding_dimensions": 384,
+            "embedding_config_hash": build_embedding_config_hash(
+                provider="local",
+                base_url="",
+                model="some-other-model",
+                dimensions=384,
+            ),
+        })
+        self.assertEqual(status, "embedding_config_changed")
+
+    def test_compute_repo_freshness_status_detects_invalid_embedding_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CODESEEK_EMBEDDING_PROVIDER": "openai_compatible",
+                "CODESEEK_EMBEDDING_BASE_URL": "",
+                "CODESEEK_EMBEDDING_API_KEY": "",
+                "CODESEEK_EMBEDDING_MODEL": "",
+            },
+            clear=False,
+        ):
+            status = session_indexer.compute_repo_freshness_status({
+                "status": "ready",
+                "current_commit_sha": "abc",
+                "last_indexed_commit": "abc",
+                "repo_dirty": False,
+                "embeddings_stored": 12,
+                "embedding_provider": "local",
+                "embedding_base_url": "",
+                "embedding_model": "BAAI/bge-small-en-v1.5",
+                "embedding_dimensions": 384,
+                "embedding_config_hash": build_embedding_config_hash(
+                    provider="local",
+                    base_url="",
+                    model="BAAI/bge-small-en-v1.5",
+                    dimensions=384,
+                ),
+            })
+        self.assertEqual(status, "embedding_config_invalid")
+
     def test_get_session_repo_status_endpoint(self):
         user = auth_store.upsert_github_user("user1-gh", "user1", "")
         session_token, _ = auth_store.create_auth_session(user["id"], ttl_seconds=3600)
@@ -217,6 +268,38 @@ class SessionFreshnessTests(unittest.TestCase):
                 session_token=session_token
             )
             mock_trigger.assert_called_once_with(session["id"], user["id"])
+
+    def test_query_session_blocked_when_embedding_config_changed(self):
+        user = auth_store.upsert_github_user("user-embed-gh", "user-embed", "")
+
+        session = session_indexer.create_session(
+            repo_full_name="octocat/hello-world",
+            tenant_id="local",
+            user_id=user["id"],
+        )
+        session_indexer._update_session(
+            session["id"],
+            status="ready",
+            last_indexed_commit="commit123",
+            current_commit_sha="commit123",
+            embedding_provider="local",
+            embedding_base_url="",
+            embedding_model="BAAI/bge-small-en-v1.5",
+            embedding_dimensions=384,
+            embedding_config_hash=build_embedding_config_hash(
+                provider="local",
+                base_url="",
+                model="different-model",
+                dimensions=384,
+            ),
+            embeddings_stored=10,
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_service._resolve_query_session(session["id"], user)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("different embedding provider/model/dimensions", ctx.exception.detail)
 
     def test_status_porcelain_parsing_and_counts(self):
         user = auth_store.upsert_github_user("user-porcelain-gh", "user-porcelain", "")
@@ -626,5 +709,3 @@ class SessionFreshnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
