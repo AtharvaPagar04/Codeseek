@@ -279,7 +279,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         selected = select_sources_for_display("show me safe eval docs", sources)
         self.assertEqual("backend/docs/retrieval_docs/safe_eval_runner.md", selected[0]["relative_path"])
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_explicit_docs_query_drops_previous_history_from_run_query(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
 
@@ -591,7 +591,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertEqual("backend/retrieval/eval_reports.py", sources[1]["relative_path"])
         generate_answer.assert_not_called()
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_retrieval_pipeline_flow_summary_prefers_docs_and_core_files(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
 
@@ -659,7 +659,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "def _run_query_impl():\n    pass",
         }
         code_answers_source = {
-            "relative_path": "backend/retrieval/code_answers.py",
+            "relative_path": "backend/retrieval/generation/code_answers.py",
             "symbol_name": "build_flow_answer",
             "start_line": 1,
             "end_line": 120,
@@ -668,7 +668,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "def build_flow_answer():\n    pass",
         }
         llm_source = {
-            "relative_path": "backend/retrieval/llm.py",
+            "relative_path": "backend/retrieval/generation/llm.py",
             "symbol_name": "generate_answer",
             "start_line": 1,
             "end_line": 80,
@@ -677,7 +677,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "content": "def generate_answer():\n    pass",
         }
         validation_source = {
-            "relative_path": "backend/retrieval/answer_validation.py",
+            "relative_path": "backend/retrieval/generation/answer_validation.py",
             "symbol_name": "validate_generated_answer",
             "start_line": 1,
             "end_line": 80,
@@ -753,9 +753,9 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/query/query_processor.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/search/searcher.py" for src in sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" for src in sources))
-        self.assertTrue(any(src["relative_path"] == "backend/retrieval/code_answers.py" for src in sources))
-        self.assertTrue(any(src["relative_path"] == "backend/retrieval/llm.py" for src in sources))
-        self.assertTrue(any(src["relative_path"] == "backend/retrieval/answer_validation.py" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/generation/code_answers.py" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/generation/llm.py" for src in sources))
+        self.assertTrue(any(src["relative_path"] == "backend/retrieval/generation/answer_validation.py" for src in sources))
         self.assertNotIn("backend/scripts/lexical_layer_benchmark.py", answer)
         self.assertNotEqual("backend/scripts/lexical_layer_benchmark.py", sources[0]["relative_path"])
 
@@ -768,7 +768,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertNotEqual("backend/scripts/lexical_layer_benchmark.py", sources2[0]["relative_path"])
         generate_answer.assert_not_called()
 
-    @patch("retrieval.code_answers._read_source_excerpt")
+    @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_searcher_reranking_source_location_uses_searcher_internals_route(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         memory = ConversationMemory(max_turns=2)
@@ -874,9 +874,9 @@ class SourceLocationQueriesTests(unittest.TestCase):
         generate_answer.assert_not_called()
 
     def test_format_source_location_target_shape_reordering(self) -> None:
-        from retrieval.code_answers import _format_source_location_target_shape
+        from retrieval.generation.code_answers import _format_source_location_target_shape
         sources = [
-            {"relative_path": "backend/retrieval/code_answers.py", "symbol_name": "build_flow_answer"},
+            {"relative_path": "backend/retrieval/generation/code_answers.py", "symbol_name": "build_flow_answer"},
             {"relative_path": "backend/rag_ingestion/stages/storage.py", "symbol_name": "upsert_chunks"},
         ]
         # Test 1: Avoid code_answers.py as top source if another file exists

@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from retrieval.assembler import assemble
+from retrieval.generation.assembler import assemble
 from retrieval.search.expander import expand
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory

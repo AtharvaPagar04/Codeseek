@@ -1,5 +1,5 @@
 import pytest
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 
 def test_wrong_evidence_guard_blocks_weak_sources_in_answer():
     raw_query = "Is task deletion soft delete or hard delete?"

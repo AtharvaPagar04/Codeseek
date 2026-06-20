@@ -23,7 +23,7 @@ class _FakeEncoding:
 fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
 sys.modules.setdefault("tiktoken", fake_tiktoken)
 
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_code_answer,
     build_explanation_answer,
@@ -37,7 +37,7 @@ from retrieval.code_answers import (
     is_flow_explanation_request,
     is_overview_request,
 )
-from retrieval.llm import _build_prompt
+from retrieval.generation.llm import _build_prompt
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory
 
@@ -673,7 +673,7 @@ class CodeAnswerTests(unittest.TestCase):
             from unittest.mock import MagicMock
             mock_client = MagicMock()
             mock_client.scroll.return_value = ([], None)
-            with patch("retrieval.code_answers.get_repo_root", return_value=str(repo_root)), patch("retrieval.code_answers._get_architecture_qdrant_client", return_value=mock_client):
+            with patch("retrieval.generation.code_answers.get_repo_root", return_value=str(repo_root)), patch("retrieval.generation.code_answers._get_architecture_qdrant_client", return_value=mock_client):
                 answer, selected_sources = build_architecture_answer(
                     "How is this codebase structured?",
                     shown_sources,
@@ -751,7 +751,7 @@ class CodeAnswerTests(unittest.TestCase):
             },
         ]
 
-        with patch("retrieval.code_answers._architecture_indexed_bucket_fallbacks", return_value=indexed_fallbacks):
+        with patch("retrieval.generation.code_answers._architecture_indexed_bucket_fallbacks", return_value=indexed_fallbacks):
             answer, selected_sources = build_architecture_answer(
                 "Give me a high-level architecture overview of this codebase.",
                 shown_sources,

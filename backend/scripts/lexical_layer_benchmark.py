@@ -141,7 +141,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-sem-002",
         "query": "explain how the retrieval pipeline assembles context",
-        "expected_files": ["retrieval/main.py", "retrieval/code_answers.py"],
+        "expected_files": ["retrieval/main.py", "retrieval/generation/code_answers.py"],
         "expected_symbols": [],
         "family": "SEMANTIC",
     },

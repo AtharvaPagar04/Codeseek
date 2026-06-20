@@ -160,7 +160,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/llm.py",
+                "relative_path": "backend/retrieval/generation/llm.py",
                 "symbol_name": "LlmProviderError",
                 "start_line": 1,
                 "end_line": 40,
@@ -289,7 +289,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/llm.py",
+                "relative_path": "backend/retrieval/generation/llm.py",
                 "symbol_name": "LlmProviderError",
                 "start_line": 1,
                 "end_line": 40,
@@ -329,7 +329,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/code_answers.py",
+                "relative_path": "backend/retrieval/generation/code_answers.py",
                 "symbol_name": "build_overview_answer",
                 "start_line": 607,
                 "end_line": 627,
@@ -371,7 +371,7 @@ class SourceFilteringTests(unittest.TestCase):
                 "expansion_type": "primary",
             },
             {
-                "relative_path": "backend/retrieval/code_answers.py",
+                "relative_path": "backend/retrieval/generation/code_answers.py",
                 "symbol_name": "_architecture_module_points",
                 "start_line": 1645,
                 "end_line": 1665,

@@ -106,7 +106,7 @@
       "id": "cs-015",
       "query": "Which retrieval function assembles final context and sources?",
       "expected_sources": [
-        {"relative_path": "retrieval/assembler.py", "symbol_name": "assemble"}
+        {"relative_path": "retrieval/generation/assembler.py", "symbol_name": "assemble"}
       ]
     },
     {
@@ -121,7 +121,7 @@
       "id": "cs-017",
       "query": "Which function calls Groq to generate the final answer?",
       "expected_sources": [
-        {"relative_path": "retrieval/llm.py", "symbol_name": "_groq_answer"}
+        {"relative_path": "retrieval/generation/llm.py", "symbol_name": "_groq_answer"}
       ]
     },
     {

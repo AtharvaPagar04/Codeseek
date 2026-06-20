@@ -547,7 +547,7 @@ def source_excluded_for_query(
         "backend/retrieval/search/searcher.py",
         "backend/retrieval/search/source_filter.py",
         "backend/retrieval/query/query_intent.py",
-        "backend/retrieval/code_answers.py",
+        "backend/retrieval/generation/code_answers.py",
     } and topic not in {"retrieval_internals", "safe_eval_runner", "evaluation_report_api"}:
         return True
 
@@ -604,7 +604,7 @@ def source_excluded_for_query(
             "backend/retrieval/search/searcher.py",
             "backend/retrieval/search/source_filter.py",
             "backend/retrieval/query/query_intent.py",
-            "backend/retrieval/code_answers.py",
+            "backend/retrieval/generation/code_answers.py",
         }:
             return True
 
@@ -1283,11 +1283,11 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
             "backend/evals/run_safe_evals.py",
             "backend/retrieval/search/searcher.py",
             "backend/retrieval/query/query_processor.py",
-            "backend/retrieval/assembler.py",
-            "backend/retrieval/code_answers.py",
-            "backend/retrieval/llm.py",
+            "backend/retrieval/generation/assembler.py",
+            "backend/retrieval/generation/code_answers.py",
+            "backend/retrieval/generation/llm.py",
             "backend/retrieval/search/source_filter.py",
-            "backend/retrieval/answer_validation.py",
+            "backend/retrieval/generation/answer_validation.py",
             "backend/retrieval/follow_up_memory.py",
             "backend/retrieval/db.py",
         )
@@ -1311,11 +1311,11 @@ def _overview_architecture_display_priority(src: dict, *, wants_architecture: bo
         "backend/evals/run_safe_evals.py",
         "backend/retrieval/search/searcher.py",
         "backend/retrieval/query/query_processor.py",
-        "backend/retrieval/assembler.py",
-        "backend/retrieval/code_answers.py",
-        "backend/retrieval/llm.py",
+        "backend/retrieval/generation/assembler.py",
+        "backend/retrieval/generation/code_answers.py",
+        "backend/retrieval/generation/llm.py",
         "backend/retrieval/search/source_filter.py",
-        "backend/retrieval/answer_validation.py",
+        "backend/retrieval/generation/answer_validation.py",
         "backend/retrieval/follow_up_memory.py",
         "backend/retrieval/db.py",
         "backend/docs/retrieval_docs",
@@ -2496,7 +2496,7 @@ def _is_overview_noise_source(relative_path: str, symbol_name: str) -> bool:
     if relative_path.endswith("retrieval/query/query_processor.py") and symbol_name.startswith("_inject_"):
         return True
 
-    if relative_path.endswith("retrieval/code_answers.py") and (
+    if relative_path.endswith("retrieval/generation/code_answers.py") and (
         symbol_name in _OVERVIEW_NOISE_SYMBOLS
         or symbol_name.startswith("_architecture_")
         or symbol_name.startswith("_overview_")
@@ -2531,7 +2531,7 @@ def prune_exact_file_context(raw_query: str, query_info: dict, expanded: list[di
     q_lower = raw_query.lower()
     
     try:
-        from retrieval.code_answers import is_architecture_request, is_overview_request, is_flow_explanation_request
+        from retrieval.generation.code_answers import is_architecture_request, is_overview_request, is_flow_explanation_request
         if is_architecture_request(raw_query) or is_overview_request(raw_query) or is_flow_explanation_request(raw_query):
             return expanded, {"enabled": False}
     except Exception:

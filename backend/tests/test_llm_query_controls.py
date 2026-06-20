@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import retrieval.config as config_module
-import retrieval.llm as llm_module
+import retrieval.generation.llm as llm_module
 
 
 class LlmQueryControlsTests(unittest.TestCase):

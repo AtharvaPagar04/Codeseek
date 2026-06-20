@@ -40,7 +40,7 @@ from retrieval.stores.github_store import get_github_credential, upsert_github_c
 from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
-from retrieval.llm import LlmProviderError
+from retrieval.generation.llm import LlmProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -58,7 +58,7 @@ from retrieval.stores.provider_store import (
     list_provider_credentials,
     set_active_provider_credential,
 )
-from retrieval.local_llm_runtime import (
+from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     get_provider_runtime_state,
 )

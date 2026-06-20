@@ -1,6 +1,6 @@
 import unittest
 
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 
 
 class TestAnswerValidation(unittest.TestCase):

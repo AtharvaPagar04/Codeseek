@@ -614,7 +614,7 @@ def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
     ingestion description calls.
     """
     from rag_ingestion.config import CODESEEK_DESCRIPTION_MAX_TOKENS
-    from retrieval.llm import (
+    from retrieval.generation.llm import (
         _chat_completion_request,
         _extract_message_content,
     )

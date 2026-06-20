@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     is_symbol_deep_dive_request,
     build_symbol_deep_dive_answer,
     _select_best_snippet,

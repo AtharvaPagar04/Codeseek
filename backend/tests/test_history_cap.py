@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from retrieval.assembler import intent_history_cap, intent_context_budget
+from retrieval.generation.assembler import intent_history_cap, intent_context_budget
 from retrieval.config import (
     HISTORY_TOKEN_CAP,
     INTENT_HISTORY_CAPS,

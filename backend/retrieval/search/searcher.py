@@ -799,7 +799,7 @@ def search(query_info: dict) -> list[dict]:
             )
 
     try:
-        from retrieval.exact_value_grounding import detect_exact_value_query
+        from retrieval.generation.exact_value_grounding import detect_exact_value_query
         exact_val_query = detect_exact_value_query(raw_query, query_info)
         query_info["exact_value_grounding"] = exact_val_query
         
@@ -2419,7 +2419,7 @@ def _inject_code_topic_routing_candidates(
     primary_intent: str,
     matched_route: dict | None = None,
 ) -> list[tuple[dict, float, str]]:
-    from retrieval.code_answers import is_code_request
+    from retrieval.generation.code_answers import is_code_request
     route = matched_route or match_code_topic_route(raw_query, primary_intent)
     if not route:
         return []
@@ -2494,7 +2494,7 @@ def _inject_code_topic_routing_candidates(
 
 
 def _inject_auth_routing_candidates(raw_query: str, primary_intent: str) -> list[tuple[dict, float, str]]:
-    from retrieval.code_answers import is_code_request
+    from retrieval.generation.code_answers import is_code_request
     if primary_intent != "CODE_REQUEST" and not is_code_request(raw_query):
         return _inject_code_topic_routing_candidates(raw_query, primary_intent)
 
@@ -3036,7 +3036,7 @@ def classify_source_role(relative_path: str) -> str:
     path_lower = relative_path.lower()
     
     # 1. answer_template
-    if path_lower == "backend/retrieval/code_answers.py" or path_lower.endswith("backend/retrieval/code_answers.py"):
+    if path_lower == "backend/retrieval/generation/code_answers.py" or path_lower.endswith("backend/retrieval/generation/code_answers.py"):
         return "answer_template"
         
     # 2. generated_eval
@@ -4084,7 +4084,7 @@ def _fetch_import_symbol_chunks(
 
 
 def _build_imported_symbol_payload(path: Path, relative_path: str, imported_name: str) -> dict | None:
-    from retrieval.code_answers import _extract_export_block
+    from retrieval.generation.code_answers import _extract_export_block
 
     block = _extract_export_block(path, imported_name)
     if not block:
@@ -4222,7 +4222,7 @@ def _overview_priority(payload: dict) -> int:
         score += 40
     if relative_path.endswith("retrieval/search/searcher.py"):
         score += 28
-    if relative_path.endswith("retrieval/code_answers.py"):
+    if relative_path.endswith("retrieval/generation/code_answers.py"):
         score += 22
     if relative_path.endswith("package.json"):
         score += 24

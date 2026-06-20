@@ -3,7 +3,7 @@ import unittest
 from contextlib import ExitStack
 from unittest.mock import patch
 
-from retrieval.llm import generate_answer
+from retrieval.generation.llm import generate_answer
 
 
 class LlmProviderConfigTests(unittest.TestCase):
@@ -11,7 +11,7 @@ class LlmProviderConfigTests(unittest.TestCase):
         stack = ExitStack()
         stack.enter_context(
             patch(
-                "retrieval.llm.background_prime_primary_model",
+                "retrieval.generation.llm.background_prime_primary_model",
                 return_value={
                     "model": "qwen2.5-coder:3b-8k",
                     "status": "loading",
@@ -21,7 +21,7 @@ class LlmProviderConfigTests(unittest.TestCase):
         )
         stack.enter_context(
             patch(
-                "retrieval.llm.wait_for_model_ready",
+                "retrieval.generation.llm.wait_for_model_ready",
                 return_value={
                     "model": "qwen-coder-7b-8192",
                     "status": "ready",
@@ -31,7 +31,7 @@ class LlmProviderConfigTests(unittest.TestCase):
         )
         stack.enter_context(
             patch(
-                "retrieval.llm.get_provider_runtime_state",
+                "retrieval.generation.llm.get_provider_runtime_state",
                 return_value={
                     "provider": "local",
                     "selected_model": "qwen2.5-coder:3b-8k",
@@ -49,7 +49,7 @@ class LlmProviderConfigTests(unittest.TestCase):
 
     def test_generate_answer_uses_request_scoped_provider_config(self) -> None:
         with patch(
-            "retrieval.llm._provider_answer",
+            "retrieval.generation.llm._provider_answer",
             return_value="ok",
         ) as provider_answer:
             answer = generate_answer(
@@ -81,7 +81,7 @@ class LlmProviderConfigTests(unittest.TestCase):
 
     def test_generate_answer_uses_gemini_default_model(self) -> None:
         with patch(
-            "retrieval.llm._provider_answer",
+            "retrieval.generation.llm._provider_answer",
             return_value="ok",
         ) as provider_answer:
             answer = generate_answer(
@@ -103,7 +103,7 @@ class LlmProviderConfigTests(unittest.TestCase):
 
     def test_generate_answer_uses_local_auto_routing_for_complex_query(self) -> None:
         with self._mock_local_runtime(), patch(
-            "retrieval.llm._provider_answer",
+            "retrieval.generation.llm._provider_answer",
             return_value="ok",
         ) as provider_answer:
             selection_meta = {}
@@ -139,7 +139,7 @@ class LlmProviderConfigTests(unittest.TestCase):
 
     def test_generate_answer_uses_local_primary_model_for_simple_query(self) -> None:
         with self._mock_local_runtime(), patch(
-            "retrieval.llm._provider_answer",
+            "retrieval.generation.llm._provider_answer",
             return_value="ok",
         ) as provider_answer:
             answer = generate_answer(
@@ -165,7 +165,7 @@ class LlmProviderConfigTests(unittest.TestCase):
 
     def test_generate_answer_escalates_local_auto_route_when_first_pass_is_insufficient(self) -> None:
         with self._mock_local_runtime(), patch(
-            "retrieval.llm._provider_answer",
+            "retrieval.generation.llm._provider_answer",
             side_effect=[
                 "Insufficient context in retrieved code to answer confidently.",
                 "fallback-ok",

@@ -177,7 +177,7 @@ LOOKUP_PHRASES = (
 def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
     """Call active LLM provider to classify the query intent."""
     import os
-    from retrieval.llm import _chat_completion_request
+    from retrieval.generation.llm import _chat_completion_request
     from retrieval.config import (
         LOCAL_LLM_BASE_URL,
         LOCAL_LLM_PRIMARY_MODEL,
@@ -218,7 +218,7 @@ def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
         max_tokens=max_tokens,
     )
     
-    from retrieval.llm import _extract_message_content
+    from retrieval.generation.llm import _extract_message_content
     result = _extract_message_content(response).strip().upper()
     return result
 

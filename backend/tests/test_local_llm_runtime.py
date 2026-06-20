@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from retrieval.local_llm_runtime import (
+from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     wait_for_model_ready,
 )
@@ -10,10 +10,10 @@ from retrieval.local_llm_runtime import (
 class LocalLlmRuntimeTests(unittest.TestCase):
     def test_background_prime_and_wait_for_model_ready(self) -> None:
         with patch(
-            "retrieval.local_llm_runtime._is_model_running",
+            "retrieval.generation.local_llm_runtime._is_model_running",
             side_effect=[False, True],
         ), patch(
-            "retrieval.local_llm_runtime._load_model_into_ollama",
+            "retrieval.generation.local_llm_runtime._load_model_into_ollama",
             return_value={"done": True},
         ):
             snapshot = background_prime_primary_model()

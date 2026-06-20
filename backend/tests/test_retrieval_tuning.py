@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from retrieval.search.searcher import _rerank_with_query_tokens
-from retrieval.code_answers import build_overview_answer
+from retrieval.generation.code_answers import build_overview_answer
 
 class TestRetrievalTuning(unittest.TestCase):
     def test_environment_variable_query_boost(self) -> None:

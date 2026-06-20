@@ -24,7 +24,7 @@
     - "backend/docs/retrieval_docs/current_retrieval_strategy.md"
     - "backend/retrieval/query/query_processor.py"
     - "backend/retrieval/search/searcher.py"
-    - "backend/retrieval/code_answers.py"
+    - "backend/retrieval/generation/code_answers.py"
   must_hit_top_k: 10
   notes: >
     Conceptual architecture query. Retrieval docs are valid expected context.
@@ -37,7 +37,7 @@
   expected_files:
     - "backend/retrieval/query/query_processor.py"
     - "backend/retrieval/search/searcher.py"
-    - "backend/retrieval/code_answers.py"
+    - "backend/retrieval/generation/code_answers.py"
   must_hit_top_k: 5
   notes: >
     Source-location variant of q002. This query should prefer implementation files.
@@ -163,7 +163,7 @@
   expected_files:
     - "backend/retrieval/session_indexer.py"
     - "backend/retrieval/config.py"
-    - "backend/retrieval/code_answers.py"
+    - "backend/retrieval/generation/code_answers.py"
   must_hit_top_k: 5
   notes: >
     Overview query currently retrieves high-level source context. Removed strict

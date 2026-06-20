@@ -1,5 +1,5 @@
-from retrieval.code_answers import build_explanation_answer, build_overview_answer
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.code_answers import build_explanation_answer, build_overview_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 from retrieval.main import post_process_answer_and_sources
 
 

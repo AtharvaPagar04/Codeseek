@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     _parse_named_imports,
     _resolve_import_path,
     _extract_export_block,

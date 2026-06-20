@@ -12,10 +12,10 @@ Primary implementation files:
 - `retrieval/query/query_processor.py`
 - `retrieval/search/searcher.py`
 - `retrieval/search/expander.py`
-- `retrieval/assembler.py`
+- `retrieval/generation/assembler.py`
 - `retrieval/search/source_filter.py`
-- `retrieval/code_answers.py`
-- `retrieval/llm.py`
+- `retrieval/generation/code_answers.py`
+- `retrieval/generation/llm.py`
 - `retrieval/memory.py`
 - `rag_ingestion/stages/language.py`
 - `rag_ingestion/stages/chunker.py`
@@ -578,7 +578,7 @@ There is a config flag for sibling expansion, but it is not currently implemente
 
 ## 10. Context Assembly
 
-`retrieval/assembler.py` converts selected chunks into the final LLM context.
+`retrieval/generation/assembler.py` converts selected chunks into the final LLM context.
 
 ### 10.1 Budgeting
 
@@ -641,7 +641,7 @@ Primary chunks can be truncated to fit the remaining budget. Non-primary chunks 
 
 ## 11. Source Filtering and Evidence Gating
 
-`retrieval/search/source_filter.py` and `retrieval/assembler.py` together control which sources reach the user and how much context the LLM receives.
+`retrieval/search/source_filter.py` and `retrieval/generation/assembler.py` together control which sources reach the user and how much context the LLM receives.
 
 ### 11.1 Two-layer source model
 
@@ -708,7 +708,7 @@ Before any LLM call, `retrieval/main.py` decides whether to answer deterministic
 
 ### 12.1 Code mode
 
-Triggered by `retrieval.code_answers.is_code_request()`.
+Triggered by `retrieval.generation.code_answers.is_code_request()`.
 
 Signals include phrases like:
 
@@ -884,7 +884,7 @@ Deterministic answer paths (code/overview/flow/architecture/explanation) are **n
 
 ## 13. LLM Prompting Strategy
 
-When the query is not handled by deterministic answer builders, `retrieval/llm.py` constructs the prompt.
+When the query is not handled by deterministic answer builders, `retrieval/generation/llm.py` constructs the prompt.
 
 ### 13.1 System prompt
 

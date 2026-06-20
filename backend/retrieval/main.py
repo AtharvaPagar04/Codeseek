@@ -6,8 +6,8 @@ import re
 import time
 from typing import Any
 
-from retrieval.assembler import assemble, assemble_for_reasoning, intent_history_cap
-from retrieval.code_answers import (
+from retrieval.generation.assembler import assemble, assemble_for_reasoning, intent_history_cap
+from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_docs_summary_answer,
     build_explanation_answer,
@@ -30,7 +30,7 @@ from retrieval.code_answers import (
     route_filesystem_sources_for_query,
     rank_follow_up_sources_for_explanation,
 )
-from retrieval.answer_validation import validate_generated_answer
+from retrieval.generation.answer_validation import validate_generated_answer
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
     DISPLAY_SOURCES_CAP,
@@ -51,7 +51,7 @@ from retrieval.follow_up_memory import (
     latest_rendered_entity_set,
     rewrite_follow_up_query,
 )
-from retrieval.llm import generate_answer, generate_answer_stream
+from retrieval.generation.llm import generate_answer, generate_answer_stream
 from retrieval.memory import ConversationMemory, prepare_history_block
 from retrieval.support.observability import StageMetrics, log_event, new_request_id
 from retrieval.query.query_processor import process_query
@@ -635,7 +635,7 @@ def post_process_answer_and_sources(
         query_explicitly_requests_searcher_internals,
         symbol_matches_topic_route,
     )
-    from retrieval.code_answers import route_filesystem_sources_for_query
+    from retrieval.generation.code_answers import route_filesystem_sources_for_query
     from retrieval.search.source_filter import apply_query_negative_filters
 
     def _dedupe_sources(items: list[dict]) -> list[dict]:
@@ -972,7 +972,7 @@ def post_process_answer_and_sources(
         
         # Let's check code availability
         code_available = False
-        from retrieval.code_answers import _read_source_excerpt
+        from retrieval.generation.code_answers import _read_source_excerpt
         for src in final_sources:
             if src.get("relative_path") and src.get("symbol_name"):
                 if _read_source_excerpt(src).strip():
@@ -981,7 +981,7 @@ def post_process_answer_and_sources(
                     
         if not has_fenced_code and final_sources:
             if code_available:
-                from retrieval.code_answers import build_code_snippet_answer
+                from retrieval.generation.code_answers import build_code_snippet_answer
                 answer = build_code_snippet_answer(raw_query, final_sources, final_sources)
             else:
                 answer = "I found a matching function reference, but the function body was not included in the retrieved context."
@@ -1601,7 +1601,7 @@ def _run_query_impl(
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     meta["display_sources"] = list(display_sources)
     meta["reasoning_sources"] = list(reasoning_sources)
-    from retrieval.code_answers import is_file_summary_request, build_file_summary_answer
+    from retrieval.generation.code_answers import is_file_summary_request, build_file_summary_answer
     if is_file_summary_request(raw_query):
         started = time.perf_counter()
         answer = build_file_summary_answer(raw_query, shown_sources, expanded)
@@ -2359,7 +2359,7 @@ def _run_query_impl(
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
     
-    from retrieval.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
+    from retrieval.generation.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
     exact_val = query_info.get("exact_value_grounding")
     is_exact_val = bool(exact_val and exact_val.get("enabled"))
     if is_exact_val:
@@ -2567,7 +2567,7 @@ def _resolve_query_info(
 
     query_info["is_followup"] = bool(is_followup_detected and not topic_shift)
     query_info["conversation_state"] = conversation_state
-    from retrieval.code_answers import is_code_request
+    from retrieval.generation.code_answers import is_code_request
     from retrieval.query.query_intent import is_explanation_query, is_source_location_query
     if is_explanation_query(raw_query):
         query_info["primary_intent"] = "EXPLANATION"

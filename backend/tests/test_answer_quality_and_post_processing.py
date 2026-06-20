@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock
 from retrieval.main import post_process_answer_and_sources, PostProcessingMemoryProxy
-from retrieval.llm import SYSTEM_PROMPT
+from retrieval.generation.llm import SYSTEM_PROMPT
 
 
 class TestAnswerQualityAndPostProcessing(unittest.TestCase):

@@ -189,14 +189,14 @@ FLOW_EVIDENCE_MODEL = {
             },
             {
                 "name": "Answer generation",
-                "paths": {"backend/retrieval/code_answers.py", "backend/retrieval/llm.py"},
+                "paths": {"backend/retrieval/generation/code_answers.py", "backend/retrieval/generation/llm.py"},
                 "symbols": {"build_flow_answer", "generate_answer"},
                 "step": "Deterministic flow responses and the LLM fallback convert the assembled evidence into the final grounded answer.",
                 "required": False,
             },
             {
                 "name": "Validation and repair",
-                "paths": {"backend/retrieval/answer_validation.py"},
+                "paths": {"backend/retrieval/generation/answer_validation.py"},
                 "symbols": {"validate_generated_answer"},
                 "step": "Answer validation repairs weakly sourced flow answers and removes unsupported references before the response is returned.",
                 "required": False,
@@ -3823,8 +3823,8 @@ def _architecture_module_points(sources: list[dict]) -> list[str]:
             points.append("`evals/run_safe_evals.py` drives safe eval execution, cleanup, step orchestration, and report writing.")
         elif "retrieval/search/searcher.py" in lower:
             points.append("`retrieval/search/searcher.py` handles evidence retrieval, result fusion, and overview-candidate injection.")
-        elif "retrieval/code_answers.py" in lower:
-            points.append("`retrieval/code_answers.py` renders deterministic overview, architecture, flow, and explanation answers.")
+        elif "retrieval/generation/code_answers.py" in lower:
+            points.append("`retrieval/generation/code_answers.py` renders deterministic overview, architecture, flow, and explanation answers.")
         elif lower.endswith(("api_service.py", "main.py", "app.py")):
             points.append(f"{relative_path} provides an application/API entrypoint through `{symbol}`.")
         elif "session_indexer.py" in lower:
@@ -4295,12 +4295,12 @@ def _overview_source_priority(source: dict) -> int:
         relative_path.endswith(path)
         for path in (
             "retrieval/search/searcher.py",
-            "retrieval/code_answers.py",
+            "retrieval/generation/code_answers.py",
             "retrieval/query/query_processor.py",
-            "retrieval/assembler.py",
-            "retrieval/llm.py",
+            "retrieval/generation/assembler.py",
+            "retrieval/generation/llm.py",
             "retrieval/search/source_filter.py",
-            "retrieval/answer_validation.py",
+            "retrieval/generation/answer_validation.py",
             "retrieval/follow_up_memory.py",
             "retrieval/db.py",
         )
@@ -4388,10 +4388,10 @@ def _architecture_source_priority(source: dict) -> int:
         for path in (
             "retrieval/search/searcher.py",
             "retrieval/query/query_processor.py",
-            "retrieval/code_answers.py",
-            "retrieval/llm.py",
+            "retrieval/generation/code_answers.py",
+            "retrieval/generation/llm.py",
             "retrieval/search/source_filter.py",
-            "retrieval/answer_validation.py",
+            "retrieval/generation/answer_validation.py",
             "retrieval/follow_up_memory.py",
             "retrieval/db.py",
         )
@@ -4782,10 +4782,10 @@ def _format_source_location_target_shape(
                     break
 
     # Do not display code_answers.py/searcher.py as the main implementation source if other files exist
-    if not keep_primary_searcher and sources and sources[0].get("relative_path", "") in {"backend/retrieval/code_answers.py", "backend/retrieval/search/searcher.py"}:
+    if not keep_primary_searcher and sources and sources[0].get("relative_path", "") in {"backend/retrieval/generation/code_answers.py", "backend/retrieval/search/searcher.py"}:
         for idx, src in enumerate(sources):
             s_path = src.get("relative_path", "")
-            if s_path and s_path not in {"backend/retrieval/code_answers.py", "backend/retrieval/search/searcher.py"}:
+            if s_path and s_path not in {"backend/retrieval/generation/code_answers.py", "backend/retrieval/search/searcher.py"}:
                 sources = [src] + [s for i, s in enumerate(sources) if i != idx]
                 break
 

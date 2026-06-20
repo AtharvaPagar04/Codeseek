@@ -228,7 +228,7 @@ class TestPipelineEventCallback:
         ]
         provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
 
-        with patch("retrieval.llm._chat_completion_request", return_value={
+        with patch("retrieval.generation.llm._chat_completion_request", return_value={
             "choices": [{"message": {"content": "A function."}}]
         }):
             describe_chunks(chunks, enabled=True, provider_config=provider, event_callback=cb)

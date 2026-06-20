@@ -1,5 +1,5 @@
 import unittest
-from retrieval.code_answers import (
+from retrieval.generation.code_answers import (
     build_source_location_answer,
     build_overview_answer,
     build_flow_answer,

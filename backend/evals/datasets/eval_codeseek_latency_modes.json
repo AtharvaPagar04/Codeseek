@@ -34,7 +34,7 @@
       "query": "compare source display filtering and reasoning-source assembly tradeoffs in this backend",
       "expected_files": [
         "retrieval/search/source_filter.py",
-        "retrieval/assembler.py"
+        "retrieval/generation/assembler.py"
       ],
       "expected_response_mode": "llm"
     }
