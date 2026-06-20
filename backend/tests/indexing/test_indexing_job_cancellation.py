@@ -17,7 +17,7 @@ import unittest
 from datetime import datetime, timezone
 
 # Ensure backend is on path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # Use in-memory SQLite for tests
 os.environ["CODESEEK_DB_PATH"] = ":memory:"

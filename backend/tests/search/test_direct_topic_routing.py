@@ -8,7 +8,7 @@ class DirectTopicRoutingTests(unittest.TestCase):
     def setUp(self):
         self.original_repo_root = os.environ.get("RETRIEVAL_REPO_ROOT")
         # Ensure we run tests on the real repo root to match files
-        os.environ["RETRIEVAL_REPO_ROOT"] = str(Path(__file__).parent.parent.parent.resolve())
+        os.environ["RETRIEVAL_REPO_ROOT"] = str(Path(__file__).resolve().parents[3])
 
     def tearDown(self):
         if self.original_repo_root is not None:

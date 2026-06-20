@@ -11,7 +11,7 @@ def tmp_reports_dir(tmp_path):
     return d
 
 def run_policy_summary(args_list):
-    script_path = str(Path(__file__).resolve().parent.parent / "evals" / "eval_policy_summary.py")
+    script_path = str(Path(__file__).resolve().parents[2] / "evals" / "eval_policy_summary.py")
     cmd = [sys.executable, script_path] + args_list
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result

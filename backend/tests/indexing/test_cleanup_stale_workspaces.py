@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 # Ensure the scripts directory is importable even without a package install.
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import cleanup_stale_workspaces as cws  # noqa: E402

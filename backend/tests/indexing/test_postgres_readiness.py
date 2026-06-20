@@ -12,7 +12,7 @@ class PostgresReadinessIntegrationTests(unittest.TestCase):
         "CODESEEK_POSTGRES_TEST_URL is not configured",
     )
     def test_postgres_readiness_script(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
+        repo_root = Path(__file__).resolve().parents[2]
         env = dict(os.environ)
         env["PYTHONPATH"] = str(repo_root)
         env["CODESEEK_DB_BACKEND"] = "postgres"
