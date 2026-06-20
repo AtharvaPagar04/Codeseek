@@ -18,14 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from retrieval.auth_store import (
+from retrieval.stores.auth_store import (
     create_auth_session,
     delete_auth_session,
     get_user_for_session_token,
     upsert_github_user,
     get_or_create_system_user,
 )
-from retrieval.chat_store import (
+from retrieval.stores.chat_store import (
     append_message,
     append_thread_message,
     clear_session_messages,
@@ -34,14 +34,14 @@ from retrieval.chat_store import (
     list_thread_messages,
 )
 from retrieval.config import get_collection_name, get_repo_root
-from retrieval.crypto_store import has_explicit_app_encryption_key
+from retrieval.stores.crypto_store import has_explicit_app_encryption_key
 from retrieval.db import init_db
-from retrieval.github_store import get_github_credential, upsert_github_credential
-from retrieval.isolation import validate_collection_binding
+from retrieval.stores.github_store import get_github_credential, upsert_github_credential
+from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
-from retrieval.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
-from retrieval.llm import LlmProviderError
-from retrieval.observability import (
+from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
+from retrieval.generation.llm import LlmProviderError
+from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
     new_request_id,
@@ -50,7 +50,7 @@ from retrieval.observability import (
     render_prometheus_metrics,
     sanitize_for_log,
 )
-from retrieval.provider_store import (
+from retrieval.stores.provider_store import (
     SUPPORTED_PROVIDER_TYPES,
     create_provider_credential,
     delete_provider_credential,
@@ -58,17 +58,16 @@ from retrieval.provider_store import (
     list_provider_credentials,
     set_active_provider_credential,
 )
-from retrieval.local_llm_runtime import (
+from retrieval.generation.local_llm_runtime import (
     background_prime_primary_model,
     get_provider_runtime_state,
 )
-from retrieval.provider_health import (
+from retrieval.support.provider_health import (
     ProviderNotConfiguredError,
     ProviderNotReadyError,
     require_llm_ready_for_user,
 )
-from retrieval.ragas_reports import load_ragas_validation_bundle
-from retrieval.searcher import dependency_health
+from retrieval.search.searcher import dependency_health
 from retrieval.session_indexer import (
     create_session,
     delete_session,
@@ -76,13 +75,13 @@ from retrieval.session_indexer import (
     list_sessions,
     retry_indexing,
 )
-from retrieval.submission_crypto import (
+from retrieval.support.submission_crypto import (
     decrypt_submission_secret,
     get_submission_key_id,
     get_submission_public_key_pem,
 )
-from retrieval.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
-from retrieval.indexing_events import (
+from retrieval.stores.thread_store import create_thread, ensure_default_thread, get_thread, list_threads_for_session
+from retrieval.support.indexing_events import (
     get_indexing_events,
     subscribe_indexing_events,
 )
@@ -138,6 +137,12 @@ GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_USER_URL = "https://api.github.com/user"
 CODESEEK_FRONTEND_URL = os.getenv("CODESEEK_FRONTEND_URL", "http://localhost:5173")
 OAUTH_STATE_COOKIE = "codeseek_oauth_state"
+ENABLE_DEBUG_DIAGNOSTICS = os.getenv("CODESEEK_ENABLE_DEBUG_DIAGNOSTICS", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 app = FastAPI(title="Codeseek Retrieval API", version="1.0.0")
 
@@ -145,7 +150,7 @@ import sqlite3
 
 @app.exception_handler(sqlite3.OperationalError)
 def sqlite_operational_error_handler(request: Request, exc: sqlite3.OperationalError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     if "no such table" in str(exc).lower():
         try:
             from retrieval.db import init_db
@@ -169,7 +174,7 @@ from fastapi.exceptions import RequestValidationError
 
 @app.exception_handler(HTTPException)
 def http_exception_handler(request: Request, exc: HTTPException):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     sanitized_detail = sanitize_credentials_in_string(str(exc.detail))
     return JSONResponse(
         status_code=exc.status_code,
@@ -180,7 +185,7 @@ def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 def validation_exception_handler(request: Request, exc: RequestValidationError):
-    from retrieval.observability import sanitize_credentials_in_string
+    from retrieval.support.observability import sanitize_credentials_in_string
     import json
     try:
         raw_errors_str = json.dumps(exc.errors())
@@ -262,7 +267,7 @@ app.add_middleware(
 )
 
 
-from retrieval.crypto_store import master_key_override_var
+from retrieval.stores.crypto_store import master_key_override_var
 
 @app.middleware("http")
 async def app_encryption_key_middleware(request: Request, call_next):
@@ -300,9 +305,6 @@ class SessionCreateRequest(BaseModel):
     enable_chunk_descriptions: bool = False
 
 
-class SessionIndexingOptionsUpdateRequest(BaseModel):
-    refine_labels_with_llm: bool
-
 
 class GithubAuthCodeRequest(BaseModel):
     code: str
@@ -317,14 +319,6 @@ class SubmissionPublicKeyResponse(BaseModel):
     key_id: str
     algorithm: str
     public_key_pem: str
-
-
-class RagasValidationArtifactResponse(BaseModel):
-    artifacts: dict
-    report: dict | None = None
-    family_baseline: dict | None = None
-    family_baseline_trend: dict | None = None
-    human_review_benchmark: dict | None = None
 
 
 def _ready_sessions() -> list[dict]:
@@ -680,6 +674,9 @@ def _build_query_diagnostics(
     llm_selection = meta.get("llm_selection") if isinstance(meta.get("llm_selection"), dict) else {}
     evidence_confidence = meta.get("evidence_confidence") if isinstance(meta.get("evidence_confidence"), dict) else {}
     source_filter = meta.get("source_filter") if isinstance(meta.get("source_filter"), dict) else {}
+    memory_diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
+    retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
+    source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -699,6 +696,8 @@ def _build_query_diagnostics(
         "context_tokens": token_count,
         "evidence_confidence": evidence_confidence,
         "source_filter": source_filter,
+        "retrieval_targeting": retrieval_targeting,
+        "source_alignment": source_alignment,
         "session_status": str((session or {}).get("status") or "").strip(),
         "session_error": str((session or {}).get("error") or "").strip(),
         "selected_source_count": len(meta.get("display_sources") or []),
@@ -709,6 +708,11 @@ def _build_query_diagnostics(
         "rendered_sources": _compact_sources(list(sources or [])),
     }
 
+    if memory_diagnostics:
+        diagnostics["memory"] = dict(memory_diagnostics.get("memory") or {})
+        diagnostics["rewrite"] = dict(memory_diagnostics.get("rewrite") or {})
+        diagnostics["retrieval"] = dict(memory_diagnostics.get("retrieval") or {})
+
     validation = meta.get("validation")
     if isinstance(validation, dict):
         diagnostics["validation"] = {
@@ -716,6 +720,8 @@ def _build_query_diagnostics(
             "reasons": list(validation.get("reasons") or []),
             "repaired": bool(validation.get("repaired_answer") or validation.get("repaired_sources")),
         }
+        if isinstance(validation.get("numeric_grounding"), dict):
+            diagnostics["numeric_grounding"] = dict(validation["numeric_grounding"])
 
     if session and "repo_status" in session:
         diagnostics["freshness"] = session["repo_status"]
@@ -833,6 +839,15 @@ def _query_impl(
                 provider_config=provider_config,
             )
         if session:
+            diagnostics_data = None
+            if ENABLE_DEBUG_DIAGNOSTICS:
+                diagnostics_data = _build_query_diagnostics(
+                    meta=meta,
+                    sources=sources,
+                    token_count=token_count,
+                    session=session,
+                    provider_config=provider_config,
+                )
             if thread:
                 append_thread_message(thread["id"], session["id"], "user", query_text)
                 append_thread_message(
@@ -842,6 +857,7 @@ def _query_impl(
                     answer,
                     sources=sources,
                     context_tokens=token_count,
+                    diagnostics=diagnostics_data,
                 )
             else:
                 append_message(session["id"], "user", query_text)
@@ -851,6 +867,7 @@ def _query_impl(
                     answer,
                     sources=sources,
                     context_tokens=token_count,
+                    diagnostics=diagnostics_data,
                 )
         total_ms = int((time.perf_counter() - started) * 1000)
         log_event(
@@ -864,25 +881,27 @@ def _query_impl(
         )
         observe_api_request(path, "200", total_ms)
         observe_retrieval_meta(meta, source_count=len(sources), context_tokens=token_count)
-        return {
+        response_data = {
             "request_id": request_id,
             "answer": answer,
             "sources": sources,
             "context_tokens": token_count,
             "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
-            "diagnostics": _build_query_diagnostics(
-                meta=meta,
-                sources=sources,
-                token_count=token_count,
-                session=session,
-                provider_config=provider_config,
-            ),
             "metrics": {
                 "total_latency_ms": total_ms,
                 "stage_latency_ms": meta.get("stage_latency_ms", {}),
                 "source_filter": meta.get("source_filter", {}),
             },
         }
+        if ENABLE_DEBUG_DIAGNOSTICS:
+            response_data["diagnostics"] = _build_query_diagnostics(
+                meta=meta,
+                sources=sources,
+                token_count=token_count,
+                session=session,
+                provider_config=provider_config,
+            )
+        return response_data
     except LlmProviderError as exc:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, str(exc.status_code), total_ms)
@@ -942,16 +961,6 @@ def submission_public_key_v1() -> SubmissionPublicKeyResponse:
 def metrics_v1() -> Response:
     body, content_type = render_prometheus_metrics()
     return Response(content=body, media_type=content_type)
-
-
-@v1.get("/ragas/latest", response_model=RagasValidationArtifactResponse)
-def ragas_latest_v1(
-    authorization: str | None = Header(default=None),
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> RagasValidationArtifactResponse:
-    _require_auth(authorization)
-    _require_auth_user(session_token)
-    return RagasValidationArtifactResponse(**load_ragas_validation_bundle())
 
 
 @v1.post("/query")
@@ -1095,36 +1104,49 @@ async def query_stream_v1(
                 )
             
             # Send the final sources and metadata
-            event_queue.put({
+            sources_event = {
                 "type": "sources",
                 "sources": sources,
                 "context_tokens": token_count,
                 "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
-            })
+            }
+            if ENABLE_DEBUG_DIAGNOSTICS:
+                sources_event["diagnostics"] = _build_query_diagnostics(
+                    meta=meta,
+                    sources=sources,
+                    token_count=token_count,
+                    session=session,
+                    provider_config=provider_config,
+                )
+            event_queue.put(sources_event)
 
             # Save the message to DB/history if session exists and not aborted
             if not abort_event.is_set() and session:
+                diagnostics_data = sources_event.get("diagnostics")
                 if thread:
                     append_thread_message(thread["id"], session["id"], "user", query_text)
-                    append_thread_message(
+                    msg = append_thread_message(
                         thread["id"],
                         session["id"],
                         "assistant",
                         answer,
                         sources=sources,
                         context_tokens=token_count,
+                        diagnostics=diagnostics_data,
                     )
                 else:
                     append_message(session["id"], "user", query_text)
-                    append_message(
+                    msg = append_message(
                         session["id"],
                         "assistant",
                         answer,
                         sources=sources,
                         context_tokens=token_count,
+                        diagnostics=diagnostics_data,
                     )
-            
-            event_queue.put({"type": "done"})
+                event_queue.put({"type": "done", "message_id": msg["id"]})
+            else:
+                event_queue.put({"type": "done"})
         except Exception as exc:
             event_queue.put({"type": "error", "message": str(exc)})
 
@@ -1353,41 +1375,6 @@ def get_session_v1(
     return {"session": session}
 
 
-@v1.get("/sessions/{session_id}/indexing-options")
-def get_session_indexing_options_v1(
-    session_id: str,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> dict:
-    auth_user = _require_auth_user(session_token)
-    try:
-        from retrieval.session_indexer import get_session_indexing_options
-        options = get_session_indexing_options(session_id, auth_user["id"])
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    return {"session_id": session_id, "indexing_options": options}
-
-
-@v1.patch("/sessions/{session_id}/indexing-options")
-def patch_session_indexing_options_v1(
-    session_id: str,
-    body: SessionIndexingOptionsUpdateRequest,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-) -> dict:
-    auth_user = _require_auth_user(session_token)
-    try:
-        from retrieval.session_indexer import update_session_indexing_options
-        options = update_session_indexing_options(
-            session_id, auth_user["id"], refine_labels_with_llm=body.refine_labels_with_llm
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    return {"session_id": session_id, "indexing_options": options}
-
-
 @v1.get("/sessions/{session_id}/messages")
 def list_session_messages_v1(
     session_id: str,
@@ -1497,7 +1484,7 @@ def retry_session_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs
@@ -1652,17 +1639,43 @@ def get_latest_evaluation_report_v1(
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
     
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report(session_id)
 
 
-
+@v1.get("/sessions/{session_id}/evaluation/regression-tests")
+def get_evaluation_regression_tests_v1(
+    session_id: str,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    auth_user = _require_auth_user(session_token)
+    session = get_session(session_id)
+    if not session or not _session_visible_to_user(session, auth_user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    repo_root = session.get("repo_root")
+    if not repo_root or not os.path.isdir(repo_root):
+        return {"tests": []}
+    
+    config_path = os.path.join(repo_root, ".codeseek-evals.json")
+    if not os.path.exists(config_path):
+        return {"tests": []}
+    
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            import json
+            tests = json.load(f)
+        if not isinstance(tests, list):
+            tests = []
+        return {"tests": tests}
+    except Exception:
+        return {"tests": []}
 @v1.get("/evals/latest")
 def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
 ) -> dict:
     _require_auth_user(session_token)
-    from retrieval.eval_reports import get_latest_evaluation_report
+    from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report()
 
 
@@ -1686,7 +1699,7 @@ def index_latest_session_v1(
             "freshness_status": "indexing"
         }
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs
@@ -1737,7 +1750,7 @@ def index_incremental_session_v1(
             "estimated_files_to_update": 0,
         }
 
-    if session.get("enable_chunk_descriptions") or session.get("refine_labels_with_llm"):
+    if session.get("enable_chunk_descriptions"):
         try:
             provider_config = require_llm_ready_for_user(auth_user["id"])
             from retrieval.session_indexer import _session_provider_configs

@@ -53,19 +53,6 @@ function summarizeEvidenceConfidence(confidence) {
   return parts.join(' · ');
 }
 
-function summarizeValidation(validation) {
-  if (!validation || typeof validation !== 'object') return '';
-  const parts = [];
-  if (typeof validation.valid === 'boolean') {
-    parts.push(validation.valid ? 'valid' : 'repaired');
-  }
-  const reasons = Array.isArray(validation.reasons) ? validation.reasons.filter(Boolean) : [];
-  if (reasons.length > 0) {
-    parts.push(reasons.join(', '));
-  }
-  return parts.join(' · ');
-}
-
 function summarizeSourceFilter(sourceFilter) {
   if (!sourceFilter || typeof sourceFilter !== 'object') return '';
   const parts = [];
@@ -80,12 +67,25 @@ function summarizeSourceFilter(sourceFilter) {
   return parts.join(' · ');
 }
 
+function summarizeBoolean(value) {
+  if (typeof value !== 'boolean') return '';
+  return value ? 'Yes' : 'No';
+}
+
+function summarizeNumber(value, digits = 3) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return `${num.toFixed(digits)}`.replace(/\.?0+$/, '');
+}
+
 function compactSourceList(items) {
   if (!Array.isArray(items) || items.length === 0) return [];
   const seen = new Set();
   const compacted = [];
   for (const item of items) {
-    const summary = summarizeDiagnosticSource(item);
+    const summary = typeof item === 'string'
+      ? safeString(item)
+      : summarizeDiagnosticSource(item);
     if (!summary || seen.has(summary)) continue;
     seen.add(summary);
     compacted.push(sanitizeCredentialsInString(summary));
@@ -119,29 +119,34 @@ export function buildAnswerDiagnosticsRows(diagnostics) {
     false
   );
   addTextRow('Routing mode', diagnostics.routing_mode, 'Intent', true);
-  addTextRow('Context tokens', diagnostics.context_tokens, 'Model', true);
+
   addTextRow('Evidence confidence', summarizeEvidenceConfidence(diagnostics.evidence_confidence), 'Sources', false);
   addTextRow('Source filter', summarizeSourceFilter(diagnostics.source_filter), 'Sources', true);
-  addTextRow('Session status', diagnostics.session_status, 'Freshness', false);
-  addTextRow('Session error', diagnostics.session_error, 'Freshness', false);
-  addTextRow('Validation', summarizeValidation(diagnostics.validation), 'Validation', false);
+
   addListRow('Selected sources', diagnostics.selected_sources, 'Sources', true);
   addListRow('Reasoning sources', diagnostics.reasoning_sources, 'Sources', true);
   addListRow('Rendered sources', diagnostics.rendered_sources, 'Sources', true);
+  addTextRow('Follow-up', summarizeBoolean(diagnostics.memory?.is_followup), 'Intent', false);
+  addTextRow('Topic shift detected', summarizeBoolean(diagnostics.memory?.topic_shift_detected), 'Intent', true);
+  addTextRow('Follow-up confidence', summarizeNumber(diagnostics.memory?.followup_confidence), 'Intent', true);
+  addTextRow('Query similarity', summarizeNumber(diagnostics.memory?.query_similarity), 'Intent', true);
+  addTextRow('Keyword overlap', summarizeNumber(diagnostics.memory?.keyword_overlap), 'Intent', true);
+  addTextRow('Similarity method', diagnostics.memory?.similarity_method, 'Intent', true);
+  addTextRow('Valid referent', summarizeBoolean(diagnostics.memory?.has_valid_referent), 'Intent', true);
+  addTextRow('History injected', summarizeBoolean(diagnostics.memory?.history_injected), 'Sources', false);
+  addTextRow('History turns used', diagnostics.memory?.history_turns_used, 'Sources', true);
+  addTextRow('Query rewritten', summarizeBoolean(diagnostics.rewrite?.query_rewritten), 'Intent', false);
+  addTextRow('Rewrite mode', diagnostics.rewrite?.rewrite_mode, 'Intent', true);
+  addTextRow('Rewrite anchor', diagnostics.rewrite?.rewrite_anchor, 'Intent', true);
+  addTextRow('Previous candidates injected', diagnostics.retrieval?.previous_candidates_injected, 'Sources', false);
+  addTextRow('Retrieval confidence', diagnostics.retrieval?.retrieval_confidence, 'Sources', false);
+  addTextRow('Exact retrieval hit', summarizeBoolean(diagnostics.retrieval?.exact_hit), 'Sources', true);
+  addTextRow('Multi-layer hit', summarizeBoolean(diagnostics.retrieval?.multi_layer_hit), 'Sources', true);
+  addTextRow('Top score', summarizeNumber(diagnostics.retrieval?.top_score), 'Sources', true);
+  addTextRow('Candidate count', diagnostics.retrieval?.candidate_count, 'Sources', true);
+  addTextRow('Low-confidence gate', summarizeBoolean(diagnostics.retrieval?.low_confidence_gate), 'Sources', true);
+  addListRow('Strong new entities', diagnostics.retrieval?.strong_new_entities, 'Sources', true);
 
-  if (diagnostics.freshness) {
-    const f = diagnostics.freshness;
-    addTextRow('Freshness status', f.status || f.freshness_status, 'Freshness', false);
-    addTextRow('Indexed branch', f.indexed_branch, 'Freshness', true);
-    addTextRow('Current branch', f.current_branch, 'Freshness', true);
-    addTextRow('Branch changed', f.branch_changed !== undefined ? (f.branch_changed ? 'Yes' : 'No') : '', 'Freshness', true);
-    addTextRow('Indexed commit', f.indexed_commit_sha, 'Freshness', true);
-    addTextRow('Current commit', f.current_commit_sha, 'Freshness', true);
-    addTextRow('Dirty worktree', f.dirty_worktree !== undefined ? (f.dirty_worktree ? 'Yes' : 'No') : '', 'Freshness', true);
-    if (f.checked_at || f.last_freshness_check_at) {
-      addTextRow('Last checked', f.checked_at || f.last_freshness_check_at, 'Freshness', true);
-    }
-  }
 
   return rows;
 }

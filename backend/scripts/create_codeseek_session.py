@@ -25,10 +25,9 @@ def main():
             INSERT INTO repo_sessions (
                 id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, error,
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
-                chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
-                refine_labels_with_llm, current_commit_sha, current_branch, repo_dirty,
+                chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions, current_commit_sha, current_branch, repo_dirty,
                 repo_status_checked_at, files_indexed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             "local",
@@ -44,7 +43,6 @@ def main():
             now,
             now,
             commit_sha,
-            0,
             0,
             0,
             0,

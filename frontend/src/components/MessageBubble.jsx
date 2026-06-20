@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SourceCard from './SourceCard';
@@ -22,20 +22,25 @@ function LoadingDots() {
  * Custom renderers for react-markdown — enforces our theme inside code blocks.
  */
 const markdownComponents = {
-  code({ inline, className, children, ...props }) {
-    return inline ? (
+  /* react-markdown v9: fenced code blocks are <pre><code>…</code></pre>.
+     Inline backticks are just <code>…</code> inside <p> or <li>.
+     We style `code` as inline by default, and the `pre` component wraps
+     fenced blocks.  CSS `pre code` overrides reset the inline styles. */
+  pre({ children, ...props }) {
+    return (
+      <pre className="bg-surface-3 border border-border rounded-lg p-2.5 my-2 overflow-x-auto" {...props}>
+        {children}
+      </pre>
+    );
+  },
+  code({ className, children, ...props }) {
+    return (
       <code
-        className="font-mono text-text-primary bg-surface-3 px-1.5 py-0.5 rounded-md text-[0.82em] border border-border"
+        className={`inline-code font-mono text-text-primary bg-surface-3 px-1.5 py-0.5 rounded-md text-[0.82em] border border-border ${className || ''}`}
         {...props}
       >
         {children}
       </code>
-    ) : (
-      <pre className="bg-surface-3 border border-border rounded-lg p-2.5 my-2 overflow-x-auto">
-        <code className="font-mono text-text-primary text-[0.8rem] leading-6" {...props}>
-          {children}
-        </code>
-      </pre>
     );
   },
   a({ href, children }) {
@@ -107,12 +112,33 @@ const markdownComponents = {
   },
 };
 
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, sessionId = '', userQuery = '' }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [copiedUser, setCopiedUser] = useState(false);
   const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
   const diagnosticsRows = buildAnswerDiagnosticsRows(message.diagnostics);
+  const sourcesRef = useRef(null);
+  const diagnosticsRef = useRef(null);
+
+  // Auto-close Sources/Diagnostics when scrolled out of view
+  useEffect(() => {
+    const refs = [sourcesRef, diagnosticsRef];
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting && entry.target.open) {
+            entry.target.open = false;
+          }
+        });
+      },
+      { threshold: 0 }
+    );
+    refs.forEach((ref) => {
+      if (ref.current) observer.observe(ref.current);
+    });
+    return () => observer.disconnect();
+  }, []);
 
   const handleCopyDiagnostics = (e) => {
     e.stopPropagation();
@@ -216,7 +242,7 @@ export default function MessageBubble({ message }) {
   // Assistant — normal answer
   return (
     <div className="flex justify-start animate-fadeIn group">
-      <div className="max-w-[80%] min-w-0">
+      <div className="max-w-[90%] min-w-0">
           <div className="px-1 py-1 text-text-primary">
             <div className="assistant-response max-w-none text-text-primary">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
@@ -248,7 +274,8 @@ export default function MessageBubble({ message }) {
 
           {(diagnosticsRows.length > 0 || (message.sources && message.sources.length > 0)) && (
             <div className="mt-1 border-t border-border/40 pt-2 pl-1 space-y-1.5">
-              <details className="group">
+              {message.sources && message.sources.length > 0 && (
+                <details className="group" ref={sourcesRef}>
                 <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
                   <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
                     <svg
@@ -287,9 +314,10 @@ export default function MessageBubble({ message }) {
                   })()}
                 </div>
               </details>
+              )}
 
               {diagnosticsRows.length > 0 && (
-                <details className="group">
+                <details className="group" ref={diagnosticsRef}>
                   <summary className="flex cursor-pointer items-center justify-between gap-3 list-none outline-none select-none">
                     <div className="flex items-center gap-2 text-2xs text-text-muted uppercase tracking-[0.22em] font-medium transition-colors hover:text-text-secondary">
                       <svg
@@ -327,14 +355,14 @@ export default function MessageBubble({ message }) {
                       const advancedRows = sectionRows.filter((row) => row.isAdvanced);
 
                       return (
-                        <div key={sectionName} className="rounded-xl border border-border bg-surface-2/40 p-3 space-y-2.5">
+                        <div key={sectionName} className="w-full rounded-xl border border-border bg-surface-2/40 p-3 space-y-2.5">
                           <div className="text-[10px] uppercase tracking-[0.22em] text-text-muted font-bold border-b border-border/40 pb-1">
                             {sectionName}
                           </div>
                           
                           {/* Basic fields */}
                           {basicRows.length > 0 && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="space-y-3">
                               {basicRows.map((row) => (
                                 <div key={row.label} className="space-y-1">
                                   <div className="text-[10px] text-text-muted font-semibold">
@@ -376,7 +404,7 @@ export default function MessageBubble({ message }) {
                                 </svg>
                                 Advanced details
                               </summary>
-                              <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-3 pl-2.5 border-l border-border/40">
+                              <div className="mt-2.5 space-y-3 pl-2.5 border-l border-border/40">
                                 {advancedRows.map((row) => (
                                   <div key={row.label} className="space-y-1">
                                     <div className="text-[10px] text-text-muted font-semibold">

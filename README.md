@@ -502,6 +502,35 @@ GITHUB_TEST_PAT=ghp_... \
 npm test
 ```
 
+### Local development with Docker Compose
+
+Use the root-level dev stack when you want the backend API, frontend dev server, Qdrant, and Postgres together:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+To start infrastructure only and keep using the existing host-native backend/frontend workflows:
+
+```bash
+docker compose -f docker-compose.dev.yml up qdrant postgres
+```
+
+To stop the stack:
+
+```bash
+docker compose -f docker-compose.dev.yml down
+docker compose -f docker-compose.dev.yml down -v
+```
+
+Notes:
+
+- `docker-compose.dev.yml` is the local development stack.
+- `docker-compose.deploy.yml` remains deployment-oriented and separate.
+- The existing backend-only scripts and `backend/docker-compose.yml` are still valid for narrower backend/infrastructure workflows.
+- The default dev stack does not include Ollama; local LLM/Ollama remains optional and manual unless you set the related backend env vars yourself.
+- For local overrides, provide environment variables from your shell or a root `.env` file that Docker Compose can read for interpolation. For host-native backend runs, continue using `backend/.env`.
+
 ---
 
 ## 12. Project Structure
@@ -532,13 +561,13 @@ CodeSeek/
 │   │   ├── crypto_store.py     # AES-GCM encryption/decryption
 │   │   └── session_indexer.py  # Async clone + ingestion job runner
 │   ├── scripts/                # Ops scripts (backup, cleanup, validation)
-│   ├── tests/                  # 22 test files (pytest)
+│   ├── tests/                  # Package-aligned pytest suite
 │   ├── monitoring/             # Prometheus + Alertmanager configs
 │   ├── docs/                   # Internal documentation
 │   │   ├── deployment_runbook.md
 │   │   ├── ingestion_docs/
 │   │   └── retrieval_docs/
-│   ├── docker-compose.yml      # Local dev compose
+│   ├── docker-compose.yml      # Backend + infra local compose
 │   └── docker-compose.monitoring.yml
 ├── frontend/
 │   ├── src/
@@ -554,6 +583,7 @@ CodeSeek/
 ├── deploy/                     # Production deployment assets
 │   ├── Caddyfile               # TLS reverse proxy config
 │   └── .env.example
+├── docker-compose.dev.yml      # Full local dev compose (frontend + backend + infra)
 ├── docker-compose.deploy.yml   # Production compose (all services)
 ├── DEPLOYMENT_TODO.md          # Deployment readiness checklist
 └── README.md                   # ← You are here
@@ -567,16 +597,16 @@ CodeSeek/
 |---|---|
 | Deployment runbook (env vars, rollback, backups, failure modes) | [`backend/docs/deployment_runbook.md`](backend/docs/deployment_runbook.md) |
 | Current retrieval strategy (detailed, code-accurate) | [`backend/docs/retrieval_docs/current_retrieval_strategy.md`](backend/docs/retrieval_docs/current_retrieval_strategy.md) |
-| Retrieval pipeline architecture | [`backend/docs/retrieval_docs/retrieval_pipeline_architecture.md`](backend/docs/retrieval_docs/retrieval_pipeline_architecture.md) |
-| Ingestion pipeline architecture | [`backend/docs/ingestion_docs/architecture.md`](backend/docs/ingestion_docs/architecture.md) |
-| Response quality improvement plan | [`backend/docs/retrieval_docs/response_quality_refinement_plan.md`](backend/docs/retrieval_docs/response_quality_refinement_plan.md) |
+| Retrieval implementation roadmap | [`backend/docs/retrieval_docs/current_retrieval_strategy.md`](backend/docs/retrieval_docs/current_retrieval_strategy.md) |
+| Ingestion implementation roadmap | [`backend/docs/ingestion_docs/current_ingestion_strategy.md`](backend/docs/ingestion_docs/current_ingestion_strategy.md) |
+| Retrieval quality boundaries | [`backend/docs/retrieval_docs/multi_language_support_boundaries.md`](backend/docs/retrieval_docs/multi_language_support_boundaries.md) |
 | E2E test suite | [`tests/e2e/README.md`](tests/e2e/README.md) |
 | Backend README (quick-start, API reference) | [`backend/README.md`](backend/README.md) |
 | Deployment checklist | [`DEPLOYMENT_TODO.md`](DEPLOYMENT_TODO.md) |
 | Known improvements (Gemini free-tier + RAG analysis) | [`Imporvement.md`](Imporvement.md) |
 | Performance baseline (metrics, benchmark runner, rules) | [`docs/product/performance_baseline.md`](docs/product/performance_baseline.md) |
-| Release readiness checklist (final validations, limitations) | [`docs/product/release_readiness_checklist.md`](docs/product/release_readiness_checklist.md) |
-| Final project handoff pack (summary, roadmap, feature flags) | [`docs/product/final_handoff.md`](docs/product/final_handoff.md) |
+| Indexing validation guide | [`docs/product/index_latest.md`](docs/product/index_latest.md) |
+| Repository freshness guide | [`docs/product/repo_freshness.md`](docs/product/repo_freshness.md) |
 
 ---
 
@@ -622,4 +652,4 @@ To demonstrate CodeSeek's full capabilities, walk through this sequence:
 ### 14.6 Development Validation Policy
 To keep CI and development loops fast:
 - **No full pytest by default:** Target specific files and modules.
-- **No safe eval by default:** Do not run full RAGAS judge calibration runs unless explicitly requested.
+- **No safe eval by default:** Do not run heavyweight or non-core evaluation workflows unless explicitly requested.

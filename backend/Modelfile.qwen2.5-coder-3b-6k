@@ -1,7 +1,0 @@
-FROM qwen2.5-coder:3b-8k
-
-PARAMETER num_ctx 6144
-PARAMETER num_predict 512
-PARAMETER temperature 0.2
-PARAMETER top_p 0.9
-PARAMETER repeat_penalty 1.05

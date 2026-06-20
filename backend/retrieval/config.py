@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from retrieval.isolation import expected_collection_name
+from retrieval.support.isolation import expected_collection_name
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -83,6 +83,25 @@ INTENT_CONTEXT_BUDGETS: dict[str, int] = {
 # INTENT_HISTORY_CAPS further reduce the cap for broad/synthesis intents that
 # need the most code context and are least dependent on exact prior answers.
 HISTORY_TOKEN_CAP = _env_int("RETRIEVAL_HISTORY_TOKEN_CAP", 1500)
+HISTORY_DEFAULT_ENABLED = _env_bool("CODESEEK_HISTORY_DEFAULT_ENABLED", False)
+HISTORY_INJECT_THRESHOLD = float(os.getenv("CODESEEK_HISTORY_INJECT_THRESHOLD", "0.65"))
+MAX_HISTORY_TURNS_FOR_FOLLOWUP = _env_positive_int("CODESEEK_MAX_HISTORY_TURNS_FOR_FOLLOWUP", 1)
+PREVIOUS_CANDIDATE_INJECTION_MIN_SCORE = float(
+    os.getenv("CODESEEK_PREVIOUS_CANDIDATE_INJECTION_MIN_SCORE", "0.55")
+)
+PREVIOUS_CANDIDATE_MAX_RATIO = float(
+    os.getenv("CODESEEK_PREVIOUS_CANDIDATE_MAX_RATIO", "0.20")
+)
+PREVIOUS_CANDIDATE_MAX_COUNT = _env_positive_int("CODESEEK_PREVIOUS_CANDIDATE_MAX_COUNT", 3)
+PREVIOUS_CANDIDATE_PENALTY = float(
+    os.getenv("CODESEEK_PREVIOUS_CANDIDATE_PENALTY", "0.85")
+)
+FOLLOWUP_SIMILARITY_THRESHOLD = float(
+    os.getenv("CODESEEK_FOLLOWUP_SIMILARITY_THRESHOLD", "0.72")
+)
+FOLLOWUP_KEYWORD_OVERLAP_THRESHOLD = float(
+    os.getenv("CODESEEK_FOLLOWUP_KEYWORD_OVERLAP_THRESHOLD", "0.15")
+)
 INTENT_HISTORY_CAPS: dict[str, int] = {
     "OVERVIEW":      800,
     "TECH_STACK":    800,

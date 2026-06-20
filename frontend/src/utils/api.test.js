@@ -657,7 +657,7 @@ test('querySessionStream parses NDJSON chunks and invokes callbacks', async () =
     '{"type": "status", "message": "Retrieving..."}\n',
     '{"type": "delta", "text": "Hello"}\n',
     '{"type": "delta", "text": " world"}\n',
-    '{"type": "sources", "sources": [], "context_tokens": 123, "evidence_confidence": null}\n',
+    '{"type": "sources", "sources": [], "context_tokens": 123, "evidence_confidence": "strong", "diagnostics": {"response_mode": "code_snippet", "memory": {"history_injected": false}}}\n',
     '{"type": "done"}\n'
   ];
 
@@ -706,6 +706,9 @@ test('querySessionStream parses NDJSON chunks and invokes callbacks', async () =
     assert.deepEqual(deltas, ['Hello', ' world']);
     assert.ok(receivedSources);
     assert.equal(receivedSources.context_tokens, 123);
+    assert.equal(receivedSources.evidence_confidence, 'strong');
+    assert.equal(receivedSources.diagnostics.response_mode, 'code_snippet');
+    assert.equal(receivedSources.diagnostics.memory.history_injected, false);
     assert.equal(doneCalled, true);
     assert.match(calledUrl, /\/api\/v1\/query\/stream/);
     assert.equal(calledOptions.method, 'POST');
@@ -714,4 +717,3 @@ test('querySessionStream parses NDJSON chunks and invokes callbacks', async () =
     delete globalThis.localStorage;
   }
 });
-

@@ -13,7 +13,7 @@ Measures:
 Usage:
     PYTHONPATH=. .venv/bin/python scripts/lexical_layer_benchmark.py
     PYTHONPATH=. .venv/bin/python scripts/lexical_layer_benchmark.py \\
-        --output docs/retrieval_docs/lexical_layer_benchmark_results.json
+        --output backend/evals/reports/lexical_layer_benchmark_results.json
 
 Decision gate printed at the end:
     ENABLE LEXICAL if mean latency delta < 150 ms AND hit@10 improves >= 0.02
@@ -61,7 +61,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-sym-004",
         "query": "Where is process_query defined?",
-        "expected_files": ["retrieval/query_processor.py"],
+        "expected_files": ["retrieval/query/query_processor.py"],
         "expected_symbols": ["process_query"],
         "family": "SYMBOL",
     },
@@ -90,7 +90,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-dep-003",
         "query": "Which code invalidates the lexical index after ingestion?",
-        "expected_files": ["retrieval/searcher.py", "rag_ingestion/main.py"],
+        "expected_files": ["retrieval/search/searcher.py", "rag_ingestion/main.py"],
         "expected_symbols": [],
         "family": "DEPENDENCY",
     },
@@ -141,7 +141,7 @@ EVAL_CASES: list[dict[str, Any]] = [
     {
         "id": "lex-sem-002",
         "query": "explain how the retrieval pipeline assembles context",
-        "expected_files": ["retrieval/main.py", "retrieval/code_answers.py"],
+        "expected_files": ["retrieval/main.py", "retrieval/generation/code_answers.py"],
         "expected_symbols": [],
         "family": "SEMANTIC",
     },
@@ -218,7 +218,7 @@ def _top_files(results: list[dict], n: int = 5) -> list[str]:
 
 def _run_search(query_info: dict, enable_lexical: bool) -> tuple[list[dict], float]:
     """Run search with or without lexical layer, return (results, latency_ms)."""
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     original = searcher_mod.ENABLE_LEXICAL_RETRIEVAL
     searcher_mod.ENABLE_LEXICAL_RETRIEVAL = enable_lexical
@@ -236,7 +236,7 @@ def _run_search(query_info: dict, enable_lexical: bool) -> tuple[list[dict], flo
 
 def _measure_index_build(collection: str) -> tuple[float, float]:
     """Return (build_time_ms, memory_delta_mb) for building the BM25 index."""
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     # Clear cached index first
     searcher_mod._lexical_indexes.pop(collection, None)
@@ -256,9 +256,9 @@ def _measure_index_build(collection: str) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 def main(output_path: str | None = None) -> None:
-    from retrieval.query_processor import process_query
+    from retrieval.query.query_processor import process_query
     from retrieval.config import get_collection_name
-    import retrieval.searcher as searcher_mod
+    import retrieval.search.searcher as searcher_mod
 
     collection = get_collection_name()
 
@@ -484,8 +484,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lexical retrieval layer benchmark")
     parser.add_argument(
         "--output",
-        default="docs/retrieval_docs/lexical_layer_benchmark_results.json",
-        help="Path to write JSON results (default: docs/retrieval_docs/lexical_layer_benchmark_results.json)",
+        default="backend/evals/reports/lexical_layer_benchmark_results.json",
+        help="Path to write JSON results (default: backend/evals/reports/lexical_layer_benchmark_results.json)",
     )
     args = parser.parse_args()
     main(output_path=args.output)

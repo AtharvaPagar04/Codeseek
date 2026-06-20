@@ -31,7 +31,7 @@ This release stabilizes code ingestion, introduces incremental indexing, improve
 ### 1.5 UX Polish & Diagnostics Panel
 - Sub-stage execution timings (Intent, Search, Context Assembly, LLM prompt).
 - Grounded citations (Source Cards) with line numbers, code snippets, and syntax highlighting.
-- RAGAS evaluation dashboard and human feedback markers.
+- Evaluation dashboard and human feedback markers.
 
 ### 1.6 Security & Secrets Sanitization
 - Bearer tokens and DB connection passwords are redacted in logs, exceptions, and displays.

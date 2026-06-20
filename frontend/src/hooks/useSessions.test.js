@@ -144,27 +144,6 @@ test('normalizeSessionRecord preserves local thread state when backend reuses a 
   assert.equal(next.last_active, '2026-06-03T02:00:00.000Z');
 });
 
-test('normalizeSessionRecord preserves indexing options', () => {
-  const next = normalizeSessionRecord(
-    {
-      id: 'session-1',
-      repo_full_name: 'org/repo-one',
-      status: 'ready',
-      error: '',
-      created_at: '2026-06-03T00:00:00.000Z',
-      refine_labels_with_llm: true,
-      indexing_options: { refine_labels_with_llm: true },
-    },
-    null,
-    {
-      now: '2026-06-03T02:00:00.000Z',
-      lastActive: '2026-06-03T02:00:00.000Z',
-    }
-  );
-
-  assert.equal(next.refine_labels_with_llm, true);
-  assert.deepEqual(next.indexing_options, { refine_labels_with_llm: true });
-});
 
 
 test('applyDeleteSession removes the target session', () => {

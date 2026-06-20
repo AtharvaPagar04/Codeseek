@@ -22,7 +22,7 @@ from rag_ingestion.utils.gpu_cleanup import (
     unload_ollama_model,
     cleanup_after_batch,
 )
-from retrieval.isolation import expected_collection_name, validate_collection_binding
+from retrieval.support.isolation import expected_collection_name, validate_collection_binding
 from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.discovery import discover_files
 from rag_ingestion.stages.embedder import embed_chunks, unload_embedding_model
@@ -58,7 +58,6 @@ def run_pipeline(
     source: str,
     collection_name: str | None = None,
     enable_chunk_descriptions: bool | None = None,
-    enable_llm_label_refinement: bool | None = None,
     provider_config: dict | None = None,
     event_callback=None,
     recreate_collection: bool | None = None,
@@ -68,11 +67,9 @@ def run_pipeline(
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
     from rag_ingestion.config import (
-        ENABLE_LLM_LABEL_REFINEMENT,
         CODESEEK_DESCRIPTION_MODEL,
         CODESEEK_LABEL_MODEL,
         CODESEEK_DESCRIPTION_BATCH_SIZE,
-        CODESEEK_LABEL_REFINE_BATCH_SIZE,
         CODESEEK_EMBEDDING_BATCH_SIZE,
         CODESEEK_CHUNK_PROCESS_BATCH_SIZE,
         CODESEEK_DESCRIPTION_MAX_CHARS,
@@ -84,7 +81,6 @@ def run_pipeline(
     logger.info("[ingestion.config] description_model=%s", CODESEEK_DESCRIPTION_MODEL)
     logger.info("[ingestion.config] label_model=%s", CODESEEK_LABEL_MODEL)
     logger.info("[ingestion.config] description_batch_size=%d", CODESEEK_DESCRIPTION_BATCH_SIZE)
-    logger.info("[ingestion.config] label_refine_batch_size=%d", CODESEEK_LABEL_REFINE_BATCH_SIZE)
     logger.info("[ingestion.config] embedding_batch_size=%d", CODESEEK_EMBEDDING_BATCH_SIZE)
     logger.info("[ingestion.config] chunk_process_batch_size=%d", CODESEEK_CHUNK_PROCESS_BATCH_SIZE)
     logger.info("[ingestion.config] description_max_chars=%d", CODESEEK_DESCRIPTION_MAX_CHARS)
@@ -92,17 +88,11 @@ def run_pipeline(
     logger.info("[ingestion.config] ollama_keep_alive=%s", CODESEEK_OLLAMA_KEEP_ALIVE)
     logger.info("[ingestion.config] ollama_stop_model_every=%d", CODESEEK_OLLAMA_STOP_MODEL_EVERY)
 
-    should_refine_labels = (
-        ENABLE_LLM_LABEL_REFINEMENT
-        if enable_llm_label_refinement is None
-        else enable_llm_label_refinement
-    )
     should_recreate_collection = (
         RECREATE_COLLECTION_EACH_RUN
         if recreate_collection is None
         else recreate_collection
     )
-    logger.info("LLM label refinement enabled for session: %s", should_refine_labels)
 
     counters = PipelineCounters()
 
@@ -242,7 +232,7 @@ def run_pipeline(
             log_gpu_memory_snapshot("after ollama unload post-descriptions")
 
         # --- Labeling ---
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS, ENABLE_LLM_LABEL_REFINEMENT
+        from rag_ingestion.config import ENABLE_CHUNK_LABELS
         if ENABLE_CHUNK_LABELS:
             from rag_ingestion.stages.labeler import label_chunks
             repo_name = repository.get("repository_name", "")
@@ -264,18 +254,9 @@ def run_pipeline(
                     chunk.code_intent,
                 )
 
-            # --- Optional LLM label refinement (Group 12, disabled by default) ---
-            if should_refine_labels:
-                from rag_ingestion.stages.labeler import refine_chunk_labels_with_llm
-                all_chunks = refine_chunk_labels_with_llm(
-                    all_chunks,
-                    provider_config=provider_config,
-                    event_callback=event_callback,
-                )
-
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
-        embedded_chunks = embed_chunks(all_chunks, counters)
+        embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
 
         emit("embedding",
              f"Generated embeddings for {counters.embeddings_generated} chunks.",
@@ -439,7 +420,6 @@ def run_incremental_pipeline(
     source: str,
     collection_name: str | None = None,
     enable_chunk_descriptions: bool | None = None,
-    enable_llm_label_refinement: bool | None = None,
     provider_config: dict | None = None,
     event_callback=None,
     session_id: str | None = None,
@@ -453,12 +433,9 @@ def run_incremental_pipeline(
     Executes a partial/incremental reindexing pipeline for the specified session
     and subset of files.
     """
-    from rag_ingestion.config import (
-        ENABLE_LLM_LABEL_REFINEMENT,
-    )
     from rag_ingestion.utils.counters import PipelineCounters
     from rag_ingestion.stages.loader import load_repository
-    from retrieval.isolation import expected_collection_name, validate_collection_binding
+    from retrieval.support.isolation import expected_collection_name, validate_collection_binding
     from rag_ingestion.stages.discovery import discover_files
     from rag_ingestion.stages.filtering import filter_files
     from rag_ingestion.stages.language import detect_languages
@@ -575,22 +552,9 @@ def run_incremental_pipeline(
             repo_root = repository.get("repository_root", "")
             all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
 
-            should_refine_labels = (
-                ENABLE_LLM_LABEL_REFINEMENT
-                if enable_llm_label_refinement is None
-                else enable_llm_label_refinement
-            )
-            if should_refine_labels:
-                from rag_ingestion.stages.labeler import refine_chunk_labels_with_llm
-                all_chunks = refine_chunk_labels_with_llm(
-                    all_chunks,
-                    provider_config=provider_config,
-                    event_callback=event_callback,
-                )
-
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
-        embedded_chunks = embed_chunks(all_chunks, counters)
+        embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
         emit("embedding", f"Generated embeddings for {counters.embeddings_generated} chunks.")
 
     # --- Qdrant Deletion Pre-fetch ---

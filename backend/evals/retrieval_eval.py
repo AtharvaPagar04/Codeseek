@@ -25,8 +25,8 @@ _load_env_file()
 # Ensure backend directory is in path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from retrieval.query_processor import process_query
-from retrieval.searcher import (
+from retrieval.query.query_processor import process_query
+from retrieval.search.searcher import (
     search, 
     _dense_search, 
     _lexical_search, 
@@ -34,7 +34,7 @@ from retrieval.searcher import (
     _exact_entity_search, 
     _dependency_search
 )
-from retrieval.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
+from retrieval.query.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
 from retrieval.db import db_cursor
 
 from evals.golden_loader import load_golden_queries
@@ -165,8 +165,8 @@ def _likely_failure_type(
 def main():
     parser = argparse.ArgumentParser(description="Run retrieval evaluation for CodeSeek.")
     parser.add_argument("--session-id", help="Session ID from database.")
-    parser.add_argument("--golden", default="../evals/golden_queries.yaml", help="Path to golden queries YAML file.")
-    parser.add_argument("--output", default="../evals/reports/latest.json", help="Path to write the evaluation JSON report.")
+    parser.add_argument("--golden", default="evals/golden/golden_queries.yaml", help="Path to golden queries YAML file.")
+    parser.add_argument("--output", default="evals/reports/latest.json", help="Path to write the evaluation JSON report.")
     parser.add_argument("--k", type=int, default=5, help="K value for evaluation (default: 5).")
     parser.add_argument(
         "--debug-query-ids",
@@ -277,7 +277,7 @@ def main():
 
         q_info = process_query(raw_query)
         primary_intent = q_info["primary_intent"]
-        from retrieval.query_intent import identify_followup_or_low_context
+        from retrieval.query.query_intent import identify_followup_or_low_context
         is_followup, is_low_context = identify_followup_or_low_context(raw_query, conversation_state=None)
         
         # Map label classifier intent to reranker intent

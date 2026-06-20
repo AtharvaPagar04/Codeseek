@@ -17,6 +17,32 @@ test('buildAnswerDiagnosticsRows keeps only safe display fields', () => {
     session_status: 'ready',
     session_error: '',
     validation: { valid: false, reasons: ['rebuilt_code_snippet'] },
+    memory: {
+      is_followup: false,
+      topic_shift_detected: true,
+      followup_confidence: 0.125,
+      query_similarity: 0.0,
+      keyword_overlap: 0.0,
+      similarity_method: 'keyword_overlap',
+      has_valid_referent: false,
+      history_injected: false,
+      history_turns_used: 0,
+    },
+    rewrite: {
+      query_rewritten: false,
+      rewrite_mode: 'none',
+      rewrite_anchor: null,
+    },
+    retrieval: {
+      previous_candidates_injected: 0,
+      strong_new_entities: ['backend/retrieval/api_service.py', '_require_auth'],
+      exact_hit: true,
+      multi_layer_hit: true,
+      top_score: 0.97,
+      candidate_count: 4,
+      retrieval_confidence: 'strong',
+      low_confidence_gate: false,
+    },
     selected_sources: [
       {
         relative_path: 'backend/evals/run_safe_evals.py',
@@ -51,10 +77,16 @@ test('buildAnswerDiagnosticsRows keeps only safe display fields', () => {
   assert.ok(rows.some((row) => row.label === 'Rendered sources'));
   assert.ok(rows.some((row) => row.label === 'Selected sources'));
   assert.ok(rows.some((row) => row.label === 'Reasoning sources'));
+  assert.ok(rows.some((row) => row.label === 'Follow-up'));
+  assert.ok(rows.some((row) => row.label === 'History injected'));
+  assert.ok(rows.some((row) => row.label === 'Previous candidates injected'));
+  assert.ok(rows.some((row) => row.label === 'Strong new entities'));
   const renderedRow = rows.find((row) => row.label === 'Rendered sources');
   assert.equal(renderedRow.value[0], 'backend/evals/run_safe_evals.py :: main (L10–48)');
   const selectedRow = rows.find((row) => row.label === 'Selected sources');
   assert.equal(selectedRow.value[0], 'backend/evals/run_safe_evals.py :: main (L10–48)');
+  const strongEntitiesRow = rows.find((row) => row.label === 'Strong new entities');
+  assert.deepEqual(strongEntitiesRow.value, ['backend/retrieval/api_service.py', '_require_auth']);
   assert.ok(rows.every((row) => JSON.stringify(row).indexOf('secret') === -1));
   assert.ok(rows.every((row) => JSON.stringify(row).indexOf('hidden') === -1));
 });

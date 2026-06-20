@@ -40,7 +40,6 @@ def main() -> None:
         sys.exit(1)
 
     traces = []
-    ragas_ready_count = 0
     invalid_traces = 0
 
     required_fields = [
@@ -50,7 +49,6 @@ def main() -> None:
         "question",
         "answer",
         "retrieved_contexts",
-        "ragas",
     ]
 
     with path.open("r", encoding="utf-8") as f:
@@ -68,15 +66,6 @@ def main() -> None:
                     invalid_traces += 1
                     continue
 
-                # Check RAGAS ready
-                ragas = trace.get("ragas", {})
-                if (
-                    ragas.get("ready")
-                    and ragas.get("question")
-                    and ragas.get("answer")
-                    and isinstance(ragas.get("contexts"), list)
-                ):
-                    ragas_ready_count += 1
             except Exception as e:
                 print(f"Error parsing line {line_num}: {e}", file=sys.stderr)
                 invalid_traces += 1
@@ -86,12 +75,6 @@ def main() -> None:
     print("         ANSWER TRACES SUMMARY")
     print("========================================")
     print(f"Total Traces Found:   {total_traces}")
-    if total_traces:
-        print(
-            f"RAGAS-Ready Traces:   {ragas_ready_count} ({ragas_ready_count / total_traces * 100:.1f}%)"
-        )
-    else:
-        print("RAGAS-Ready Traces:   0 (0.0%)")
     print(f"Invalid Traces:       {invalid_traces}")
     print("========================================")
 

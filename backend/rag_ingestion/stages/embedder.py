@@ -69,7 +69,7 @@ KNOWN_LABELS = {
 
 
 def embed_chunks(
-    chunks: list[Chunk], counters: PipelineCounters
+    chunks: list[Chunk], counters: PipelineCounters, event_callback=None
 ) -> list[Chunk]:
     """Generate embeddings for chunks in batches."""
     from rag_ingestion.config import (
@@ -110,7 +110,15 @@ def embed_chunks(
                 chunk.embedding = embedding.tolist()
                 counters.embeddings_generated += 1
             
+            
             embedded_count += len(batch)
+            if event_callback:
+                event_callback(
+                    stage="embedding",
+                    message=f"Embedded {embedded_count} of {total_chunks} chunks...",
+                    progress=embedded_count,
+                    total=total_chunks,
+                )
 
             # Free temporary inputs/embeddings and collect Python memory
             del inputs

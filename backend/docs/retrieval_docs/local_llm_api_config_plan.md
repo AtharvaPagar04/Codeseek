@@ -82,7 +82,7 @@ The local model store is mounted under `/var/lib/ollama`.
 
 ### Backend Provider Storage
 
-- [x] Extend provider validation to accept `local` as a supported provider value in [provider_store.py](../../retrieval/provider_store.py).
+- [x] Extend provider validation to accept `local` as a supported provider value in [provider_store.py](../../retrieval/stores/provider_store.py).
   - Preserve the current DB-backed provider credential pattern.
   - Keep the current record shape compatible with existing providers.
 - [x] Define how local provider credentials are stored.
@@ -93,7 +93,7 @@ The local model store is mounted under `/var/lib/ollama`.
 
 ### Backend LLM Resolution
 
-- [x] Add a local-provider branch in [llm.py](../../retrieval/llm.py).
+- [x] Add a local-provider branch in [llm.py](../../retrieval/generation/llm.py).
   - The branch should route to a local inference endpoint rather than a hosted vendor API.
   - The rest of the answer-generation flow should remain unchanged.
 - [x] Add the local model selection logic.

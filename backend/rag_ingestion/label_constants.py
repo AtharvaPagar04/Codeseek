@@ -91,5 +91,4 @@ CODESEEK_INTERNAL_LABELS = {
 }
 
 # Config flags
-from rag_ingestion.config import ENABLE_CHUNK_LABELS, ENABLE_LLM_LABEL_REFINEMENT
-
+from rag_ingestion.config import ENABLE_CHUNK_LABELS

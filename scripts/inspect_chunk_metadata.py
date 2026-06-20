@@ -579,7 +579,7 @@ Examples:
   python scripts/inspect_chunk_metadata.py --collection codeseek --limit 20
   python scripts/inspect_chunk_metadata.py --collection codeseek --keys
   python scripts/inspect_chunk_metadata.py --collection codeseek --missing-descriptions
-  python scripts/inspect_chunk_metadata.py --collection codeseek --path retrieval/searcher.py
+  python scripts/inspect_chunk_metadata.py --collection codeseek --path retrieval/search/searcher.py
   python scripts/inspect_chunk_metadata.py --collection codeseek --label domain:auth --raw
   python scripts/inspect_chunk_metadata.py --collection codeseek --json --limit 50
         """,

@@ -8,7 +8,6 @@ export default function StatusBar({
   onToggleSidebar,
   isMobile,
   onOpenApiTokens,
-  onOpenRagasReport,
   activeSession,
   githubNotice,
 }) {
@@ -139,4 +138,3 @@ function KeyIcon() {
     </svg>
   );
 }
-

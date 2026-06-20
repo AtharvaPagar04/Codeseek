@@ -38,7 +38,7 @@ def get_reindex_guidance(reasons: list[str], repo_root: str, collection_name: st
     guidance.append(f"  3. Rerun index health check:")
     guidance.append(f"     .venv/bin/python evals/index_health.py --collection {collection_name} --repo-root {repo_root}")
     guidance.append(f"  4. Rerun retrieval evaluation:")
-    guidance.append(f"     .venv/bin/python evals/retrieval_eval.py --golden ../evals/golden_queries.yaml")
+    guidance.append(f"     .venv/bin/python evals/retrieval_eval.py --golden evals/golden/golden_queries.yaml")
     guidance.append("=" * 60)
     
     return "\n".join(guidance)

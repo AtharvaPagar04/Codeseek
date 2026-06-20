@@ -53,11 +53,11 @@ def _effective_symbol_metric_intent(query: str, reranker_intent: str) -> str:
 # Ensure backend directory is in path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from retrieval.query_processor import process_query
-from retrieval.searcher import search
-from retrieval.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
+from retrieval.query.query_processor import process_query
+from retrieval.search.searcher import search
+from retrieval.query.query_intent import classify_query_intent, map_label_intent_to_reranker_intent
 from retrieval.db import db_cursor
-from retrieval.memory import ConversationMemory
+from retrieval.memory.memory import ConversationMemory
 from retrieval.main import _resolve_query_info
 
 from evals.metrics import (
@@ -88,8 +88,8 @@ def format_final_point(payload: dict) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Run conversation evaluation for CodeSeek.")
     parser.add_argument("--session-id", help="Session ID from database.")
-    parser.add_argument("--golden", "--trees", dest="golden", default="../evals/conversation_trees.yaml", help="Path to golden queries YAML file.")
-    parser.add_argument("--output", default="../evals/reports/conversation_latest.json", help="Path to write the evaluation JSON report.")
+    parser.add_argument("--golden", "--trees", dest="golden", default="evals/golden/conversation_trees.yaml", help="Path to golden queries YAML file.")
+    parser.add_argument("--output", default="evals/reports/conversation_latest.json", help="Path to write the evaluation JSON report.")
     parser.add_argument("--k", type=int, default=5, help="K value for evaluation (default: 5).")
     args = parser.parse_args()
 
@@ -172,8 +172,8 @@ def main():
             q_info = _resolve_query_info(query, memory, recent_turns=recent_turns)
             
             # Map intents
-            from retrieval.follow_up_memory import build_recent_entity_set
-            from retrieval.query_intent import identify_followup_or_low_context
+            from retrieval.memory.follow_up_memory import build_recent_entity_set
+            from retrieval.query.query_intent import identify_followup_or_low_context
             merged_ents = build_recent_entity_set(recent_turns)
             conversation_state = {
                 "previous_files": merged_ents.get("files", []),
@@ -262,7 +262,7 @@ def main():
             if q_symbol_hit:
                 symbol_hits_at_k += 1
 
-            from retrieval.follow_up_memory import extract_cited_entities
+            from retrieval.memory.follow_up_memory import extract_cited_entities
             cited_ents = extract_cited_entities(candidates[:5])
             # Mock answer and add to memory
             mock_answer = f"Mock answer referencing {', '.join(expected_files)}."

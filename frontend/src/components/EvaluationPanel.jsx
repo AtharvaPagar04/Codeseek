@@ -1,112 +1,5 @@
-import React, { useState } from 'react';
-
-const REGRESSION_QUERIES = [
-  {
-    id: 1,
-    query: "What is this project about?",
-    category: "Overview",
-    intent: "general_context",
-    files: ["README.md"]
-  },
-  {
-    id: 2,
-    query: "How is this codebase structured?",
-    category: "Overview",
-    intent: "technical_explanation (architecture)",
-    files: ["README.md", "backend/retrieval/main.py"]
-  },
-  {
-    id: 3,
-    query: "What are the main backend modules?",
-    category: "Overview",
-    intent: "general_context",
-    files: ["backend/retrieval/session_indexer.py", "backend/retrieval/code_answers.py"]
-  },
-  {
-    id: 4,
-    query: "show me _require_auth code",
-    category: "Code Snippet",
-    intent: "code_snippet",
-    files: ["backend/retrieval/api_service.py"]
-  },
-  {
-    id: 5,
-    query: "provide me the auth function code",
-    category: "Code Snippet",
-    intent: "code_snippet",
-    files: ["backend/retrieval/api_service.py", "backend/retrieval/auth_store.py"]
-  },
-  {
-    id: 6,
-    query: "show me the safe eval runner code",
-    category: "Code Snippet",
-    intent: "code_snippet",
-    files: ["backend/evals/run_safe_evals.py"]
-  },
-  {
-    id: 7,
-    query: "show me the evaluation report API endpoint code",
-    category: "Code Snippet",
-    intent: "code_snippet",
-    files: ["backend/retrieval/api_service.py", "backend/retrieval/eval_reports.py"]
-  },
-  {
-    id: 8,
-    query: "show me the Qdrant upsert code",
-    category: "Code Snippet",
-    intent: "code_snippet",
-    files: ["backend/rag_ingestion/stages/storage.py"]
-  },
-  {
-    id: 9,
-    query: "Where is safe eval implemented?",
-    category: "Source Location",
-    intent: "code_location",
-    files: ["backend/evals/run_safe_evals.py"]
-  },
-  {
-    id: 10,
-    query: "Where is evaluation report API implemented?",
-    category: "Source Location",
-    intent: "code_location",
-    files: ["backend/retrieval/api_service.py"]
-  },
-  {
-    id: 11,
-    query: "show me safe eval docs",
-    category: "Code Snippet",
-    intent: "general_context",
-    files: ["docs/product/diagnostics_panel.md", "backend/docs/retrieval_docs/evaluation_policy.md"]
-  },
-  {
-    id: 12,
-    query: "How does the retrieval pipeline work?",
-    category: "Technical Explanation",
-    intent: "technical_explanation",
-    files: ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/searcher.py"]
-  },
-  {
-    id: 13,
-    query: "Where is reranking handled in searcher.py?",
-    category: "Source Location",
-    intent: "code_location",
-    files: ["backend/retrieval/searcher.py"]
-  },
-  {
-    id: 14,
-    query: "show me the Qdrant upsert code -> explain that",
-    category: "Multi-turn / Follow-up",
-    intent: "technical_explanation",
-    files: ["backend/rag_ingestion/stages/storage.py"]
-  },
-  {
-    id: 15,
-    query: "show me the safe eval runner code -> explain that",
-    category: "Multi-turn / Follow-up",
-    intent: "technical_explanation",
-    files: ["backend/evals/run_safe_evals.py"]
-  }
-];
+import React, { useState, useEffect } from 'react';
+import { fetchEvaluationRegressionTests } from '../utils/api';
 
 export default function EvaluationPanel({
   report,
@@ -119,6 +12,21 @@ export default function EvaluationPanel({
 }) {
   const [activeTab, setActiveTab] = useState('health'); // 'health' | 'regression'
   const [expandedStep, setExpandedStep] = useState(null);
+  const [regressionQueries, setRegressionQueries] = useState([]);
+  const [regressionLoading, setRegressionLoading] = useState(false);
+
+  useEffect(() => {
+    if (sessionId) {
+      setRegressionLoading(true);
+      fetchEvaluationRegressionTests(sessionId)
+        .then(res => setRegressionQueries(res.tests || []))
+        .catch(err => {
+          console.error("Failed to fetch regression tests", err);
+          setRegressionQueries([]);
+        })
+        .finally(() => setRegressionLoading(false));
+    }
+  }, [sessionId]);
 
   if (loading) {
     return (
@@ -262,7 +170,7 @@ export default function EvaluationPanel({
               : 'text-text-muted hover:text-text-secondary'
           }`}
         >
-          Manual Regression Set ({REGRESSION_QUERIES.length})
+          Manual Regression Set ({regressionQueries.length})
         </button>
       </div>
 
@@ -303,11 +211,11 @@ export default function EvaluationPanel({
   --session-id ${sessionId || '<session-id>'} \\
   --expected-repo-root ${defaultRepoRoot} \\
   --expected-collection ${defaultCollection} \\
-  --output-dir ../evals/reports/safe_eval_latest`}
+  --output-dir evals/reports/safe_eval_latest`}
                     </pre>
                     <button
                       onClick={() => {
-                        const text = `cd backend\n.venv/bin/python evals/run_safe_evals.py \\\n  --session-id ${sessionId || '<session-id>'} \\\n  --expected-repo-root ${defaultRepoRoot} \\\n  --expected-collection ${defaultCollection} \\\n  --output-dir ../evals/reports/safe_eval_latest`;
+                        const text = `cd backend\n.venv/bin/python evals/run_safe_evals.py \\\n  --session-id ${sessionId || '<session-id>'} \\\n  --expected-repo-root ${defaultRepoRoot} \\\n  --expected-collection ${defaultCollection} \\\n  --output-dir evals/reports/safe_eval_latest`;
                         navigator.clipboard.writeText(text);
                       }}
                       className="absolute top-2 right-2 p-1.5 bg-surface-3 border border-border rounded text-text-muted hover:text-text-primary hover:border-text-muted transition-colors text-2xs"
@@ -547,7 +455,13 @@ export default function EvaluationPanel({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle/30 text-text-secondary">
-                  {REGRESSION_QUERIES.map((q) => (
+                  {regressionQueries.length === 0 && (
+                    <div className="py-8 text-center text-text-muted text-xs font-mono">
+                      No regression tests found for this repository.<br />
+                      Create a <code>.codeseek-evals.json</code> file in the repository root to add tests.
+                    </div>
+                  )}
+                  {regressionQueries.map((q) => (
                     <tr key={q.id} className="hover:bg-surface-2/30 transition-colors">
                       <td className="py-2.5 text-center font-bold text-text-muted">#{q.id}</td>
                       <td className="py-2.5 pr-4 select-all text-text-primary leading-relaxed">{q.query}</td>

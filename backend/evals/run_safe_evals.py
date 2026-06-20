@@ -27,9 +27,6 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Directory to write all evaluation outputs.")
     
     # Optional flags
-    parser.add_argument("--include-ragas", action="store_true", default=False, help="Run RAGAS calibration steps.")
-    parser.add_argument("--include-evaluator-compare", action="store_true", default=False, help="Run evaluator comparison steps.")
-    parser.add_argument("--include-faithfulness", action="store_true", default=False, help="Add faithfulness to RAGAS metrics.")
     parser.add_argument("--db-backend", default=os.getenv("CODESEEK_DB_BACKEND", "sqlite"), help="Database backend (default: sqlite).")
     parser.add_argument("--db-path", default=os.getenv("CODESEEK_DB_PATH", "/tmp/codeseek.sqlite3"), help="Path to sqlite database.")
     parser.add_argument("--python-bin", default=sys.executable, help="Python executable to use.")
@@ -52,13 +49,6 @@ def main() -> None:
         "eval_policy_summary.md",
         "safe_eval_summary.json",
         "safe_eval_summary.md",
-        "ragas_calibration_traces.jsonl",
-        "ragas_calibration_latest.json",
-        "ragas_calibration_summary.json",
-        "ragas_judge_calibration_latest.json",
-        "ragas_judge_calibration_latest.md",
-        "ragas_evaluator_compare_latest.json",
-        "ragas_evaluator_compare_latest.md"
     }
     for filename in known_filenames:
         target_file = output_dir / filename
@@ -78,7 +68,7 @@ def main() -> None:
         "command": [
             args.python_bin, "evals/retrieval_eval.py",
             "--session-id", args.session_id,
-            "--golden", "../evals/golden_queries.yaml",
+            "--golden", "evals/golden/golden_queries.yaml",
             "--output", str(output_dir / "retrieval_latest.json")
         ],
         "dependent_on": [],
@@ -92,77 +82,12 @@ def main() -> None:
         "command": [
             args.python_bin, "evals/conversation_eval.py",
             "--session-id", args.session_id,
-            "--trees", "../evals/conversation_trees.yaml",
+            "--trees", "evals/golden/conversation_trees.yaml",
             "--output", str(output_dir / "conversation_latest.json")
         ],
         "dependent_on": [],
         "output_path": str(output_dir / "conversation_latest.json")
     })
-
-    # Optional RAGAS Calibration
-    if args.include_ragas:
-        metrics = "answer_relevancy,faithfulness" if args.include_faithfulness else "answer_relevancy"
-        step_definitions.append({
-            "name": "ragas_calibration",
-            "required": False,
-            "command": [
-                args.python_bin, "evals/ragas_calibration.py",
-                "--session-id", args.session_id,
-                "--queries", "evals/ragas_calibration_queries.yaml",
-                "--trace-output", str(output_dir / "ragas_calibration_traces.jsonl"),
-                "--ragas-output", str(output_dir / "ragas_calibration_latest.json"),
-                "--summary-output", str(output_dir / "ragas_calibration_summary.json"),
-                "--expected-repo-root", args.expected_repo_root,
-                "--expected-collection", args.expected_collection,
-                "--metrics", metrics,
-                "--ragas-timeout", "600",
-                "--ragas-max-workers", "1",
-                "--ragas-max-retries", "1"
-            ],
-            "dependent_on": [],
-            "output_path": str(output_dir / "ragas_calibration_summary.json")
-        })
-
-        # Optional RAGAS Judge Calibration
-        step_definitions.append({
-            "name": "ragas_judge_calibration",
-            "required": False,
-            "command": [
-                args.python_bin, "evals/ragas_judge_calibration.py",
-                "--ragas-report", str(output_dir / "ragas_calibration_latest.json"),
-                "--trace-file", str(output_dir / "ragas_calibration_traces.jsonl"),
-                "--queries", "evals/ragas_calibration_queries.yaml",
-                "--output-json", str(output_dir / "ragas_judge_calibration_latest.json"),
-                "--output-md", str(output_dir / "ragas_judge_calibration_latest.md")
-            ],
-            "dependent_on": ["ragas_calibration"],
-            "output_path": str(output_dir / "ragas_judge_calibration_latest.json")
-        })
-
-    # Optional Evaluator Compare
-    if args.include_evaluator_compare:
-        input_traces = str(output_dir / "ragas_calibration_traces.jsonl")
-        # If not generated in this run, try default path
-        if not Path(input_traces).exists():
-            input_traces = "../evals/reports/ragas_calibration_traces.jsonl"
-            
-        compare_metrics = "answer_relevancy,faithfulness" if args.include_faithfulness else "answer_relevancy"
-        step_definitions.append({
-            "name": "ragas_evaluator_compare",
-            "required": False,
-            "command": [
-                args.python_bin, "evals/ragas_evaluator_compare.py",
-                "--input-traces", input_traces,
-                "--output-json", str(output_dir / "ragas_evaluator_compare_latest.json"),
-                "--output-md", str(output_dir / "ragas_evaluator_compare_latest.md"),
-                "--metrics", compare_metrics,
-                "--limit", "2",
-                "--evaluator", "ollama:qwen2.5-coder:3b:nomic-embed-text",
-                "--evaluator", "ollama:qwen-coder-7b-16k:nomic-embed-text"
-            ],
-            "dependent_on": [],
-            "output_path": str(output_dir / "ragas_evaluator_compare_latest.json")
-        })
 
     # Required: eval_policy_summary (Must construct command dynamically based on actual output existence)
     # We will finalize the command list in the execution loop itself.
@@ -231,15 +156,6 @@ def main() -> None:
                 "--output-json", str(output_dir / "eval_policy_summary.json"),
                 "--output-md", str(output_dir / "eval_policy_summary.md")
             ]
-            judge_report = output_dir / "ragas_judge_calibration_latest.json"
-            if judge_report.exists():
-                cmd.extend(["--judge-calibration-report", str(judge_report)])
-            ragas_report = output_dir / "ragas_calibration_summary.json"
-            if ragas_report.exists():
-                cmd.extend(["--ragas-report", str(ragas_report)])
-            compare_report = output_dir / "ragas_evaluator_compare_latest.json"
-            if compare_report.exists():
-                cmd.extend(["--evaluator-compare-report", str(compare_report)])
             step_def["command"] = cmd
 
         print(f"Running step: {name}...")

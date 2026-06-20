@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rag_ingestion.models.file import FileRecord
 from rag_ingestion.utils.counters import PipelineCounters
+from retrieval.support.path_utils import resolve_repo_relative_path
 
 
 def discover_files(
@@ -21,7 +22,7 @@ def discover_files(
     for dirpath, _dirnames, filenames in os.walk(root):
         for filename in filenames:
             path = Path(dirpath) / filename
-            relative_path = path.relative_to(root).as_posix()
+            relative_path = resolve_repo_relative_path(root, str(path))
             stat = path.stat()
 
             files.append(
