@@ -7,6 +7,7 @@ import {
   getEmbeddingConfig,
   saveEmbeddingConfig,
   testEmbeddingConfig,
+  getEmbeddingOptions,
 } from '../utils/api';
 
 const PROVIDER_OPTIONS = [
@@ -69,10 +70,11 @@ export default function ApiTokensModal({ onClose }) {
   const [activeTab, setActiveTab] = useState('llm');
 
   // Embedding state
+  const [embOptions, setEmbOptions] = useState(null);
   const [embConfig, setEmbConfig] = useState(null);
   const [embProvider, setEmbProvider] = useState('local');
   const [embBaseUrl, setEmbBaseUrl] = useState('');
-  const [embModel, setEmbModel] = useState('');
+  const [embModel, setEmbModel] = useState('text-embedding-3-small');
   const [embApiKey, setEmbApiKey] = useState('');
   const [embDims, setEmbDims] = useState('');
   const [embTestSuccess, setEmbTestSuccess] = useState(false);
@@ -85,17 +87,21 @@ export default function ApiTokensModal({ onClose }) {
 
     const loadData = async () => {
       try {
-        const [llms, emb] = await Promise.all([
+        const [llms, emb, options] = await Promise.all([
           listProviderCredentials(),
-          getEmbeddingConfig().catch(() => null)
+          getEmbeddingConfig().catch(() => null),
+          getEmbeddingOptions().catch(() => null)
         ]);
         if (!cancelled) {
           setTokens(llms);
+          if (options) {
+            setEmbOptions(options);
+          }
           if (emb) {
             setEmbConfig(emb);
             setEmbProvider(emb.provider || 'local');
             setEmbBaseUrl(emb.base_url || '');
-            setEmbModel(emb.provider === 'openai_compatible' ? (emb.model || '') : '');
+            setEmbModel(emb.provider === 'openai_compatible' ? (emb.model || 'text-embedding-3-small') : 'text-embedding-3-small');
             setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
             // Do not prefill apiKey
           }
@@ -452,22 +458,38 @@ export default function ApiTokensModal({ onClose }) {
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-2xs font-mono text-text-muted uppercase">Model Name</label>
-                  <input
-                    type="text"
-                    value={embModel}
-                    onChange={(e) => setEmbModel(e.target.value)}
-                    placeholder="text-embedding-3-small"
-                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                    required
-                  />
-                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
-                    For AICredits embeddings, use plain OpenAI embedding model IDs such as text-embedding-3-small or text-embedding-3-large. Do not use chat models like deepseek-v4-flash here.
-                  </p>
-                  {(embModel.toLowerCase().includes('deepseek') || embModel.toLowerCase().includes('gpt-') || embModel.toLowerCase().includes('claude-') || embModel.toLowerCase().includes('gemini-')) && (
+                  {embOptions?.openai_compatible_models ? (
+                    <select
+                      value={embModel}
+                      onChange={(e) => {
+                        setEmbModel(e.target.value);
+                        setEmbDims('');
+                      }}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
+                      required
+                    >
+                      {embOptions.openai_compatible_models.map(m => (
+                        <option key={m.id} value={m.id}>{m.label} {m.recommended ? '(Recommended)' : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={embModel}
+                      onChange={(e) => setEmbModel(e.target.value)}
+                      placeholder="text-embedding-3-small"
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                      required
+                    />
+                  )}
+                  {embOptions?.openai_compatible_models && (!embOptions.openai_compatible_models.some(m => m.id === embModel)) && (
                     <p className="text-[11px] leading-relaxed text-warning/90 mt-1">
-                      This looks like a chat/provider-prefixed model. Embeddings usually require a dedicated embedding model such as text-embedding-3-small.
+                      Warning: Invalid or unrecognized model. Please select a valid supported model.
                     </p>
                   )}
+                  <p className="text-[11px] leading-relaxed text-text-muted mt-1">
+                    {embOptions?.openai_compatible_models?.find(m => m.id === embModel)?.notes || 'For AICredits embeddings, use plain OpenAI embedding model IDs.'}
+                  </p>
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-2xs font-mono text-text-muted uppercase">API Key (Optional if unchanged)</label>
@@ -482,15 +504,28 @@ export default function ApiTokensModal({ onClose }) {
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className="text-2xs font-mono text-text-muted uppercase">Dimensions (Optional)</label>
-                  <input
-                    type="number"
-                    value={embDims}
-                    onChange={(e) => setEmbDims(e.target.value)}
-                    placeholder="Leave empty for auto"
-                    className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                  />
+                  {embOptions?.openai_compatible_models?.find(m => m.id === embModel) ? (
+                    <select
+                      value={embDims}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
+                    >
+                      <option value="">Auto / infer default {embOptions.openai_compatible_models.find(m => m.id === embModel).default_dimensions}</option>
+                      {embOptions.openai_compatible_models.find(m => m.id === embModel).allowed_dimensions.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      value={embDims}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      placeholder="Leave empty for auto"
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                    />
+                  )}
                   <p className="text-[11px] leading-relaxed text-text-muted mt-1">
-                    Optional. Leave blank to infer dimensions from the provider response.
+                    Auto is recommended. Dimension is used for expected vector size. AICredits response will still be validated/inferred.
                   </p>
                 </div>
               </div>

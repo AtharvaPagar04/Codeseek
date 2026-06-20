@@ -55,7 +55,7 @@ def test_put_embedding_config_openai_compatible(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-test",
+        "model": "text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 1536
     }
@@ -87,7 +87,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "text-embedding-test",
+        "model": "text-embedding-3-small",
         "api_key": "original_key",
         "dimensions": 1536
     }
@@ -97,7 +97,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload2 = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com/v2",
-        "model": "text-embedding-test",
+        "model": "text-embedding-3-small",
         "api_key": "",
         "dimensions": 1536
     }
@@ -113,22 +113,49 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     
     class MockProvider:
         provider_name = "openai_compatible"
-        model_name = "test-model"
-        dimensions = 100
+        model_name = "text-embedding-3-small"
+        dimensions = 512
         def embed_query(self, text):
-            return [0.1] * 100
+            return [0.1] * 512
 
     monkeypatch.setattr("retrieval.support.embedding_provider.get_embedding_provider", lambda x: MockProvider())
 
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "test-model",
+        "model": "text-embedding-3-small",
         "api_key": "test_key",
-        "dimensions": 100
+        "dimensions": 512
     }
     response = client.post("/api/v1/embedding/test", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["dimensions"] == 100
+    assert data["dimensions"] == 512
+
+
+def test_put_embedding_config_invalid_model(auth_client):
+    client, user = auth_client
+    payload = {
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "deepseek-v4-flash",
+        "api_key": "test_secret_key"
+    }
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 400
+    assert "Invalid embedding model" in response.json()["detail"]
+
+
+def test_put_embedding_config_invalid_dimensions(auth_client):
+    client, user = auth_client
+    payload = {
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "text-embedding-3-small",
+        "api_key": "test_secret_key",
+        "dimensions": 128
+    }
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 400
+    assert "Invalid dimensions" in response.json()["detail"]

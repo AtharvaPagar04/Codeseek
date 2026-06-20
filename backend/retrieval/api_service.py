@@ -1235,6 +1235,27 @@ async def query_stream_v1(
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
+@v1.get("/embedding/options")
+def get_embedding_options_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+) -> dict:
+    _require_auth_user(session_token)
+    from retrieval.support.embedding_provider import get_openai_compatible_embedding_model_options
+    return {
+        "providers": [
+            {
+                "id": "local",
+                "label": "Local SentenceTransformer"
+            },
+            {
+                "id": "openai_compatible",
+                "label": "OpenAI-compatible / AICredits"
+            }
+        ],
+        "openai_compatible_models": get_openai_compatible_embedding_model_options(),
+    }
+
+
 @v1.get("/embedding/config")
 def get_embedding_config_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
@@ -1269,6 +1290,26 @@ def get_embedding_config_v1(
     }
 
 
+def _validate_openai_compatible_config(model: str, dimensions: int | None) -> None:
+    from retrieval.support.embedding_provider import OPENAI_COMPATIBLE_EMBEDDING_MODELS
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required for openai_compatible")
+    
+    if model not in OPENAI_COMPATIBLE_EMBEDDING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid embedding model for openai_compatible. Use one of: {', '.join(OPENAI_COMPATIBLE_EMBEDDING_MODELS.keys())}."
+        )
+        
+    model_info = OPENAI_COMPATIBLE_EMBEDDING_MODELS[model]
+    if dimensions and dimensions > 0:
+        if dimensions not in model_info["allowed_dimensions"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dimensions {dimensions} for model {model}. Allowed: {', '.join(map(str, model_info['allowed_dimensions']))} or 0 for auto."
+            )
+
+
 @v1.put("/embedding/config")
 def update_embedding_config_v1(
     body: EmbeddingConfigUpdateRequest,
@@ -1284,8 +1325,10 @@ def update_embedding_config_v1(
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     
     if provider == "openai_compatible":
-        if not body.base_url or not body.model:
-            raise HTTPException(status_code=400, detail="base_url and model are required for openai_compatible")
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+        
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
         
         # Keep existing key if empty
         if not api_key:
@@ -1345,8 +1388,11 @@ def test_embedding_config_v1(
         
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     if provider == "openai_compatible":
-        if not body.base_url or not body.model:
-            raise HTTPException(status_code=400, detail="base_url and model are required for openai_compatible")
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+        
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
+        
         if not api_key:
             existing = get_embedding_config(user["id"])
             if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):

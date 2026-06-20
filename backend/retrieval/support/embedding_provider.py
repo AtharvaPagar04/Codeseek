@@ -21,6 +21,39 @@ DEFAULT_EMBEDDING_BATCH_SIZE = 16
 DEFAULT_EMBEDDING_TIMEOUT_SECONDS = 60.0
 SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"local", "openai_compatible"})
 
+OPENAI_COMPATIBLE_EMBEDDING_MODELS = {
+    "text-embedding-3-small": {
+        "id": "text-embedding-3-small",
+        "label": "text-embedding-3-small",
+        "recommended": True,
+        "default_dimensions": 1536,
+        "allowed_dimensions": [512, 1536],
+        "supports_dimension_parameter": True,
+        "notes": "Recommended default for CodeSeek.",
+    },
+    "text-embedding-3-large": {
+        "id": "text-embedding-3-large",
+        "label": "text-embedding-3-large",
+        "recommended": False,
+        "default_dimensions": 3072,
+        "allowed_dimensions": [256, 1024, 3072],
+        "supports_dimension_parameter": True,
+        "notes": "Higher quality, larger vectors.",
+    },
+    "text-embedding-ada-002": {
+        "id": "text-embedding-ada-002",
+        "label": "text-embedding-ada-002",
+        "recommended": False,
+        "default_dimensions": 1536,
+        "allowed_dimensions": [1536],
+        "supports_dimension_parameter": False,
+        "notes": "Legacy fallback.",
+    },
+}
+
+def get_openai_compatible_embedding_model_options() -> list[dict]:
+    return list(OPENAI_COMPATIBLE_EMBEDDING_MODELS.values())
+
 _LOCAL_MODELS: dict[tuple[str, str], object] = {}
 _LOCAL_MODEL_LOCK = threading.Lock()
 
@@ -274,7 +307,13 @@ class OpenAICompatibleEmbeddingProvider:
             vectors.append(vector)
 
         if vectors:
-            self.dimensions = len(vectors[0])
+            actual_dimensions = len(vectors[0])
+            if self._config.dimensions and self._config.dimensions > 0:
+                if actual_dimensions != self._config.dimensions:
+                    raise EmbeddingRequestError(
+                        f"Provider returned {actual_dimensions} dimensions, but config expected {self._config.dimensions}. Use Auto or choose a supported dimension that the provider actually returns."
+                    )
+            self.dimensions = actual_dimensions
         return vectors
 
 

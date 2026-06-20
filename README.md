@@ -170,11 +170,13 @@ CODESEEK_EMBEDDING_MODEL=text-embedding-3-small
 # CODESEEK_EMBEDDING_DIMENSIONS=
 ```
 
-Notes:
-
 - The request shape is OpenAI-compatible `POST {base_url}/embeddings`.
-- `CODESEEK_EMBEDDING_MODEL` is fully configurable. For AICredits embeddings, use plain OpenAI embedding model IDs like `text-embedding-3-small`. Do not use DeepSeek/chat models for embeddings.
-- Leave dimensions blank to infer from the first provider response unless you know the model dimension.
+- `CODESEEK_EMBEDDING_MODEL` is fully configurable. Supported AICredits embedding models:
+  - `text-embedding-3-small` (recommended, default auto-dimensions: 1536)
+  - `text-embedding-3-large` (larger/higher quality, default auto-dimensions: 3072)
+  - `text-embedding-ada-002` (legacy fallback, default auto-dimensions: 1536)
+- **Warning:** Do not use chat models like `deepseek-v4-flash` for embeddings.
+- **Dimensions:** Auto/infer is recommended. CodeSeek validates the actual vector size returned by the provider. If set manually, the provider payload still omits dimensions but CodeSeek will enforce the specified length locally.
 - Embedding configuration can also be set or overridden per-user via the **CodeSeek Frontend UI** (in the Configurations menu). This overrides the environment-level defaults.
 - CodeSeek records embedding provider/model/base URL/dimensions metadata for indexed sessions.
 - **IMPORTANT**: Changing the embedding provider, model, or dimensions (either via env variables or the frontend UI) requires a full reindex of existing sessions before you can query them again, as the new embedding vectors will be incompatible with the old ones.
