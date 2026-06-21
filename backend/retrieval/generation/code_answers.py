@@ -7,10 +7,10 @@ import re
 import tomllib
 from pathlib import Path
 
-from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-from retrieval.config import QDRANT_HOST, QDRANT_PORT, get_collection_name, get_repo_root
+from retrieval.support.qdrant_config import create_qdrant_client
+from retrieval.config import get_collection_name, get_repo_root
 from retrieval.search.import_resolution import resolve_import_target
 
 _DIRECT_CODE_PHRASES = (
@@ -2521,15 +2521,13 @@ def _preferred_architecture_sources(raw_query: str, sources: list[dict], chunks:
     return refine_overview_display_sources(raw_query, selected, candidates, target_count=8)
 
 
-_architecture_qdrant_client: QdrantClient | None = None
+_architecture_qdrant_client = None
 
 
-def _get_architecture_qdrant_client() -> QdrantClient:
+def _get_architecture_qdrant_client() -> "QdrantClient":
     global _architecture_qdrant_client
     if _architecture_qdrant_client is None:
-        _architecture_qdrant_client = QdrantClient(
-            QDRANT_HOST,
-            port=QDRANT_PORT,
+        _architecture_qdrant_client = create_qdrant_client(
             check_compatibility=False,
         )
     return _architecture_qdrant_client

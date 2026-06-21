@@ -7,7 +7,6 @@ filtered by lexical overlap before being added to the context set.
 
 import re
 
-from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from retrieval.config import (
@@ -16,8 +15,6 @@ from retrieval.config import (
     EXPAND_PARENT,
     EXPAND_SIBLINGS,
     EXPAND_SPLIT_PARTS,
-    QDRANT_HOST,
-    QDRANT_PORT,
     SIBLING_BUDGET_FRACTION,
     SIBLING_ENABLED_INTENTS,
     SIBLING_MAX_PER_PRIMARY,
@@ -25,7 +22,8 @@ from retrieval.config import (
     get_collection_name,
 )
 
-_client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+from retrieval.support.qdrant_config import create_qdrant_client
+_client = create_qdrant_client(check_compatibility=False)
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
 
 
