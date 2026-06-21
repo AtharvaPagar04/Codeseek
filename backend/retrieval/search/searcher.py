@@ -7,8 +7,6 @@ import math
 from pathlib import Path
 import re
 import time
-
-from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from retrieval.config import (
@@ -19,8 +17,6 @@ from retrieval.config import (
     PREVIOUS_CANDIDATE_MAX_COUNT,
     PREVIOUS_CANDIDATE_MAX_RATIO,
     PREVIOUS_CANDIDATE_PENALTY,
-    QDRANT_HOST,
-    QDRANT_PORT,
     QUERY_PREFIX,
     RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS,
     RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -408,11 +404,10 @@ class _LexicalIndex:
 
 
 def _get_client():
+    from retrieval.support.qdrant_config import create_qdrant_client
     global _client
     if _client is None:
-        _client = QdrantClient(
-            QDRANT_HOST,
-            port=QDRANT_PORT,
+        _client = create_qdrant_client(
             timeout=RETRIEVAL_QDRANT_TIMEOUT_SECONDS,
             check_compatibility=False,
         )

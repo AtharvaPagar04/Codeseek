@@ -26,13 +26,11 @@ from __future__ import annotations
 import os
 import sys
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
     EMBEDDING_DIM,
-    QDRANT_HOST,
-    QDRANT_PORT,
 )
 from rag_ingestion.stages.storage import CONTENT_EXCERPT_CHARS
 from retrieval.db import db_cursor
@@ -73,8 +71,8 @@ def get_collection_name() -> str:
 
 def main():
     collection_name = get_collection_name()
-    print(f"Connecting to Qdrant at {QDRANT_HOST}:{QDRANT_PORT}...")
-    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    print(f"Connecting to Qdrant...")
+    client = create_qdrant_client(check_compatibility=False)
 
     errors: list[str] = []
 

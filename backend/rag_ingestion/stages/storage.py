@@ -2,8 +2,6 @@
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
-    QDRANT_HOST,
-    QDRANT_PORT,
     RECREATE_COLLECTION_EACH_RUN,
 )
 from rag_ingestion.models.chunk import Chunk
@@ -21,14 +19,14 @@ def store_chunks(
     embedding_dimensions: int | None = None,
 ) -> None:
     """Ensure the collection exists and upsert chunks by deterministic IDs."""
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
     collection = collection_name or COLLECTION_NAME
     vector_size = _resolve_embedding_dimensions(chunks, embedding_dimensions)
     if vector_size <= 0:
         raise RuntimeError("Embedding dimensions could not be determined before Qdrant upsert.")
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
     _ensure_collection(
         client=client,
         collection_name=collection,
@@ -59,10 +57,10 @@ def delete_chunks_for_paths(
         return
 
     collection = collection_name or COLLECTION_NAME
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import FieldCondition, Filter, MatchAny
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
     client.delete(
         collection_name=collection,
         points_selector=Filter(
@@ -192,10 +190,10 @@ def delete_vectors_by_ids(
         return
 
     collection = collection_name or COLLECTION_NAME
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import PointIdsList
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
     client.delete(
         collection_name=collection,
         points_selector=PointIdsList(points=vector_ids),

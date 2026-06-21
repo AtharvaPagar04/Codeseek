@@ -10,10 +10,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
 from rag_ingestion.main import run_pipeline
-from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_PORT
+from retrieval.config import INDEXING_STALE_AFTER_SECONDS
 from retrieval.db import db_cursor, init_db
 from retrieval.support.embedding_provider import (
     EmbeddingConfigurationError,
@@ -321,9 +321,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
             )
             if is_safe:
                 try:
-                    client = QdrantClient(
-                        QDRANT_HOST,
-                        port=QDRANT_PORT,
+                    client = create_qdrant_client(
                         timeout=5.0,
                         check_compatibility=False,
                     )
@@ -667,9 +665,7 @@ def _clone_or_pull(repo_url: str, repo_root: Path, github_token: str = "") -> st
 
 
 def _collection_point_count(collection: str) -> int:
-    client = QdrantClient(
-        QDRANT_HOST,
-        port=QDRANT_PORT,
+    client = create_qdrant_client(
         timeout=5.0,
         check_compatibility=False,
     )

@@ -7,13 +7,10 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
 from rag_ingestion.label_constants import LABEL_REGISTRY, MAX_TOTAL_LABELS
 
-
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
 EMBEDDING_DIM = 384
 CONTENT_EXCERPT_MAX = 12000
 
@@ -99,7 +96,7 @@ def main() -> int:
     collection = sys.argv[1]
     repo_root = Path(sys.argv[2]).resolve() if len(sys.argv) >= 3 else None
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
 
     errors: list[str] = []
     warnings: list[str] = []
