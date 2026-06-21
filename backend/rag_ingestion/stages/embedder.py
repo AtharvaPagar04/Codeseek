@@ -167,7 +167,12 @@ def embed_chunks(
         if chunk.embedding:
             resolved_dimensions = len(chunk.embedding)
             break
-    if config.dimensions <= 0 and resolved_dimensions > 0:
+    if config.dimensions > 0 and resolved_dimensions > 0 and resolved_dimensions != config.dimensions:
+        logger.warning(
+            "Provider returned %d dimensions although config expected %d; using returned provider dimension %d for this index.",
+            resolved_dimensions, config.dimensions, resolved_dimensions
+        )
+    elif config.dimensions <= 0 and resolved_dimensions > 0:
         logger.info("[embedding] resolved dimensions=%d", resolved_dimensions)
         
     setattr(

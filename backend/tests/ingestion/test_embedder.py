@@ -180,7 +180,7 @@ def test_embed_chunks_batching_and_cleanup():
     
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 2), \
          patch("rag_ingestion.utils.gpu_cleanup.cleanup_after_batch") as mock_cleanup:
@@ -215,7 +215,7 @@ def test_embed_chunks_fails_cleanly_on_exception():
     
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 16):
          
@@ -243,7 +243,7 @@ def test_embedding_cooldown_triggers_after_300(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -275,7 +275,7 @@ def test_embedding_cooldown_explicit_default_sleep_duration(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -307,7 +307,7 @@ def test_embedding_cooldown_disabled_with_every_zero(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 0), \
@@ -339,7 +339,7 @@ def test_embedding_cooldown_disabled_with_seconds_zero(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -371,7 +371,7 @@ def test_embedding_cooldown_does_not_sleep_after_final_batch(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 100), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -407,7 +407,7 @@ def test_embedding_cooldown_cleanup_before_sleep():
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -434,7 +434,7 @@ def test_embedding_cooldown_log_message_contents(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 300), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \
@@ -465,7 +465,7 @@ def test_embedding_cooldown_variable_batch_sizes(capsys):
 
     with patch(
         "rag_ingestion.stages.embedder._get_provider",
-        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5"), mock_provider),
+        return_value=(MagicMock(provider="local", effective_model="BAAI/bge-small-en-v1.5", dimensions=0), mock_provider),
     ), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_BATCH_SIZE", 400), \
          patch("rag_ingestion.config.CODESEEK_EMBEDDING_COOLDOWN_EVERY", 300), \

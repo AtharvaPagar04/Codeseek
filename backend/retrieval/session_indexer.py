@@ -605,12 +605,6 @@ def _record_indexing_failure(
     last_indexed_commit: str | None = None,
 ) -> dict | None:
     session = get_session(session_id)
-    if session and not session.get("last_indexed_commit"):
-        try:
-            delete_session(session_id, force=True)
-            return None
-        except Exception:
-            pass
 
     updates: dict[str, object] = {
         "status": "failed",

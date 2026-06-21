@@ -553,14 +553,14 @@ export default function ApiTokensModal({ onClose }) {
                   />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-2xs font-mono text-text-muted uppercase">Dimensions (Optional)</label>
+                  <label className="text-2xs font-mono text-text-muted uppercase">Expected dimension</label>
                   {embOptions?.openai_compatible_models?.find(m => m.id === embModel) ? (
                     <select
                       value={embDims}
                       onChange={(e) => setEmbDims(e.target.value)}
                       className="bg-surface-2 border border-border rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-text-muted"
                     >
-                      <option value="">Auto / infer default {embOptions.openai_compatible_models.find(m => m.id === embModel).default_dimensions}</option>
+                      <option value="">Auto / infer</option>
                       {embOptions.openai_compatible_models.find(m => m.id === embModel).allowed_dimensions.map(d => (
                         <option key={d} value={d}>{d}</option>
                       ))}
@@ -575,7 +575,7 @@ export default function ApiTokensModal({ onClose }) {
                     />
                   )}
                   <p className="text-[11px] leading-relaxed text-text-muted mt-1">
-                    Auto is recommended. Dimension is used for expected vector size. AICredits response will still be validated/inferred.
+                    Auto is recommended. Some providers ignore reduced dimensions; CodeSeek will use the returned vector size when safe.
                   </p>
                 </div>
               </div>
