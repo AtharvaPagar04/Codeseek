@@ -2,11 +2,15 @@ import { getBackendApiKey } from './storage.js';
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL?.replace(/\/$/, "") || 'http://127.0.0.1:8000';
 
-const authHeaders = () => {
+const authHeaders = (extra = {}) => {
   const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${getBackendApiKey()}`,
+    ...extra
   };
+  const token = getBackendApiKey().trim();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const customKey = localStorage.getItem('CODESEEK_CUSTOM_ENCRYPTION_KEY');
   if (customKey) {
     headers['X-App-Encryption-Key'] = customKey.trim();
@@ -162,8 +166,7 @@ const encryptSecretForSubmission = async (secret) => {
 const sendQuery = async (body) => {
   const res = await fetch(`${API_BASE}/api/v1/query`, {
     method: 'POST',
-    credentials: 'include',
-    headers: authHeaders(),
+    credentials: 'include', headers: authHeaders(),
     body: JSON.stringify(body),
   });
 
@@ -212,7 +215,7 @@ export const querySessionStream = async ({
     const res = await fetch(`${API_BASE}/api/v1/query/stream`, {
       method: 'POST',
       credentials: 'include',
-      headers: authHeaders(),
+      credentials: 'include', headers: authHeaders(),
       body: JSON.stringify({
         question,
         session_id,
@@ -282,7 +285,7 @@ export const createSession = async ({ repoFullName, repoUrl, tenantId = 'local',
       fetch(`${API_BASE}/api/v1/sessions`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
           repo_full_name: repoFullName,
           repo_url: repoUrl,
@@ -307,7 +310,7 @@ export const listSessions = async () => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'List sessions'
   );
@@ -319,8 +322,7 @@ export const listSessions = async () => {
 export const deleteSessionApi = async (sessionId) => {
   const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}`, {
     method: 'DELETE',
-    credentials: 'include',
-    headers: authHeaders(),
+    credentials: 'include', headers: authHeaders(),
   });
   if (!res.ok) await throwApiError('Delete session', res);
   return res.json();
@@ -332,7 +334,7 @@ export const retrySessionIndexing = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/retry`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Retry indexing'
   );
@@ -347,7 +349,7 @@ export const fetchSessionMessages = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch session messages'
   );
@@ -361,7 +363,7 @@ export const listSessionThreads = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'List session threads'
   );
@@ -376,7 +378,7 @@ export const createSessionThread = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/threads`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Create session thread'
   );
@@ -390,7 +392,7 @@ export const fetchThreadMessages = async (threadId) => {
     () =>
       fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch thread messages'
   );
@@ -405,7 +407,7 @@ export const clearThreadMessagesApi = async (threadId) => {
       fetch(`${API_BASE}/api/v1/threads/${threadId}/messages`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Clear thread messages'
   );
@@ -419,7 +421,7 @@ export const clearSessionMessagesApi = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/messages`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Clear session messages'
   );
@@ -435,7 +437,7 @@ export const fetchHealth = async () => {
   try {
     const res = await fetch(`${API_BASE}/api/v1/health`, {
       credentials: 'include',
-      headers: { Authorization: `Bearer ${getBackendApiKey()}` },
+      headers: authHeaders(),
     });
     return res.ok;
   } catch {
@@ -494,7 +496,7 @@ export const listProviderCredentials = async () => {
     () =>
       fetch(`${API_BASE}/api/v1/provider-credentials`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'List provider credentials'
   );
@@ -521,7 +523,7 @@ export const createProviderCredential = async ({ provider, label, apiKey, model 
       fetch(`${API_BASE}/api/v1/provider-credentials`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
           provider: normalizedProvider || provider,
           label,
@@ -549,7 +551,7 @@ export const activateProviderCredential = async (credentialId) => {
       fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}/activate`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Activate provider credential'
   );
@@ -570,7 +572,7 @@ export const deleteProviderCredential = async (credentialId) => {
       fetch(`${API_BASE}/api/v1/provider-credentials/${credentialId}`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Delete provider credential'
   );
@@ -606,7 +608,7 @@ export const fetchSessionRepoStatus = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/repo-status`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch session repo status'
   );
@@ -619,7 +621,7 @@ export const fetchSessionFreshness = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/freshness`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch session freshness status'
   );
@@ -633,7 +635,7 @@ export const indexLatestVersion = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-latest`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Index latest version'
   );
@@ -648,7 +650,7 @@ export const fetchLatestEvaluationReport = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/latest`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch latest evaluation report'
   );
@@ -661,7 +663,7 @@ export const fetchEvaluationRegressionTests = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/regression-tests`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch evaluation regression tests'
   );
@@ -674,7 +676,7 @@ export const fetchLatestGlobalEvaluationReport = async () => {
     () =>
       fetch(`${API_BASE}/api/v1/evals/latest`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch latest global evaluation report'
   );
@@ -688,7 +690,7 @@ export const fetchIndexPreview = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-preview`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch index preview'
   );
@@ -703,7 +705,7 @@ export const indexSessionIncremental = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/index-incremental`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Incremental indexing'
   );
@@ -716,7 +718,7 @@ export const fetchLatestIndexingJob = async (sessionId) => {
     () =>
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-job/latest`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Fetch latest indexing job'
   );
@@ -730,7 +732,7 @@ export const cancelLatestIndexingJob = async (sessionId) => {
       fetch(`${API_BASE}/api/v1/sessions/${sessionId}/indexing-job/cancel`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Cancel indexing job'
   );
@@ -746,7 +748,7 @@ export const fetchIndexingJobHistory = async (sessionId, limit = 20) => {
         `${API_BASE}/api/v1/sessions/${sessionId}/indexing-jobs?${params}`,
         {
           credentials: 'include',
-          headers: authHeaders(),
+          credentials: 'include', headers: authHeaders(),
         }
       ),
     'Fetch indexing job history'
@@ -759,7 +761,7 @@ export const getEmbeddingConfig = async () => {
     () =>
       fetch(`${API_BASE}/api/v1/embedding/config`, {
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
       }),
     'Get embedding config'
   );
@@ -779,7 +781,7 @@ export const saveEmbeddingConfig = async (payload) => {
       fetch(`${API_BASE}/api/v1/embedding/config`, {
         method: 'PUT',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
           provider,
           base_url: baseUrl,
@@ -808,7 +810,7 @@ export const testEmbeddingConfig = async (payload) => {
       fetch(`${API_BASE}/api/v1/embedding/test`, {
         method: 'POST',
         credentials: 'include',
-        headers: authHeaders(),
+        credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
           provider,
           base_url: baseUrl,

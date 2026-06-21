@@ -209,7 +209,7 @@ def _cors_origins() -> list[str]:
     raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
     if not raw:
         raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).strip()
-    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
         local_dev_origins = [
             "http://localhost:5173",
@@ -606,7 +606,7 @@ def _cookie_settings() -> dict[str, object]:
     return {
         "httponly": True,
         "secure": AUTH_SESSION_SECURE_COOKIE,
-        "samesite": "lax",
+        "samesite": "none" if AUTH_SESSION_SECURE_COOKIE else "lax",
         "path": "/",
     }
 
@@ -618,7 +618,26 @@ def _current_auth_user(session_token: str | None) -> dict | None:
     return get_user_for_session_token(raw)
 
 
-def _require_auth_user(session_token: str | None) -> dict:
+def _optional_bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    parts = authorization.strip().split(None, 1)
+    if len(parts) != 2:
+        return None
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+def _require_auth_user(session_token: str | None, authorization: str | None = None) -> dict:
+    token = _optional_bearer_token(authorization)
+    if token:
+        expected = os.getenv(API_KEY_ENV, "").strip()
+        if expected and token == expected:
+            return {"id": "api-key", "login": "api-key"}
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
     user = _current_auth_user(session_token)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1226,8 +1245,9 @@ async def query_stream_v1(
 @v1.get("/embedding/options")
 def get_embedding_options_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_auth_user(session_token)
+    _require_auth_user(session_token, authorization)
     from retrieval.support.embedding_provider import get_openai_compatible_embedding_model_options
     return {
         "providers": [
@@ -1247,8 +1267,9 @@ def get_embedding_options_v1(
 @v1.get("/embedding/config")
 def get_embedding_config_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     from retrieval.stores.embedding_store import get_embedding_config
     from retrieval.support.embedding_provider import get_embedding_provider_config
     
@@ -1302,8 +1323,9 @@ def _validate_openai_compatible_config(model: str, dimensions: int | None) -> No
 def update_embedding_config_v1(
     body: EmbeddingConfigUpdateRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     from retrieval.stores.embedding_store import upsert_embedding_config, get_embedding_config
     
     provider = body.provider.strip().lower()
@@ -1365,8 +1387,9 @@ def update_embedding_config_v1(
 def test_embedding_config_v1(
     body: EmbeddingTestRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     from retrieval.support.embedding_provider import EmbeddingProviderConfig, get_embedding_provider
     from retrieval.stores.embedding_store import get_embedding_config
 
@@ -1421,8 +1444,9 @@ def test_embedding_config_v1(
 @v1.get("/provider-credentials")
 def list_provider_credentials_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     return {"provider_credentials": _enrich_provider_runtime_list(list_provider_credentials(user["id"]))}
 
 
@@ -1430,8 +1454,9 @@ def list_provider_credentials_v1(
 def create_provider_credential_v1(
     body: ProviderCredentialCreateRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     provider = body.provider.strip().lower()
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     model = (body.model or "").strip()
@@ -1467,8 +1492,9 @@ def create_provider_credential_v1(
 def activate_provider_credential_v1(
     credential_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     try:
         record = set_active_provider_credential(user["id"], credential_id)
     except ValueError as e:
@@ -1490,8 +1516,9 @@ def activate_provider_credential_v1(
 def delete_provider_credential_v1(
     credential_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     deleted = delete_provider_credential(user["id"], credential_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Provider credential not found")
@@ -1502,8 +1529,9 @@ def delete_provider_credential_v1(
 def create_session_v1(
     body: SessionCreateRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     tenant_id = (body.tenant_id or DEFAULT_TENANT_ID).strip() or DEFAULT_TENANT_ID
     github_token = (body.github_token or "").strip()
     if not github_token and auth_user:
@@ -1564,8 +1592,9 @@ def create_session_v1(
 @v1.get("/github/repos")
 def list_github_repos_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     try:
         credential = get_github_credential(user["id"])
     except ValueError as e:
@@ -1590,8 +1619,9 @@ def list_github_repos_v1(
 @v1.get("/sessions")
 def list_sessions_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     sessions = [s for s in list_sessions() if _session_visible_to_user(s, auth_user)]
     return {"sessions": sessions}
 
@@ -1600,8 +1630,9 @@ def list_sessions_v1(
 def get_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1612,8 +1643,9 @@ def get_session_v1(
 def list_session_messages_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1624,8 +1656,9 @@ def list_session_messages_v1(
 def list_session_threads_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1637,8 +1670,9 @@ def list_session_threads_v1(
 def create_session_thread_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1655,8 +1689,9 @@ def create_session_thread_v1(
 def list_thread_messages_v1(
     thread_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -1667,8 +1702,9 @@ def list_thread_messages_v1(
 def clear_thread_messages_v1(
     thread_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -1680,8 +1716,9 @@ def clear_thread_messages_v1(
 def clear_session_messages_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1693,8 +1730,9 @@ def clear_session_messages_v1(
 def delete_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1711,8 +1749,9 @@ def delete_session_v1(
 def retry_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1744,8 +1783,9 @@ def retry_session_v1(
 def get_session_repo_status_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_repo_status
         status_info = get_session_repo_status(session_id, auth_user["id"])
@@ -1760,8 +1800,9 @@ def get_session_repo_status_v1(
 def get_session_freshness_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_freshness
         freshness_info = get_session_freshness(session_id, auth_user["id"])
@@ -1776,8 +1817,9 @@ def get_session_freshness_v1(
 def get_latest_indexing_job_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1817,8 +1859,9 @@ def get_latest_indexing_job_v1(
 def cancel_latest_indexing_job_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import request_cancel_indexing_job
         result = request_cancel_indexing_job(session_id, auth_user["id"])
@@ -1834,8 +1877,9 @@ def list_indexing_jobs_v1(
     session_id: str,
     limit: int = 20,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1852,8 +1896,9 @@ def list_indexing_jobs_v1(
 def get_session_index_preview_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_index_preview
         preview_info = get_session_index_preview(session_id, auth_user["id"])
@@ -1869,8 +1914,9 @@ def get_session_index_preview_v1(
 def get_latest_evaluation_report_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1883,8 +1929,9 @@ def get_latest_evaluation_report_v1(
 def get_evaluation_regression_tests_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1909,8 +1956,9 @@ def get_evaluation_regression_tests_v1(
 @v1.get("/evals/latest")
 def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_auth_user(session_token)
+    _require_auth_user(session_token, authorization)
     from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report()
 
@@ -1920,8 +1968,9 @@ def get_latest_global_evaluation_report_v1(
 def index_latest_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1965,8 +2014,9 @@ def index_latest_session_v1(
 def index_incremental_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2018,9 +2068,10 @@ def list_indexing_events_v1(
     session_id: str,
     after_id: int = 0,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
     """Return stored indexing progress events for a session."""
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2032,9 +2083,10 @@ def list_indexing_events_v1(
 def stream_indexing_events_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     """SSE stream of live indexing progress events."""
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2273,6 +2325,7 @@ def auth_me(session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_
 def auth_logout(
     response: Response,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
     deleted = delete_auth_session(session_token or "")
     response.delete_cookie(AUTH_SESSION_COOKIE, path="/")
