@@ -568,6 +568,14 @@ export default function SessionView({
                     <span className="text-text-primary font-bold">{repoStatus?.embeddings_stored ?? 0}</span>
                   </div>
                 </div>
+                {(repoStatus?.embedding_provider || repoStatus?.embedding_model) && (
+                  <div className="flex flex-col bg-surface-3 p-1.5 rounded border border-border mt-2">
+                    <span className="text-[9px] text-text-muted">Embeddings</span>
+                    <span className="text-text-primary font-bold">
+                      {repoStatus?.embedding_provider || 'unknown'} · {repoStatus?.embedding_model || 'unknown'} · {repoStatus?.embedding_dimensions ? `${repoStatus.embedding_dimensions}d` : 'N/A'}
+                    </span>
+                  </div>
+                )}
               </div>
               
               <div className="flex flex-wrap items-center gap-2 mt-3 md:mt-0">

@@ -391,25 +391,26 @@ def _print_report(repository: dict, counters: PipelineCounters, collection_name:
     print("========================================")
     print("Ingestion Complete")
     print("========================================")
-    print(f"Repository:          {repository['repository_name']}")
-    print(f"Source:              {repository['source_type']}")
+    print(f"Repository:             {repository['repository_name']}")
+    print(f"Repository source:      {repository['source_type']}")
     print()
-    print(f"Files discovered:    {counters.files_discovered}")
-    print(f"Files ignored:       {counters.files_ignored}")
-    print(
-        "Files skipped (unsupported language): "
-        f"{counters.files_skipped_unsupported}"
-    )
-    print(f"Files parsed OK:     {counters.files_parsed_ok}")
-    print(
-        "Files parse failed:  "
-        f"{counters.files_parse_failed} (fell back to file-level chunk)"
-    )
+    print(f"Files discovered:       {counters.files_discovered}")
+    print(f"Files ignored:          {counters.files_ignored}")
+    print(f"Files skipped:          {counters.files_skipped_unsupported}")
+    print(f"Files parsed OK:        {counters.files_parsed_ok}")
+    print(f"Files parse failed:     {counters.files_parse_failed}")
     print()
-    print(f"Chunks generated:    {counters.chunks_generated}")
-    print(f"Embeddings stored:   {counters.embeddings_stored}")
+    print(f"Chunks generated:       {counters.chunks_generated}")
+    print(f"Embeddings stored:      {counters.embeddings_stored}")
     print()
-    print(f"Collection:          {collection_name}")
+    metadata = getattr(counters, "embedding_provider_metadata", {})
+    if metadata:
+        print(f"Embedding provider:     {metadata.get('embedding_provider', 'unknown')}")
+        print(f"Embedding model:        {metadata.get('embedding_model', 'unknown')}")
+        print(f"Embedding dimensions:   {metadata.get('embedding_dimensions', 'unknown')}")
+        print(f"Embedding config:       {metadata.get('embedding_config_source', 'unknown')}")
+        print()
+    print(f"Collection:             {collection_name}")
     print("========================================")
 
     if skipped_files:

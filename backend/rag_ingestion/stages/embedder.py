@@ -88,10 +88,11 @@ def embed_chunks(
     config, provider = _get_provider()
 
     logger.info(
-        "[embedding] provider=%s model=%s dimensions=%s",
+        "[embedding] provider=%s model=%s dimensions=%s source=%s",
         config.provider,
         config.effective_model,
-        config.dimensions if config.dimensions > 0 else "infer",
+        config.dimensions if config.dimensions > 0 else "auto/infer",
+        getattr(config, "source", "unknown"),
     )
     logger.info(
         "Embedding %d chunks — provider=%s model=%s batch_size=%d",
@@ -166,6 +167,9 @@ def embed_chunks(
         if chunk.embedding:
             resolved_dimensions = len(chunk.embedding)
             break
+    if config.dimensions <= 0 and resolved_dimensions > 0:
+        logger.info("[embedding] resolved dimensions=%d", resolved_dimensions)
+        
     setattr(
         counters,
         "embedding_provider_metadata",

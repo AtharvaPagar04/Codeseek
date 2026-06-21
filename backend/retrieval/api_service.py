@@ -1814,6 +1814,9 @@ def get_latest_indexing_job_v1(
         "updated_at": job["updated_at"],
         "completed_at": job["completed_at"],
         "error": job["error"],
+        "embedding_provider": session.get("embedding_provider", ""),
+        "embedding_model": session.get("embedding_model", ""),
+        "embedding_dimensions": session.get("embedding_dimensions", 0),
     }
     return {
         "session_id": job["session_id"],
