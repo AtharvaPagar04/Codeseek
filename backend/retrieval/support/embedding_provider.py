@@ -183,6 +183,7 @@ class EmbeddingProviderConfig:
     dimensions: int
     local_model: str
     local_device: str
+    source: str = "default/env"
 
     @property
     def effective_model(self) -> str:
@@ -420,6 +421,7 @@ def resolve_embedding_config() -> EmbeddingProviderConfig:
             dimensions=saved.get("dimensions") if saved.get("dimensions") else (local_dimensions if provider == "local" else 0),
             local_model=local_model,
             local_device=local_device,
+            source="stored/ui",
         )
     else:
         config = get_embedding_provider_config()
@@ -473,6 +475,7 @@ def get_embedding_provider_config() -> EmbeddingProviderConfig:
         ),
         local_model=local_model,
         local_device=local_device,
+        source="default/env",
     )
 
     if provider == "openai_compatible":
@@ -541,6 +544,7 @@ def current_embedding_metadata(
         "embedding_base_url": config.normalized_base_url,
         "embedding_model": config.effective_model,
         "embedding_dimensions": dimensions,
+        "embedding_config_source": getattr(config, "source", "unknown"),
     }
     metadata["embedding_config_hash"] = build_embedding_config_hash(
         provider=str(metadata["embedding_provider"]),

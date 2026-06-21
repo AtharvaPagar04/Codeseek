@@ -159,3 +159,39 @@ def test_put_embedding_config_invalid_dimensions(auth_client):
     response = client.put("/api/v1/embedding/config", json=payload)
     assert response.status_code == 400
     assert "Invalid dimensions" in response.json()["detail"]
+
+def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
+    client, user = auth_client
+    
+    # Create a mock session
+    from retrieval.db import db_cursor
+    import uuid
+    from datetime import datetime, timezone
+    
+    session_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO repo_sessions (id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, created_at, updated_at, embedding_provider, embedding_model, embedding_dimensions)
+            VALUES (?, 'prod', ?, 'test/repo', 'https://github.com/test/repo', '/tmp/repo', 'collection', 'ready', ?, ?, 'openai_compatible', 'openai/text-embedding-3-small', 1536)
+            """,
+            (session_id, user["id"], now, now)
+        )
+        cursor.execute(
+            """
+            INSERT INTO indexing_jobs (id, session_id, indexing_mode, status, started_at, updated_at)
+            VALUES (?, ?, 'full', 'completed', ?, ?)
+            """,
+            (job_id, session_id, now, now)
+        )
+        
+    response = client.get(f"/api/v1/sessions/{session_id}/indexing-job/latest")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["latest_job"] is not None
+    assert data["latest_job"]["embedding_provider"] == "openai_compatible"
+    assert data["latest_job"]["embedding_model"] == "openai/text-embedding-3-small"
+    assert data["latest_job"]["embedding_dimensions"] == 1536
