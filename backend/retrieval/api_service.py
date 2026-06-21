@@ -206,7 +206,9 @@ _startup_errors: list[str] = []
 _query_lock = threading.Lock()
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).strip()
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
     if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
         local_dev_origins = [
@@ -513,21 +515,7 @@ def _enforce_rate_limit(bucket_key: str) -> None:
 
 
 def _health_payload() -> dict[str, str]:
-    dep = dependency_health()
-    if _startup_errors or dep.get("qdrant") != "ok":
-        status = "degraded"
-    else:
-        status = "ok"
-    return {
-        "status": status,
-        "collection": get_collection_name(),
-        "repo_root": get_repo_root(),
-        "embedding_model": dep.get("embedding_model", "unknown"),
-        "embedding_provider": dep.get("embedding_provider", ""),
-        "embedding_selected_model": dep.get("embedding_selected_model", ""),
-        "qdrant": dep.get("qdrant", "unknown"),
-        "startup_errors": "; ".join(_startup_errors) if _startup_errors else "",
-    }
+    return {"status": "ok"}
 
 
 def _github_oauth_config() -> tuple[str, str, str]:
