@@ -466,6 +466,9 @@ Adds: Prometheus (`:9090`), Alertmanager (`:9093`), postgres_exporter (`:9187`).
 
 Full variable reference: [`backend/docs/deployment_runbook.md`](backend/docs/deployment_runbook.md).
 
+**Vercel Frontend Note:**
+Set `VITE_API_BASE_URL` in Vercel Project Settings -> Environment Variables. The frontend must call the Render backend URL. Do not put `CODESEEK_API_KEY` or provider secrets in Vercel.
+
 Embedding provider variables for deployment:
 
 | Variable | Purpose |
