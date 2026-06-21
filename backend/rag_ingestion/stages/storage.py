@@ -100,9 +100,9 @@ def _ensure_collection(
         requested_size = int(getattr(vectors_config, "size", 0) or 0)
         if existing_size and requested_size and existing_size != requested_size:
             raise RuntimeError(
-                f"Qdrant collection '{collection_name}' has vector size {existing_size}, "
-                f"but the current embedding provider returned size {requested_size}. "
-                "Run a full reindex with collection recreation."
+                f"Existing Qdrant collection expects {existing_size}-dimensional vectors, "
+                f"but provider returned {requested_size}-dimensional vectors. "
+                "Recreate/reindex this session using Auto dimensions or a provider-supported dimension."
             )
     except RuntimeError:
         raise
@@ -206,11 +206,11 @@ def _resolve_embedding_dimensions(
     chunks: list[Chunk],
     embedding_dimensions: int | None,
 ) -> int:
-    if embedding_dimensions and embedding_dimensions > 0:
-        return int(embedding_dimensions)
     for chunk in chunks:
         if chunk.embedding:
             return len(chunk.embedding)
+    if embedding_dimensions and embedding_dimensions > 0:
+        return int(embedding_dimensions)
     return 0
 
 

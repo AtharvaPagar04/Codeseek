@@ -363,11 +363,6 @@ class OpenAICompatibleEmbeddingProvider:
 
         if vectors:
             actual_dimensions = len(vectors[0])
-            if self._config.dimensions and self._config.dimensions > 0:
-                if actual_dimensions != self._config.dimensions:
-                    raise EmbeddingRequestError(
-                        f"Provider returned {actual_dimensions} dimensions, but config expected {self._config.dimensions}. Use Auto or choose a supported dimension that the provider actually returns."
-                    )
             self.dimensions = actual_dimensions
         return vectors
 
