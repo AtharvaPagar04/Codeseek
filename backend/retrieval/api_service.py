@@ -41,6 +41,7 @@ from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
 from retrieval.generation.llm import LlmProviderError
+from retrieval.support.embedding_provider import EmbeddingProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
     log_event,
@@ -205,8 +206,10 @@ _startup_errors: list[str] = []
 _query_lock = threading.Lock()
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        raw = os.getenv("CODESEEK_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).strip()
+    origins = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     if os.getenv("CODESEEK_TENANT_ID", "local") == "local":
         local_dev_origins = [
             "http://localhost:5173",
@@ -297,6 +300,26 @@ class ProviderCredentialCreateRequest(BaseModel):
     is_active: bool | None = None
 
 
+class EmbeddingConfigUpdateRequest(BaseModel):
+    provider: str
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    encrypted_secret: dict | None = None
+    dimensions: int | None = None
+    timeout_seconds: float | None = None
+    batch_size: int | None = None
+
+
+class EmbeddingTestRequest(BaseModel):
+    provider: str
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    encrypted_secret: dict | None = None
+    dimensions: int | None = None
+
+
 class SessionCreateRequest(BaseModel):
     repo_full_name: str
     repo_url: str | None = None
@@ -344,6 +367,19 @@ def _thread_visible_to_user(thread: dict, auth_user: dict | None) -> bool:
 
 
 def _resolve_query_session(session_id: str | None, auth_user: dict | None = None) -> dict | None:
+    def _enforce_queryable_session(session: dict) -> None:
+        freshness = (session.get("repo_status") or {}).get("status", "")
+        if freshness == "embedding_config_changed":
+            raise HTTPException(
+                status_code=409,
+                detail="This session was indexed with a different embedding provider/model/dimensions. Run a full reindex before querying.",
+            )
+        if freshness == "embedding_config_invalid":
+            raise HTTPException(
+                status_code=503,
+                detail="The current embedding provider configuration is invalid. Fix the embedding settings and run a full reindex.",
+            )
+
     if session_id:
         session = get_session(session_id)
         if not session:
@@ -355,10 +391,12 @@ def _resolve_query_session(session_id: str | None, auth_user: dict | None = None
                 status_code=409,
                 detail=f"Session is not ready (status={session.get('status')})",
             )
+        _enforce_queryable_session(session)
         return session
 
     ready_sessions = [session for session in _ready_sessions() if _session_visible_to_user(session, auth_user)]
     if len(ready_sessions) == 1:
+        _enforce_queryable_session(ready_sessions[0])
         return ready_sessions[0]
     return None
 
@@ -477,19 +515,7 @@ def _enforce_rate_limit(bucket_key: str) -> None:
 
 
 def _health_payload() -> dict[str, str]:
-    dep = dependency_health()
-    if _startup_errors or dep.get("qdrant") != "ok":
-        status = "degraded"
-    else:
-        status = "ok"
-    return {
-        "status": status,
-        "collection": get_collection_name(),
-        "repo_root": get_repo_root(),
-        "embedding_model": dep.get("embedding_model", "unknown"),
-        "qdrant": dep.get("qdrant", "unknown"),
-        "startup_errors": "; ".join(_startup_errors) if _startup_errors else "",
-    }
+    return {"status": "ok"}
 
 
 def _github_oauth_config() -> tuple[str, str, str]:
@@ -580,7 +606,7 @@ def _cookie_settings() -> dict[str, object]:
     return {
         "httponly": True,
         "secure": AUTH_SESSION_SECURE_COOKIE,
-        "samesite": "lax",
+        "samesite": "none" if AUTH_SESSION_SECURE_COOKIE else "lax",
         "path": "/",
     }
 
@@ -592,7 +618,29 @@ def _current_auth_user(session_token: str | None) -> dict | None:
     return get_user_for_session_token(raw)
 
 
-def _require_auth_user(session_token: str | None) -> dict:
+def _optional_bearer_token(authorization: str | None) -> str | None:
+    if not isinstance(authorization, str):
+        return None
+    authorization = authorization.strip()
+    if not authorization:
+        return None
+    parts = authorization.split(None, 1)
+    if len(parts) != 2:
+        return None
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+def _require_auth_user(session_token: str | None, authorization: str | None = None) -> dict:
+    token = _optional_bearer_token(authorization)
+    if token:
+        expected = os.getenv(API_KEY_ENV, "").strip()
+        if expected and token == expected:
+            return {"id": "api-key", "login": "api-key"}
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     user = _current_auth_user(session_token)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -740,7 +788,7 @@ def _query_impl(
     started = time.perf_counter()
     path = "/api/v1/query"
     log_event("api.query.start", request_id, path="/query")
-    
+
     # Authenticate: EITHER cookie OR API Key
     auth_user = None
     token = None
@@ -754,7 +802,7 @@ def _query_impl(
     if not auth_user:
         if not authorization:
             raise HTTPException(status_code=401, detail="Please sign in again.")
-        
+
         expected = os.getenv(API_KEY_ENV, "").strip()
         if not expected:
             raise HTTPException(
@@ -764,10 +812,10 @@ def _query_impl(
             token = _auth_key(authorization)
         except HTTPException:
             raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
-            
+
         if token != expected:
             raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
-            
+
         auth_user = get_or_create_system_user()
 
     _enforce_rate_limit(f"{token}:{client_ip}")
@@ -790,7 +838,7 @@ def _query_impl(
             status_code=400,
             detail="No active provider credential configured for this user",
         )
-    
+
     # Check for client-side model override header
     model_override = request.headers.get("x-app-model-override", "").strip()
     if model_override:
@@ -914,6 +962,18 @@ def _query_impl(
             total_latency_ms=total_ms,
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except EmbeddingProviderError as exc:
+        total_ms = int((time.perf_counter() - started) * 1000)
+        observe_api_request(path, "503", total_ms)
+        RETRIEVAL_ERRORS_TOTAL.labels(error_type="provider").inc()
+        log_event(
+            "api.query.error",
+            request_id,
+            error=str(exc),
+            status_code=503,
+            total_latency_ms=total_ms,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         total_ms = int((time.perf_counter() - started) * 1000)
         observe_api_request(path, "error", total_ms)
@@ -985,12 +1045,12 @@ async def query_stream_v1(
     import queue
     import asyncio
     import json
-    
+
     request_id = x_request_id or new_request_id()
     started = time.perf_counter()
     path = "/api/v1/query/stream"
     log_event("api.query_stream.start", request_id, path="/query/stream")
-    
+
     # Authenticate: EITHER cookie OR API Key
     auth_user = None
     token = None
@@ -1004,7 +1064,7 @@ async def query_stream_v1(
     if not auth_user:
         if not authorization:
             raise HTTPException(status_code=401, detail="Please sign in again.")
-        
+
         expected = os.getenv(API_KEY_ENV, "").strip()
         if not expected:
             raise HTTPException(
@@ -1014,10 +1074,10 @@ async def query_stream_v1(
             token = _auth_key(authorization)
         except HTTPException:
             raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
-            
+
         if token != expected:
             raise HTTPException(status_code=401, detail="Backend API key is invalid or missing.")
-            
+
         auth_user = get_or_create_system_user()
 
     _enforce_rate_limit(f"{token}:{client_ip}")
@@ -1040,7 +1100,7 @@ async def query_stream_v1(
             status_code=400,
             detail="No active provider credential configured for this user",
         )
-    
+
     # Check for client-side model override header
     model_override = request.headers.get("x-app-model-override", "").strip()
     if model_override:
@@ -1102,7 +1162,7 @@ async def query_stream_v1(
                     stream_handler=QueueStreamHandler(),
                     abort_event=abort_event,
                 )
-            
+
             # Send the final sources and metadata
             sources_event = {
                 "type": "sources",
@@ -1185,11 +1245,211 @@ async def query_stream_v1(
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
+@v1.get("/embedding/options")
+def get_embedding_options_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _require_auth_user(session_token, authorization)
+    from retrieval.support.embedding_provider import get_openai_compatible_embedding_model_options
+    return {
+        "providers": [
+            {
+                "id": "local",
+                "label": "Local SentenceTransformer"
+            },
+            {
+                "id": "openai_compatible",
+                "label": "OpenAI-compatible / AICredits"
+            }
+        ],
+        "openai_compatible_models": get_openai_compatible_embedding_model_options(),
+    }
+
+
+@v1.get("/embedding/config")
+def get_embedding_config_v1(
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = _require_auth_user(session_token, authorization)
+    from retrieval.stores.embedding_store import get_embedding_config
+    from retrieval.support.embedding_provider import get_embedding_provider_config
+
+    saved = get_embedding_config(user["id"])
+    if saved:
+        return {
+            "provider": saved["provider"],
+            "base_url": saved.get("base_url", ""),
+            "model": saved.get("model", ""),
+            "dimensions": saved.get("dimensions", 0),
+            "timeout_seconds": saved.get("timeout_seconds", 60),
+            "batch_size": saved.get("batch_size", 64),
+            "api_key_configured": bool(saved.get("api_key", "")),
+            "source": "stored",
+        }
+
+    env_config = get_embedding_provider_config()
+    return {
+        "provider": env_config.provider,
+        "base_url": env_config.normalized_base_url,
+        "model": env_config.effective_model,
+        "dimensions": env_config.dimensions,
+        "timeout_seconds": env_config.timeout_seconds,
+        "batch_size": env_config.batch_size,
+        "api_key_configured": bool(env_config.api_key),
+        "source": "env",
+    }
+
+
+def _validate_openai_compatible_config(model: str, dimensions: int | None) -> None:
+    from retrieval.support.embedding_provider import OPENAI_COMPATIBLE_EMBEDDING_MODELS
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required for openai_compatible")
+
+    if model not in OPENAI_COMPATIBLE_EMBEDDING_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid embedding model for openai_compatible. Use one of: {', '.join(OPENAI_COMPATIBLE_EMBEDDING_MODELS.keys())}."
+        )
+
+    model_info = OPENAI_COMPATIBLE_EMBEDDING_MODELS[model]
+    if dimensions and dimensions > 0:
+        if dimensions not in model_info["allowed_dimensions"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid dimensions {dimensions} for model {model}. Allowed: {', '.join(map(str, model_info['allowed_dimensions']))} or 0 for auto."
+            )
+
+
+@v1.put("/embedding/config")
+def update_embedding_config_v1(
+    body: EmbeddingConfigUpdateRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = _require_auth_user(session_token, authorization)
+    from retrieval.stores.embedding_store import upsert_embedding_config, get_embedding_config
+
+    provider = body.provider.strip().lower()
+    if provider not in {"local", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+
+    if provider == "openai_compatible":
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
+
+        # Keep existing key if empty
+        if not api_key:
+            existing = get_embedding_config(user["id"])
+            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
+                api_key = existing["api_key"]
+            else:
+                from retrieval.support.embedding_provider import get_embedding_provider_config
+                env_config = get_embedding_provider_config()
+                if env_config.api_key:
+                    api_key = env_config.api_key
+                else:
+                    raise HTTPException(status_code=400, detail="api_key is required")
+
+    record = upsert_embedding_config(
+        user["id"],
+        provider=provider,
+        base_url=(body.base_url or "").strip(),
+        model=(body.model or "").strip(),
+        api_key=api_key,
+        dimensions=body.dimensions or 0,
+        timeout_seconds=body.timeout_seconds or 60.0,
+        batch_size=body.batch_size or 64,
+    )
+
+    log_event(
+        "api.embedding_config.updated",
+        new_request_id(),
+        user_id=user["id"],
+        provider=provider,
+    )
+
+    return {
+        "provider": record["provider"],
+        "base_url": record.get("base_url", ""),
+        "model": record.get("model", ""),
+        "dimensions": record.get("dimensions", 0),
+        "timeout_seconds": record.get("timeout_seconds", 60),
+        "batch_size": record.get("batch_size", 64),
+        "api_key_configured": bool(record.get("api_key", "")),
+        "source": "stored",
+    }
+
+
+@v1.post("/embedding/test")
+def test_embedding_config_v1(
+    body: EmbeddingTestRequest,
+    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    user = _require_auth_user(session_token, authorization)
+    from retrieval.support.embedding_provider import EmbeddingProviderConfig, get_embedding_provider
+    from retrieval.stores.embedding_store import get_embedding_config
+
+    provider = body.provider.strip().lower()
+    if provider not in {"local", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+    if provider == "openai_compatible":
+        if not body.base_url:
+            raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
+
+        _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
+
+        if not api_key:
+            existing = get_embedding_config(user["id"])
+            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
+                api_key = existing["api_key"]
+            else:
+                from retrieval.support.embedding_provider import get_embedding_provider_config
+                env_config = get_embedding_provider_config()
+                if env_config.api_key:
+                    api_key = env_config.api_key
+                else:
+                    raise HTTPException(status_code=400, detail="api_key is required for test")
+
+    config = EmbeddingProviderConfig(
+        provider=provider,
+        base_url=(body.base_url or "").strip(),
+        api_key=api_key,
+        model=(body.model or "").strip(),
+        batch_size=1,
+        timeout_seconds=15.0,
+        dimensions=body.dimensions or 0,
+        local_model="BAAI/bge-small-en-v1.5",
+        local_device="cpu"
+    )
+
+    try:
+        provider_impl = get_embedding_provider(config)
+        vector = provider_impl.embed_query("health check")
+        return {
+            "ok": True,
+            "provider": provider_impl.provider_name,
+            "model": provider_impl.model_name,
+            "dimensions": provider_impl.dimensions,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @v1.get("/provider-credentials")
 def list_provider_credentials_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     return {"provider_credentials": _enrich_provider_runtime_list(list_provider_credentials(user["id"]))}
 
 
@@ -1197,8 +1457,9 @@ def list_provider_credentials_v1(
 def create_provider_credential_v1(
     body: ProviderCredentialCreateRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     provider = body.provider.strip().lower()
     api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     model = (body.model or "").strip()
@@ -1234,8 +1495,9 @@ def create_provider_credential_v1(
 def activate_provider_credential_v1(
     credential_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     try:
         record = set_active_provider_credential(user["id"], credential_id)
     except ValueError as e:
@@ -1257,8 +1519,9 @@ def activate_provider_credential_v1(
 def delete_provider_credential_v1(
     credential_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     deleted = delete_provider_credential(user["id"], credential_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Provider credential not found")
@@ -1269,8 +1532,9 @@ def delete_provider_credential_v1(
 def create_session_v1(
     body: SessionCreateRequest,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     tenant_id = (body.tenant_id or DEFAULT_TENANT_ID).strip() or DEFAULT_TENANT_ID
     github_token = (body.github_token or "").strip()
     if not github_token and auth_user:
@@ -1331,8 +1595,9 @@ def create_session_v1(
 @v1.get("/github/repos")
 def list_github_repos_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    user = _require_auth_user(session_token)
+    user = _require_auth_user(session_token, authorization)
     try:
         credential = get_github_credential(user["id"])
     except ValueError as e:
@@ -1357,8 +1622,9 @@ def list_github_repos_v1(
 @v1.get("/sessions")
 def list_sessions_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     sessions = [s for s in list_sessions() if _session_visible_to_user(s, auth_user)]
     return {"sessions": sessions}
 
@@ -1367,8 +1633,9 @@ def list_sessions_v1(
 def get_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1379,8 +1646,9 @@ def get_session_v1(
 def list_session_messages_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1391,8 +1659,9 @@ def list_session_messages_v1(
 def list_session_threads_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1404,8 +1673,9 @@ def list_session_threads_v1(
 def create_session_thread_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1422,8 +1692,9 @@ def create_session_thread_v1(
 def list_thread_messages_v1(
     thread_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -1434,8 +1705,9 @@ def list_thread_messages_v1(
 def clear_thread_messages_v1(
     thread_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     thread = get_thread(thread_id)
     if not thread or not _thread_visible_to_user(thread, auth_user):
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -1447,8 +1719,9 @@ def clear_thread_messages_v1(
 def clear_session_messages_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1460,8 +1733,9 @@ def clear_session_messages_v1(
 def delete_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1478,8 +1752,9 @@ def delete_session_v1(
 def retry_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1511,8 +1786,9 @@ def retry_session_v1(
 def get_session_repo_status_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_repo_status
         status_info = get_session_repo_status(session_id, auth_user["id"])
@@ -1527,8 +1803,9 @@ def get_session_repo_status_v1(
 def get_session_freshness_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_freshness
         freshness_info = get_session_freshness(session_id, auth_user["id"])
@@ -1543,8 +1820,9 @@ def get_session_freshness_v1(
 def get_latest_indexing_job_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1569,6 +1847,9 @@ def get_latest_indexing_job_v1(
         "updated_at": job["updated_at"],
         "completed_at": job["completed_at"],
         "error": job["error"],
+        "embedding_provider": session.get("embedding_provider", ""),
+        "embedding_model": session.get("embedding_model", ""),
+        "embedding_dimensions": session.get("embedding_dimensions", 0),
     }
     return {
         "session_id": job["session_id"],
@@ -1581,8 +1862,9 @@ def get_latest_indexing_job_v1(
 def cancel_latest_indexing_job_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import request_cancel_indexing_job
         result = request_cancel_indexing_job(session_id, auth_user["id"])
@@ -1598,8 +1880,9 @@ def list_indexing_jobs_v1(
     session_id: str,
     limit: int = 20,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1616,8 +1899,9 @@ def list_indexing_jobs_v1(
 def get_session_index_preview_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     try:
         from retrieval.session_indexer import get_session_index_preview
         preview_info = get_session_index_preview(session_id, auth_user["id"])
@@ -1633,12 +1917,13 @@ def get_session_index_preview_v1(
 def get_latest_evaluation_report_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report(session_id)
 
@@ -1647,20 +1932,21 @@ def get_latest_evaluation_report_v1(
 def get_evaluation_regression_tests_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     repo_root = session.get("repo_root")
     if not repo_root or not os.path.isdir(repo_root):
         return {"tests": []}
-    
+
     config_path = os.path.join(repo_root, ".codeseek-evals.json")
     if not os.path.exists(config_path):
         return {"tests": []}
-    
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             import json
@@ -1673,8 +1959,9 @@ def get_evaluation_regression_tests_v1(
 @v1.get("/evals/latest")
 def get_latest_global_evaluation_report_v1(
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_auth_user(session_token)
+    _require_auth_user(session_token, authorization)
     from retrieval.support.eval_reports import get_latest_evaluation_report
     return get_latest_evaluation_report()
 
@@ -1684,8 +1971,9 @@ def get_latest_global_evaluation_report_v1(
 def index_latest_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1729,8 +2017,9 @@ def index_latest_session_v1(
 def index_incremental_session_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1782,9 +2071,10 @@ def list_indexing_events_v1(
     session_id: str,
     after_id: int = 0,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
     """Return stored indexing progress events for a session."""
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1796,9 +2086,10 @@ def list_indexing_events_v1(
 def stream_indexing_events_v1(
     session_id: str,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     """SSE stream of live indexing progress events."""
-    auth_user = _require_auth_user(session_token)
+    auth_user = _require_auth_user(session_token, authorization)
     session = get_session(session_id)
     if not session or not _session_visible_to_user(session, auth_user):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2037,6 +2328,7 @@ def auth_me(session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_
 def auth_logout(
     response: Response,
     session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
+    authorization: str | None = Header(default=None),
 ) -> dict:
     deleted = delete_auth_session(session_token or "")
     response.delete_cookie(AUTH_SESSION_COOKIE, path="/")

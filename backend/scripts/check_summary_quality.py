@@ -8,8 +8,8 @@ Usage:
 
 import os
 import sys
-from qdrant_client import QdrantClient
-from rag_ingestion.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME
+from retrieval.support.qdrant_config import create_qdrant_client
+from rag_ingestion.config import COLLECTION_NAME
 from retrieval.db import db_cursor
 
 
@@ -39,8 +39,8 @@ def get_collection_name() -> str:
 
 def main():
     collection_name = get_collection_name()
-    print(f"Connecting to Qdrant at {QDRANT_HOST}:{QDRANT_PORT}...")
-    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    print(f"Connecting to Qdrant...")
+    client = create_qdrant_client(check_compatibility=False)
 
     try:
         client.get_collection(collection_name)

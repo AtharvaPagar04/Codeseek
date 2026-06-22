@@ -9,7 +9,7 @@ If no collection is passed, the default hardcoded one is used.
 
 import sys
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
 COLLECTION = (
     sys.argv[1]
@@ -17,7 +17,7 @@ COLLECTION = (
     else "repository_chunks__local__atharvapagar04_portfolio"
 )
 
-client = QdrantClient("localhost", port=6333)
+client = create_qdrant_client()
 
 points, _ = client.scroll(
     collection_name=COLLECTION,

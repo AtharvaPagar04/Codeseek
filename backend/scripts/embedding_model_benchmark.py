@@ -41,8 +41,6 @@ from pathlib import Path
 try:
     from retrieval.config import (
         EMBEDDING_MODEL as CURRENT_MODEL,
-        QDRANT_HOST,
-        QDRANT_PORT,
         QUERY_PREFIX,
         get_collection_name,
     )
@@ -105,8 +103,8 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------------------------------------------------------------------------
 
 def _get_qdrant_client():
-    from qdrant_client import QdrantClient
-    return QdrantClient(QDRANT_HOST, port=QDRANT_PORT, timeout=10.0, check_compatibility=False)
+    from retrieval.support.qdrant_config import create_qdrant_client
+    return create_qdrant_client(timeout=10.0, check_compatibility=False)
 
 
 def _pull_chunk_vectors(collection: str, max_points: int = 5000) -> list[dict]:

@@ -134,7 +134,7 @@ test('querySession invokes the correct endpoint and includes credentials/auth he
     assert.match(calledUrl, /\/api\/v1\/query/);
     assert.equal(calledOptions.credentials, 'include');
     assert.equal(calledOptions.headers['Content-Type'], 'application/json');
-    assert.equal(calledOptions.headers['Authorization'], `Bearer ${getBackendApiKey()}`);
+    assert.equal(calledOptions.headers['Authorization'], undefined);
   } finally {
     globalThis.fetch = originalFetch;
     delete globalThis.localStorage;

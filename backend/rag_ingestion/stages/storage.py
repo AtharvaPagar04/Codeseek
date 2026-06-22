@@ -2,9 +2,6 @@
 
 from rag_ingestion.config import (
     COLLECTION_NAME,
-    EMBEDDING_DIM,
-    QDRANT_HOST,
-    QDRANT_PORT,
     RECREATE_COLLECTION_EACH_RUN,
 )
 from rag_ingestion.models.chunk import Chunk
@@ -19,17 +16,21 @@ def store_chunks(
     counters: PipelineCounters,
     collection_name: str | None = None,
     recreate_collection: bool | None = None,
+    embedding_dimensions: int | None = None,
 ) -> None:
     """Ensure the collection exists and upsert chunks by deterministic IDs."""
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
     collection = collection_name or COLLECTION_NAME
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    vector_size = _resolve_embedding_dimensions(chunks, embedding_dimensions)
+    if vector_size <= 0:
+        raise RuntimeError("Embedding dimensions could not be determined before Qdrant upsert.")
+    client = create_qdrant_client(check_compatibility=False)
     _ensure_collection(
         client=client,
         collection_name=collection,
-        vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         recreate_collection=recreate_collection,
     )
 
@@ -56,10 +57,10 @@ def delete_chunks_for_paths(
         return
 
     collection = collection_name or COLLECTION_NAME
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import FieldCondition, Filter, MatchAny
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
     client.delete(
         collection_name=collection,
         points_selector=Filter(
@@ -92,7 +93,17 @@ def _ensure_collection(
         return
 
     try:
-        client.get_collection(collection_name)
+        existing = client.get_collection(collection_name)
+        existing_size = _collection_vector_size(existing)
+        requested_size = int(getattr(vectors_config, "size", 0) or 0)
+        if existing_size and requested_size and existing_size != requested_size:
+            raise RuntimeError(
+                f"Existing Qdrant collection expects {existing_size}-dimensional vectors, "
+                f"but provider returned {requested_size}-dimensional vectors. "
+                "Recreate/reindex this session using Auto dimensions or a provider-supported dimension."
+            )
+    except RuntimeError:
+        raise
     except Exception:
         client.create_collection(
             collection_name=collection_name,
@@ -179,11 +190,37 @@ def delete_vectors_by_ids(
         return
 
     collection = collection_name or COLLECTION_NAME
-    from qdrant_client import QdrantClient
+    from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import PointIdsList
 
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    client = create_qdrant_client(check_compatibility=False)
     client.delete(
         collection_name=collection,
         points_selector=PointIdsList(points=vector_ids),
     )
+
+
+def _resolve_embedding_dimensions(
+    chunks: list[Chunk],
+    embedding_dimensions: int | None,
+) -> int:
+    for chunk in chunks:
+        if chunk.embedding:
+            return len(chunk.embedding)
+    if embedding_dimensions and embedding_dimensions > 0:
+        return int(embedding_dimensions)
+    return 0
+
+
+def _collection_vector_size(collection_info) -> int:
+    config = getattr(collection_info, "config", None)
+    params = getattr(config, "params", None)
+    vectors = getattr(params, "vectors", None)
+    size = getattr(vectors, "size", None)
+    if size:
+        return int(size)
+    if isinstance(vectors, dict):
+        first = next(iter(vectors.values()), None)
+        if first is not None:
+            return int(getattr(first, "size", 0) or 0)
+    return 0

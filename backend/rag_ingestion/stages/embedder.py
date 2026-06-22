@@ -6,25 +6,31 @@ import gc
 import logging
 
 from rag_ingestion.config import (
-    BATCH_SIZE,
-    EMBEDDING_BATCH_SIZE,
-    EMBEDDING_DEVICE,
     EMBEDDING_INPUT_MAX_CODE_CHARS,
     EMBEDDING_INPUT_MAX_TOTAL_CHARS,
-    EMBEDDING_MODEL,
 )
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.utils.counters import PipelineCounters
 from rag_ingestion.utils.gpu_cleanup import clear_python_cuda_cache
+from retrieval.support.embedding_provider import (
+    current_embedding_metadata,
+    get_embedding_provider,
+    get_embedding_provider_config,
+    unload_local_embedding_model,
+)
 
 logger = logging.getLogger(__name__)
-
-_model = None
 
 
 def _sleep(seconds: float) -> None:
     import time
     time.sleep(seconds)
+
+
+def _get_provider():
+    from retrieval.support.embedding_provider import resolve_embedding_config
+    config = resolve_embedding_config()
+    return config, get_embedding_provider(config)
 
 KNOWN_LABELS = {
     "File",
@@ -79,13 +85,20 @@ def embed_chunks(
     )
     from rag_ingestion.utils.gpu_cleanup import cleanup_after_batch
 
-    model = _get_model()
+    config, provider = _get_provider()
 
     logger.info(
-        "Embedding %d chunks — model=%s device=%s batch_size=%d",
+        "[embedding] provider=%s model=%s dimensions=%s source=%s",
+        config.provider,
+        config.effective_model,
+        config.dimensions if config.dimensions > 0 else "auto/infer",
+        getattr(config, "source", "unknown"),
+    )
+    logger.info(
+        "Embedding %d chunks — provider=%s model=%s batch_size=%d",
         len(chunks),
-        EMBEDDING_MODEL,
-        EMBEDDING_DEVICE,
+        config.provider,
+        config.effective_model,
         CODESEEK_EMBEDDING_BATCH_SIZE,
     )
 
@@ -101,13 +114,13 @@ def embed_chunks(
         for start in range(0, len(chunks), batch_size):
             batch = chunks[start : start + batch_size]
             inputs = [_embedding_input(chunk) for chunk in batch]
-            embeddings = model.encode(
+            embeddings = provider.embed_texts(
                 inputs,
                 batch_size=batch_size,
                 show_progress_bar=True,
             )
             for chunk, embedding in zip(batch, embeddings, strict=True):
-                chunk.embedding = embedding.tolist()
+                chunk.embedding = list(embedding)
                 counters.embeddings_generated += 1
             
             
@@ -142,11 +155,31 @@ def embed_chunks(
     except Exception as exc:
         logger.error(
             "Embedding generation failed: %s. "
-            "This may be caused by CUDA OOM or system RAM limits. "
-            "Try setting EMBEDDING_DEVICE=cpu or reducing CODESEEK_EMBEDDING_BATCH_SIZE.",
+            "This may be caused by provider configuration issues, upstream request failures, "
+            "CUDA OOM, or system RAM limits. Try reducing CODESEEK_EMBEDDING_BATCH_SIZE or "
+            "switching CODESEEK_EMBEDDING_PROVIDER.",
             exc,
         )
         raise exc
+
+    resolved_dimensions = 0
+    for chunk in chunks:
+        if chunk.embedding:
+            resolved_dimensions = len(chunk.embedding)
+            break
+    if config.dimensions > 0 and resolved_dimensions > 0 and resolved_dimensions != config.dimensions:
+        logger.warning(
+            "Provider returned %d dimensions although config expected %d; using returned provider dimension %d for this index.",
+            resolved_dimensions, config.dimensions, resolved_dimensions
+        )
+    elif config.dimensions <= 0 and resolved_dimensions > 0:
+        logger.info("[embedding] resolved dimensions=%d", resolved_dimensions)
+        
+    setattr(
+        counters,
+        "embedding_provider_metadata",
+        current_embedding_metadata(resolved_dimensions=resolved_dimensions),
+    )
 
     return chunks
 
@@ -158,39 +191,10 @@ def unload_embedding_model() -> None:
     invocation.  This is intentional: it allows the OS to reclaim any CUDA
     or CPU memory that was held by the model weights.
     """
-    global _model
-    if _model is None:
-        logger.debug("unload_embedding_model: model was not loaded, nothing to do")
-        return
-
-    _model = None
+    unload_local_embedding_model()
     gc.collect()
     clear_python_cuda_cache("after embedding model unload")
     logger.info("Embedding model reference released")
-
-
-def _get_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-
-        if EMBEDDING_DEVICE == "cpu":
-            logger.info("Embedding device configured: cpu")
-        else:
-            logger.warning(
-                "Embedding device is %s; this may exceed VRAM on 4GB GPUs. "
-                "Set EMBEDDING_DEVICE=cpu or use scripts/run_backend_cpu_embeddings.sh "
-                "to avoid CUDA OOM.",
-                EMBEDDING_DEVICE,
-            )
-
-        logger.info(
-            "Loading embedding model '%s' on device '%s'",
-            EMBEDDING_MODEL,
-            EMBEDDING_DEVICE,
-        )
-        _model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
-    return _model
 
 
 def _line(label: str, value: str | None) -> list[str]:

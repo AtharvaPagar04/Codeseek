@@ -257,6 +257,8 @@ def run_pipeline(
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
+        embedding_metadata = getattr(counters, "embedding_provider_metadata", {})
+        embedding_dimensions = int(embedding_metadata.get("embedding_dimensions", 0) or 0)
 
         emit("embedding",
              f"Generated embeddings for {counters.embeddings_generated} chunks.",
@@ -279,6 +281,7 @@ def run_pipeline(
             counters,
             collection_name=selected_collection,
             recreate_collection=should_recreate_collection,
+            embedding_dimensions=embedding_dimensions,
         )
         emit("storage",
              f"Stored {counters.embeddings_stored} chunks in Qdrant.",
@@ -388,25 +391,26 @@ def _print_report(repository: dict, counters: PipelineCounters, collection_name:
     print("========================================")
     print("Ingestion Complete")
     print("========================================")
-    print(f"Repository:          {repository['repository_name']}")
-    print(f"Source:              {repository['source_type']}")
+    print(f"Repository:             {repository['repository_name']}")
+    print(f"Repository source:      {repository['source_type']}")
     print()
-    print(f"Files discovered:    {counters.files_discovered}")
-    print(f"Files ignored:       {counters.files_ignored}")
-    print(
-        "Files skipped (unsupported language): "
-        f"{counters.files_skipped_unsupported}"
-    )
-    print(f"Files parsed OK:     {counters.files_parsed_ok}")
-    print(
-        "Files parse failed:  "
-        f"{counters.files_parse_failed} (fell back to file-level chunk)"
-    )
+    print(f"Files discovered:       {counters.files_discovered}")
+    print(f"Files ignored:          {counters.files_ignored}")
+    print(f"Files skipped:          {counters.files_skipped_unsupported}")
+    print(f"Files parsed OK:        {counters.files_parsed_ok}")
+    print(f"Files parse failed:     {counters.files_parse_failed}")
     print()
-    print(f"Chunks generated:    {counters.chunks_generated}")
-    print(f"Embeddings stored:   {counters.embeddings_stored}")
+    print(f"Chunks generated:       {counters.chunks_generated}")
+    print(f"Embeddings stored:      {counters.embeddings_stored}")
     print()
-    print(f"Collection:          {collection_name}")
+    metadata = getattr(counters, "embedding_provider_metadata", {})
+    if metadata:
+        print(f"Embedding provider:     {metadata.get('embedding_provider', 'unknown')}")
+        print(f"Embedding model:        {metadata.get('embedding_model', 'unknown')}")
+        print(f"Embedding dimensions:   {metadata.get('embedding_dimensions', 'unknown')}")
+        print(f"Embedding config:       {metadata.get('embedding_config_source', 'unknown')}")
+        print()
+    print(f"Collection:             {collection_name}")
     print("========================================")
 
     if skipped_files:
@@ -555,6 +559,8 @@ def run_incremental_pipeline(
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
         embedded_chunks = embed_chunks(all_chunks, counters, event_callback=emit)
+        embedding_metadata = getattr(counters, "embedding_provider_metadata", {})
+        embedding_dimensions = int(embedding_metadata.get("embedding_dimensions", 0) or 0)
         emit("embedding", f"Generated embeddings for {counters.embeddings_generated} chunks.")
 
     # --- Qdrant Deletion Pre-fetch ---
@@ -588,6 +594,7 @@ def run_incremental_pipeline(
             counters,
             collection_name=selected_collection,
             recreate_collection=False,
+            embedding_dimensions=embedding_dimensions,
         )
 
     # --- Qdrant Deletion ---
@@ -657,4 +664,3 @@ def run_incremental_pipeline(
 
 if __name__ == "__main__":
     main()
-

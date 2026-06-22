@@ -18,13 +18,12 @@ def _load_env_file():
 
 _load_env_file()
 
-from qdrant_client import QdrantClient
 from qdrant_client.http import exceptions as qdrant_exceptions
+from retrieval.support.qdrant_config import create_qdrant_client
 
 # Ensure backend directory is in path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from retrieval.config import QDRANT_HOST, QDRANT_PORT, RETRIEVAL_QDRANT_TIMEOUT_SECONDS
 from retrieval.db import db_cursor
 
 def is_file_type_required(rel_path: str, chunk_type: str) -> bool:
@@ -125,16 +124,11 @@ def run_index_health_check(
 
     # 2. Connect to Qdrant
     try:
-        client = QdrantClient(
-            QDRANT_HOST,
-            port=QDRANT_PORT,
-            timeout=RETRIEVAL_QDRANT_TIMEOUT_SECONDS,
-            check_compatibility=False
-        )
+        client = create_qdrant_client()
     except Exception as e:
         return {
             "status": "FAIL",
-            "error": f"Failed to connect to Qdrant at {QDRANT_HOST}:{QDRANT_PORT}: {str(e)}"
+            "error": f"Failed to connect to Qdrant: {str(e)}"
         }
 
     # 3. Check collection existence and count points

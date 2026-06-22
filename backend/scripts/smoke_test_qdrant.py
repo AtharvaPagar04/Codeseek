@@ -1,12 +1,12 @@
 """Smoke test for the local Qdrant ingestion output."""
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
-from rag_ingestion.config import COLLECTION_NAME, EMBEDDING_DIM, QDRANT_HOST, QDRANT_PORT
+from rag_ingestion.config import COLLECTION_NAME, EMBEDDING_DIM
 
 
 def main() -> None:
-    client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+    client = create_qdrant_client()
 
     info = client.get_collection(COLLECTION_NAME)
     print(f"Collection: {COLLECTION_NAME}")

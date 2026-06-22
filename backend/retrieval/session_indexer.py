@@ -10,11 +10,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from qdrant_client import QdrantClient
+from retrieval.support.qdrant_config import create_qdrant_client
 
 from rag_ingestion.main import run_pipeline
-from retrieval.config import INDEXING_STALE_AFTER_SECONDS, QDRANT_HOST, QDRANT_PORT
+from retrieval.config import INDEXING_STALE_AFTER_SECONDS
 from retrieval.db import db_cursor, init_db
+from retrieval.support.embedding_provider import (
+    EmbeddingConfigurationError,
+    current_embedding_metadata,
+)
 from retrieval.support.isolation import expected_collection_name
 from retrieval.search.searcher import invalidate_lexical_index
 from retrieval.stores.thread_store import ensure_default_thread
@@ -47,6 +51,51 @@ def _parse_timestamp(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _embedding_config_status(session: dict) -> str | None:
+    if int(session.get("embeddings_stored", 0) or 0) <= 0:
+        return None
+
+    stored_hash = str(session.get("embedding_config_hash", "") or "").strip()
+    stored_dimensions = int(session.get("embedding_dimensions", 0) or 0)
+
+    try:
+        current = current_embedding_metadata(dimensions_fallback=stored_dimensions)
+    except EmbeddingConfigurationError:
+        return "embedding_config_invalid"
+
+    if not stored_hash:
+        return "embedding_config_changed"
+    if current.get("embedding_config_hash") != stored_hash:
+        return "embedding_config_changed"
+    return None
+
+
+def _embedding_status_details(session: dict) -> dict[str, object]:
+    stored = {
+        "embedding_provider": str(session.get("embedding_provider", "") or ""),
+        "embedding_base_url": str(session.get("embedding_base_url", "") or ""),
+        "embedding_model": str(session.get("embedding_model", "") or ""),
+        "embedding_dimensions": int(session.get("embedding_dimensions", 0) or 0),
+        "embedding_config_hash": str(session.get("embedding_config_hash", "") or ""),
+    }
+    status = _embedding_config_status(session)
+    try:
+        current = current_embedding_metadata(
+            dimensions_fallback=int(session.get("embedding_dimensions", 0) or 0)
+        )
+    except EmbeddingConfigurationError as exc:
+        current = {}
+        error = str(exc)
+    else:
+        error = ""
+    return {
+        "status": status or "ok",
+        "indexed": stored,
+        "current": current,
+        "error": error,
+    }
+
+
 def is_stale_indexing_session(session: dict, *, now: datetime | None = None) -> bool:
     if session.get("status") != "indexing":
         return False
@@ -71,6 +120,9 @@ def compute_repo_freshness_status(session: dict) -> str:
         return "stale_indexing" if is_stale_indexing_session(session) else "indexing"
     if status == "failed":
         return "failed"
+    embedding_status = _embedding_config_status(session)
+    if embedding_status:
+        return embedding_status
     
     indexed_branch = session.get("indexed_branch", "")
     current_branch = session.get("current_branch", "")
@@ -94,6 +146,7 @@ def _populate_repo_status(session: dict) -> dict:
     current_branch = session.get("current_branch", "")
     last_indexed_commit = session.get("last_indexed_commit", "")
     branch_changed = bool(last_indexed_commit and indexed_branch and current_branch and indexed_branch != current_branch)
+    embedding_details = _embedding_status_details(session)
 
     session["repo_status"] = {
         "status": "stale_indexing" if stale else compute_repo_freshness_status(session),
@@ -112,6 +165,7 @@ def _populate_repo_status(session: dict) -> dict:
         "chunks_generated": int(session.get("chunks_generated", 0)),
         "embeddings_stored": int(session.get("embeddings_stored", 0)),
         "is_stale_indexing": stale,
+        "embedding": embedding_details,
         "error": session.get("error", ""),
     }
     return session
@@ -134,6 +188,7 @@ def _load_state() -> dict:
                 created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                 chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
                 current_commit_sha, current_branch, indexed_branch, repo_dirty,
+                embedding_provider, embedding_base_url, embedding_model, embedding_dimensions, embedding_config_hash,
                 repo_status_checked_at, files_indexed
             FROM repo_sessions
             ORDER BY created_at ASC
@@ -155,8 +210,9 @@ def _save_state(state: dict) -> None:
                     created_at, updated_at, job_started_at, job_finished_at, last_indexed_commit,
                     chunks_generated, embeddings_stored, idempotent_reuse, enable_chunk_descriptions,
                     current_commit_sha, current_branch, indexed_branch, repo_dirty,
+                    embedding_provider, embedding_base_url, embedding_model, embedding_dimensions, embedding_config_hash,
                     repo_status_checked_at, files_indexed
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _session_insert_values(session),
             )
@@ -265,9 +321,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
             )
             if is_safe:
                 try:
-                    client = QdrantClient(
-                        QDRANT_HOST,
-                        port=QDRANT_PORT,
+                    client = create_qdrant_client(
                         timeout=5.0,
                         check_compatibility=False,
                     )
@@ -388,6 +442,11 @@ def create_session(
         "current_branch": "",
         "indexed_branch": "",
         "repo_dirty": False,
+        "embedding_provider": "",
+        "embedding_base_url": "",
+        "embedding_model": "",
+        "embedding_dimensions": 0,
+        "embedding_config_hash": "",
         "repo_status_checked_at": "",
         "files_indexed": 0,
     }
@@ -492,7 +551,9 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     job_finished_at = ?, last_indexed_commit = ?, chunks_generated = ?,
                     embeddings_stored = ?, idempotent_reuse = ?, enable_chunk_descriptions = ?,
                     current_commit_sha = ?, current_branch = ?,
-                    indexed_branch = ?, repo_dirty = ?, repo_status_checked_at = ?, files_indexed = ?
+                    indexed_branch = ?, repo_dirty = ?, embedding_provider = ?, embedding_base_url = ?,
+                    embedding_model = ?, embedding_dimensions = ?, embedding_config_hash = ?,
+                    repo_status_checked_at = ?, files_indexed = ?
                 WHERE id = ?
                 """,
                 (
@@ -517,6 +578,11 @@ def _update_session(session_id: str, **updates: object) -> dict | None:
                     session.get("current_branch", ""),
                     session.get("indexed_branch", ""),
                     bool(session.get("repo_dirty")),
+                    session.get("embedding_provider", ""),
+                    session.get("embedding_base_url", ""),
+                    session.get("embedding_model", ""),
+                    int(session.get("embedding_dimensions", 0)),
+                    session.get("embedding_config_hash", ""),
                     session.get("repo_status_checked_at", ""),
                     int(session.get("files_indexed", 0)),
                     session_id,
@@ -537,12 +603,6 @@ def _record_indexing_failure(
     last_indexed_commit: str | None = None,
 ) -> dict | None:
     session = get_session(session_id)
-    if session and not session.get("last_indexed_commit"):
-        try:
-            delete_session(session_id, force=True)
-            return None
-        except Exception:
-            pass
 
     updates: dict[str, object] = {
         "status": "failed",
@@ -605,9 +665,7 @@ def _clone_or_pull(repo_url: str, repo_root: Path, github_token: str = "") -> st
 
 
 def _collection_point_count(collection: str) -> int:
-    client = QdrantClient(
-        QDRANT_HOST,
-        port=QDRANT_PORT,
+    client = create_qdrant_client(
         timeout=5.0,
         check_compatibility=False,
     )
@@ -620,6 +678,10 @@ def _collection_point_count(collection: str) -> int:
 
 
 def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> dict | None:
+    try:
+        current_metadata = current_embedding_metadata()
+    except EmbeddingConfigurationError:
+        return None
     for session in sessions:
         if session["id"] == current["id"]:
             continue
@@ -632,6 +694,8 @@ def _find_reusable_session(sessions: list[dict], current: dict, commit: str) -> 
         if session.get("last_indexed_commit") != commit:
             continue
         if _collection_point_count(session.get("collection", "")) <= 0:
+            continue
+        if session.get("embedding_config_hash", "") != current_metadata.get("embedding_config_hash", ""):
             continue
         return session
     return None
@@ -675,6 +739,11 @@ def _index_job(session_id: str) -> None:
                 chunks_generated=0,
                 embeddings_stored=0,
                 idempotent_reuse=True,
+                embedding_provider=str(reusable.get("embedding_provider", "") or ""),
+                embedding_base_url=str(reusable.get("embedding_base_url", "") or ""),
+                embedding_model=str(reusable.get("embedding_model", "") or ""),
+                embedding_dimensions=int(reusable.get("embedding_dimensions", 0) or 0),
+                embedding_config_hash=str(reusable.get("embedding_config_hash", "") or ""),
             )
             from datetime import datetime, timezone
             update_indexing_job(
@@ -743,6 +812,7 @@ def _index_job(session_id: str) -> None:
         )
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
+        embedding_metadata = dict(getattr(counters, "embedding_provider_metadata", {}) or {})
         if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
             raise RuntimeError("Ingestion completed but no embeddings were stored")
 
@@ -760,6 +830,11 @@ def _index_job(session_id: str) -> None:
             chunks_generated=int(getattr(counters, "chunks_generated", 0)),
             embeddings_stored=stored,
             idempotent_reuse=False,
+            embedding_provider=str(embedding_metadata.get("embedding_provider") or ""),
+            embedding_base_url=str(embedding_metadata.get("embedding_base_url") or ""),
+            embedding_model=str(embedding_metadata.get("embedding_model") or ""),
+            embedding_dimensions=int(embedding_metadata.get("embedding_dimensions", 0) or 0),
+            embedding_config_hash=str(embedding_metadata.get("embedding_config_hash") or ""),
         )
         from datetime import datetime, timezone
         update_indexing_job(
@@ -862,6 +937,11 @@ def _row_to_session(row) -> dict:
         "current_branch": _get_val("current_branch", ""),
         "indexed_branch": _get_val("indexed_branch", ""),
         "repo_dirty": bool(_get_val("repo_dirty", False)),
+        "embedding_provider": _get_val("embedding_provider", ""),
+        "embedding_base_url": _get_val("embedding_base_url", ""),
+        "embedding_model": _get_val("embedding_model", ""),
+        "embedding_dimensions": int(_get_val("embedding_dimensions", 0) or 0),
+        "embedding_config_hash": _get_val("embedding_config_hash", ""),
         "repo_status_checked_at": _get_val("repo_status_checked_at", ""),
         "files_indexed": int(_get_val("files_indexed", 0)),
     }
@@ -892,6 +972,11 @@ def _session_insert_values(session: dict) -> tuple:
         session.get("current_branch", ""),
         session.get("indexed_branch", ""),
         bool(session.get("repo_dirty")),
+        session.get("embedding_provider", ""),
+        session.get("embedding_base_url", ""),
+        session.get("embedding_model", ""),
+        int(session.get("embedding_dimensions", 0)),
+        session.get("embedding_config_hash", ""),
         session.get("repo_status_checked_at", ""),
         int(session.get("files_indexed", 0)),
     )
@@ -1340,6 +1425,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
         )
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
+        embedding_metadata = dict(getattr(counters, "embedding_provider_metadata", {}) or {})
         if stored <= 0 and _collection_point_count(session["collection"]) <= 0:
             raise RuntimeError("Ingestion completed but no embeddings were stored")
 
@@ -1364,6 +1450,11 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
             chunks_generated=int(getattr(counters, "chunks_generated", 0)),
             embeddings_stored=stored,
             idempotent_reuse=False,
+            embedding_provider=str(embedding_metadata.get("embedding_provider") or ""),
+            embedding_base_url=str(embedding_metadata.get("embedding_base_url") or ""),
+            embedding_model=str(embedding_metadata.get("embedding_model") or ""),
+            embedding_dimensions=int(embedding_metadata.get("embedding_dimensions", 0) or 0),
+            embedding_config_hash=str(embedding_metadata.get("embedding_config_hash") or ""),
             error="",
         )
         if job_id:
@@ -1521,6 +1612,8 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
         and current_branch
         and indexed_branch != current_branch
     )
+    embedding_status = _embedding_config_status(session)
+    embedding_status = _embedding_config_status(session)
 
     # Determine freshness status
     session_status = session.get("status", "unknown")
@@ -1532,6 +1625,8 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
             freshness_status = "indexing"
     elif session_status == "failed":
         freshness_status = "failed"
+    elif embedding_status:
+        freshness_status = embedding_status
     elif not has_git:
         freshness_status = "unknown"
     elif branch_changed:
@@ -1554,6 +1649,8 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
         "failed": "Indexing failed. See error for details.",
         "stale_indexing": "Indexing appears stuck or stale.",
         "branch_changed": f"Branch changed from '{indexed_branch}' to '{current_branch}'. Run a full reindex to switch branches.",
+        "embedding_config_changed": "The embedding provider/model/dimensions changed since this session was indexed. Run a full reindex before querying.",
+        "embedding_config_invalid": "The current embedding provider configuration is invalid. Fix the embedding settings and run a full reindex.",
         "unknown": "Repository freshness could not be determined.",
     }
     message = messages.get(freshness_status, "Repository freshness could not be determined.")
@@ -1561,7 +1658,15 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
     # can_index_latest rule
     if freshness_status == "indexing":
         can_index_latest = False
-    elif freshness_status in ("stale_commit", "dirty_worktree", "failed", "stale_indexing", "branch_changed"):
+    elif freshness_status in (
+        "stale_commit",
+        "dirty_worktree",
+        "failed",
+        "stale_indexing",
+        "branch_changed",
+        "embedding_config_changed",
+        "embedding_config_invalid",
+    ):
         can_index_latest = True
     elif freshness_status == "latest":
         can_index_latest = False
@@ -1611,6 +1716,7 @@ def get_session_freshness(session_id: str, user_id: str) -> dict:
         "last_freshness_check_at": checked_at,
         "indexed_at": session.get("job_finished_at", ""),
         "error": session.get("error") or None,
+        "embedding": _embedding_status_details(session),
         "message": message,
         "can_index_latest": can_index_latest,
         "files_indexed": session.get("files_indexed", 0),
@@ -1828,6 +1934,8 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             freshness_status = "indexing"
     elif session_status == "failed":
         freshness_status = "failed"
+    elif embedding_status:
+        freshness_status = embedding_status
     elif branch_changed:
         freshness_status = "branch_changed"
     elif worktree_dirty or len(changed_files) > 0 or len(added_files) > 0 or len(deleted_files) > 0:
@@ -1848,13 +1956,23 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
         "failed": "Indexing failed. Run a full reindex to repair.",
         "stale_indexing": "Indexing appears stuck or stale.",
         "branch_changed": f"Branch changed from '{indexed_branch}' to '{current_branch}'. Incremental indexing is blocked. Run a full reindex to switch branches.",
+        "embedding_config_changed": "The embedding provider/model/dimensions changed since this session was indexed. Incremental indexing is blocked; run a full reindex.",
+        "embedding_config_invalid": "The current embedding provider configuration is invalid. Fix the embedding settings and run a full reindex.",
         "unknown": "Repository freshness could not be determined.",
     }
     message = messages.get(freshness_status, "Repository freshness could not be determined.")
 
     if freshness_status == "indexing":
         can_index_latest = False
-    elif freshness_status in ("stale_commit", "dirty_worktree", "failed", "stale_indexing", "branch_changed"):
+    elif freshness_status in (
+        "stale_commit",
+        "dirty_worktree",
+        "failed",
+        "stale_indexing",
+        "branch_changed",
+        "embedding_config_changed",
+        "embedding_config_invalid",
+    ):
         can_index_latest = True
     elif freshness_status == "latest":
         can_index_latest = False
@@ -1880,6 +1998,9 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
     elif not indexed_commit_sha or not has_db_files:
         can_incremental_reindex = False
         incremental_block_reason = "metadata_unavailable"
+    elif embedding_status:
+        can_incremental_reindex = False
+        incremental_block_reason = embedding_status
     elif branch_changed:
         can_incremental_reindex = False
         incremental_block_reason = "branch_changed"
@@ -1912,6 +2033,7 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
         "can_incremental_reindex": can_incremental_reindex,
         "incremental_enabled": incremental_enabled,
         "incremental_block_reason": incremental_block_reason,
+        "embedding": _embedding_status_details(session),
         "message": message,
     }
 
@@ -2025,6 +2147,25 @@ def build_incremental_reindex_plan(
             "estimated_files_to_update": 0,
             "can_incremental_reindex": False,
             "reason": "Last indexing run failed; full index required to repair.",
+        }
+
+    embedding_status = _embedding_config_status(session)
+    if embedding_status:
+        return {
+            "session_id": session_id,
+            "repo_root": resolved_repo_root,
+            "indexed_commit_sha": session.get("last_indexed_commit", "") or "",
+            "current_commit_sha": current_commit_sha or "",
+            "indexed_branch": session.get("current_branch", "") or "",
+            "current_branch": current_branch or "",
+            "freshness_status": embedding_status,
+            "added_files": [],
+            "modified_files": [],
+            "deleted_files": [],
+            "unchanged_files": [],
+            "estimated_files_to_update": 0,
+            "can_incremental_reindex": False,
+            "reason": "Embedding configuration changed or is invalid. Full reindex required.",
         }
 
     # Discover and filter processable files currently on disk
@@ -2160,7 +2301,9 @@ def build_incremental_reindex_plan(
     estimated_files_to_update = len(added_list) + len(modified_list) + len(deleted_list)
 
     # Determine freshness status
-    if worktree_dirty or estimated_files_to_update > 0:
+    if embedding_status:
+        freshness_status = embedding_status
+    elif worktree_dirty or estimated_files_to_update > 0:
         if indexed_commit_sha != git_commit:
             freshness_status = "stale_commit"
         else:
@@ -2297,6 +2440,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
 
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
+        embedding_metadata = dict(getattr(counters, "embedding_provider_metadata", {}) or {})
 
         emit_indexing_event(
             session_id, "complete",
@@ -2319,6 +2463,11 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
             chunks_generated=total_chunks,
             embeddings_stored=total_chunks,
             idempotent_reuse=False,
+            embedding_provider=str(embedding_metadata.get("embedding_provider") or session.get("embedding_provider") or ""),
+            embedding_base_url=str(embedding_metadata.get("embedding_base_url") or session.get("embedding_base_url") or ""),
+            embedding_model=str(embedding_metadata.get("embedding_model") or session.get("embedding_model") or ""),
+            embedding_dimensions=int(embedding_metadata.get("embedding_dimensions", session.get("embedding_dimensions", 0)) or 0),
+            embedding_config_hash=str(embedding_metadata.get("embedding_config_hash") or session.get("embedding_config_hash") or ""),
         )
         if job_id:
             from datetime import datetime, timezone

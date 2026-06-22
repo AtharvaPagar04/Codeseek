@@ -123,8 +123,8 @@ Source (local path or GitHub URL)
 └──────┬──────┘    e.g. "Function: verify_token\nParameters: token\nDocstring: ..."
        ▼
 ┌─────────────┐
-│  embedder   │  SentenceTransformer BAAI/bge-small-en-v1.5 (384-dim)
-└──────┬──────┘    Batch size 128; query prefix "query: " at retrieval time
+│  embedder   │  Local SentenceTransformer by default; OpenAI-compatible cloud embeddings optional
+└──────┬──────┘    Dimensions tracked in session metadata; query prefix "query: " at retrieval time
        ▼
 ┌─────────────┐
 │   storage   │  Qdrant upsert — vector + full metadata payload
@@ -150,6 +150,38 @@ Each stored chunk carries:
 ### 3.3 Incremental Ingestion
 
 The backend tracks ingestion state in `.rag_ingestion_state.json`. On re-index, unmodified files are skipped (`INGESTION_ENABLE_INCREMENTAL_FILE_SKIP=1`). A full re-index is forced with `QDRANT_RECREATE_COLLECTION=1`.
+
+### 3.4 Cloud Embedding Provider
+
+Embeddings default to the existing local `SentenceTransformer` path:
+
+```env
+CODESEEK_EMBEDDING_PROVIDER=local
+```
+
+For deployments that should avoid CPU-heavy local embedding generation, CodeSeek can use an OpenAI-compatible embeddings API instead:
+
+```env
+CODESEEK_EMBEDDING_PROVIDER=openai_compatible
+CODESEEK_EMBEDDING_BASE_URL=https://api.aicredits.in/v1
+CODESEEK_EMBEDDING_API_KEY=...
+CODESEEK_EMBEDDING_MODEL=openai/text-embedding-3-small
+# Optional if your provider/model requires it:
+# CODESEEK_EMBEDDING_DIMENSIONS=
+```
+
+- The request shape is OpenAI-compatible `POST {base_url}/embeddings`.
+- `CODESEEK_EMBEDDING_MODEL` is fully configurable. Supported AICredits embedding models include:
+  - `openai/text-embedding-3-small` (recommended)
+  - `text-embedding-3-small` (secondary fallback)
+  - `openai/text-embedding-3-large`, `text-embedding-3-large` (larger/higher quality)
+  - `openai/text-embedding-ada-002`, `text-embedding-ada-002` (legacy fallback)
+  - Google embedding models (`google/gemini-embedding-001`, `google/gemini-embedding-2-preview`, `google/text-embedding-004`)
+- **Warning:** Do not use chat models like `deepseek-v4-flash` for embeddings. If a provider-prefixed model fails, try the plain OpenAI ID (e.g. `text-embedding-3-small`).
+- **Dimensions:** Auto/infer is recommended. Google models should be kept on Auto unless verified. CodeSeek validates the actual vector size returned by the provider. If set manually, the provider payload still omits dimensions but CodeSeek will enforce the specified length locally.
+- Embedding configuration can also be set or overridden per-user via the **CodeSeek Frontend UI** (in the Configurations menu). This overrides the environment-level defaults.
+- CodeSeek records embedding provider/model/base URL/dimensions metadata for indexed sessions.
+- **IMPORTANT**: Changing the embedding provider, model, or dimensions (either via env variables or the frontend UI) requires a full reindex of existing sessions before you can query them again, as the new embedding vectors will be incompatible with the old ones.
 
 ---
 
@@ -433,6 +465,20 @@ Adds: Prometheus (`:9090`), Alertmanager (`:9093`), postgres_exporter (`:9187`).
 | `CODESEEK_ALLOW_PLAINTEXT_SECRET_SUBMISSION` | Set `0` |
 
 Full variable reference: [`backend/docs/deployment_runbook.md`](backend/docs/deployment_runbook.md).
+
+**Vercel Frontend Note:**
+Set `VITE_API_BASE_URL` in Vercel Project Settings -> Environment Variables. The frontend must call the Render backend URL. Do not put `CODESEEK_API_KEY` or provider secrets in Vercel.
+
+Embedding provider variables for deployment:
+
+| Variable | Purpose |
+|---|---|
+| `CODESEEK_EMBEDDING_PROVIDER` | `local` or `openai_compatible` |
+| `CODESEEK_EMBEDDING_BASE_URL` | OpenAI-compatible API root such as `https://api.aicredits.in/v1` |
+| `CODESEEK_EMBEDDING_API_KEY` | Embedding provider secret (never stored in session metadata) |
+| `CODESEEK_EMBEDDING_MODEL` | Embedding model name; provider-specific prefixes are allowed |
+| `CODESEEK_EMBEDDING_DIMENSIONS` | Optional explicit vector size if required by the provider/model |
+| `CODESEEK_EMBEDDING_TIMEOUT_SECONDS` | Request timeout for cloud embedding calls |
 
 ### 10.4 Cleanup Jobs (cron)
 
